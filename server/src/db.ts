@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS refunds (
 CREATE TABLE IF NOT EXISTS idempotency (
   user_id TEXT NOT NULL REFERENCES users(id), key TEXT NOT NULL, route TEXT NOT NULL, body_hash TEXT NOT NULL,
   status TEXT NOT NULL, response TEXT, created_at INTEGER NOT NULL, PRIMARY KEY (user_id, key));
+CREATE TABLE IF NOT EXISTS integrations (
+  user_id TEXT NOT NULL REFERENCES users(id), provider TEXT NOT NULL, status TEXT NOT NULL,
+  connected_at INTEGER, config_enc TEXT, PRIMARY KEY (user_id, provider));
 CREATE INDEX IF NOT EXISTS refunds_target ON refunds(user_id, target_id, status);
 CREATE INDEX IF NOT EXISTS invoices_user ON invoices(user_id, created_at);
 CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id, created_at);
@@ -53,6 +56,8 @@ export type RefundRow = {
   id: string; user_id: string; target_kind: 'invoice' | 'order'; target_id: string; amount_cents: number; currency: string;
   capture_id: string; token_hash: string; expires_at: number; status: string; paypal_refund_id: string | null;
 };
+
+export type IntegrationRow = { provider: string; status: string; connected_at: number | null; config_enc: string | null };
 
 export type Db = ReturnType<typeof openDb>;
 export type IdemRow = { route: string; body_hash: string; status: 'pending' | 'done'; response: string | null };
@@ -215,6 +220,15 @@ export function openDb(path: string) {
     },
     releaseIdem(userId: string, key: string) {
       q(`DELETE FROM idempotency WHERE user_id = ? AND key = ? AND status = 'pending'`).run(userId, key);
+    },
+
+    listIntegrations(userId: string): IntegrationRow[] {
+      return q('SELECT provider, status, connected_at, config_enc FROM integrations WHERE user_id = ?').all(userId) as IntegrationRow[];
+    },
+    putIntegration(userId: string, r: IntegrationRow) {
+      q(`INSERT INTO integrations (user_id, provider, status, connected_at, config_enc) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, provider) DO UPDATE SET status = excluded.status, connected_at = excluded.connected_at, config_enc = excluded.config_enc`)
+        .run(userId, r.provider, r.status, r.connected_at, r.config_enc);
     },
 
     paidSince(userId: string, since: number): { currency: string; cents: number }[] {

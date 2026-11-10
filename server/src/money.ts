@@ -10,6 +10,14 @@ export function amountToCents(v: unknown): number | null {
   return cents;
 }
 
+// PayPal report values: signed, no upper cap (a balance or a large sale is fine here).
+export function valueToCents(v: string): number | null {
+  const m = /^(-?)(\d{1,12})(?:\.(\d{1,2}))?$/.exec(v.trim());
+  if (!m) return null;
+  const cents = Number(m[2]) * 100 + Number((m[3] ?? '').padEnd(2, '0'));
+  return m[1] ? -cents : cents;
+}
+
 export const centsToValue = (cents: number) => (cents / 100).toFixed(2);
 
 export const Amount = z.union([z.number(), z.string()]).transform((v, ctx) => {

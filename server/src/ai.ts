@@ -10,6 +10,7 @@ export type Ai = {
   classify(text: string): Promise<Classification>;
   extract(text: string, catalog: string): Promise<Extraction>;
   reply(text: string, profile: { business_name: string; tone: string }, catalog: string): Promise<string>;
+  brief(facts: string): Promise<string>;
 };
 
 const CRITERIA: Record<Intent, string> = {
@@ -163,6 +164,22 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
       // A result counts only once it parses, so a fast but broken answer does not win the race.
       const attempt = (m: Model) => async (signal: AbortSignal) =>
         ExtractionSchema.parse(parseModelJson(await chatOnce(m, messages, 120, 'extract', signal)));
+      return hedge(attempt(config.llm.primary), attempt(config.llm.fallback), config.llm.hedgeMs);
+    },
+
+    // Same fast, hedged models as extraction. The caller checks every number against the facts.
+    async brief(facts) {
+      const messages = [
+        {
+          role: 'system',
+          content: "You are Muninn, a calm assistant who keeps a small business owner's books. " +
+            'Turn the facts into a daily brief: 2 or 3 short lines, one per line, plain text, no bullets, no greeting. ' +
+            'Lead with money in, then late invoices, then disputes. Skip facts that are zero or empty. ' +
+            'Copy every number and amount exactly as written in the facts, in digits. Never add, round, sum or invent a number.',
+        },
+        { role: 'user', content: facts },
+      ];
+      const attempt = (m: Model) => async (signal: AbortSignal) => (await chatOnce(m, messages, 120, 'brief', signal)).trim();
       return hedge(attempt(config.llm.primary), attempt(config.llm.fallback), config.llm.hedgeMs);
     },
 

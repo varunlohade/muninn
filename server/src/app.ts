@@ -13,6 +13,8 @@ import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './mo
 import { log } from './log.ts';
 import { clean } from './text.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
+import { createIntegrations } from './integrations.ts';
+import { RANGES, createBusiness } from './business.ts';
 
 export type Deps = { db: Db; cipher: Cipher; ai: Ai; paypal: PayPalProvider; now?: () => number };
 type Env = { Variables: { userId: string; idemSkip?: boolean } };
@@ -95,6 +97,8 @@ const ProfileBody = z.object({
   business_name: CleanText(80), tone: CleanText(200), currency: Currency.default('USD'),
 }).strict();
 const ItemBody = z.object({ name: Item, price: Amount, currency: Currency.default('USD') }).strict();
+const DisputeId = z.string().regex(/^PP-[A-Z0-9-]{3,40}$/);
+const DisputeMessageBody = z.object({ message: CleanText(2000) }).strict();
 
 export function createApp(deps: Deps) {
   const { db, cipher, ai, paypal } = deps;
@@ -133,6 +137,8 @@ export function createApp(deps: Deps) {
   const profileOf = (userId: string) => db.getProfile(userId) ?? DEFAULT_PROFILE;
   const catalogText = (items: CatalogItem[]) => items.map((i) => `${i.name} ${formatMoney(i.price_cents, i.currency)}`).join('; ');
   const requestIdFor = (userId: string, key: string) => sha256(`${userId}:${key}`).slice(0, 36);
+  const integrations = createIntegrations(db, cipher, now);
+  const biz = createBusiness({ db, ai, paypal, integrations, dec, now });
 
   app.use('*', secureHeaders());
   app.use('*', cors({ origin: (origin) => (config.corsOrigins.includes(origin) ? origin : null), allowMethods: ['GET', 'POST', 'PUT', 'DELETE'] }));
@@ -164,10 +170,11 @@ export function createApp(deps: Deps) {
   app.use('/v1/suggest', rateLimiter('suggest', byUser));
   app.use('/v1/reply', rateLimiter('suggest', byUser));
   app.use('/v1/actions/*', rateLimiter('actions', byUser));
+  app.use('/v1/disputes/:id/message', rateLimiter('actions', byUser));
   app.use('/v1/*', rateLimiter('other', byUser));
 
   // ---- actions are default-deny: an explicit tap header plus an idempotency key
-  app.use('/v1/actions/*', async (c, next) => {
+  const tapGate: MiddlewareHandler<Env> = async (c, next) => {
     if (c.req.header('x-user-action') !== 'tap') return c.json({ error: 'actions run only from an explicit user tap' }, 428);
     const key = c.req.header('idempotency-key') ?? '';
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(key)) return c.json({ error: 'Idempotency-Key header required (8-64 chars)' }, 400);
@@ -189,7 +196,9 @@ export function createApp(deps: Deps) {
     } finally {
       if (!stored) db.releaseIdem(userId, key);
     }
-  });
+  };
+  app.use('/v1/actions/*', tapGate);
+  app.use('/v1/disputes/:id/message', tapGate);
   const idemKey = (c: Context<Env>) => requestIdFor(c.get('userId'), c.req.header('idempotency-key')!);
 
   // ---- suggest
@@ -425,14 +434,38 @@ export function createApp(deps: Deps) {
     return c.json({ payments });
   });
 
-  app.get('/v1/summary', (c) => {
-    const userId = c.get('userId');
-    const d = new Date(now());
-    const today = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-    const week = today - ((d.getUTCDay() + 6) % 7) * DAY;
-    const sum = (since: number) => Object.fromEntries(db.paidSince(userId, since).map((r) => [r.currency, centsToValue(r.cents)]));
-    return c.json({ earned_today: sum(today), earned_this_week: sum(week), unpaid_count: db.unpaidCount(userId), timezone: 'UTC' });
+  app.get('/v1/summary', async (c) => c.json(await biz.summary(c.get('userId'))));
+
+  // ---- integrations and the business view, all through the user's own PayPal connection
+  app.get('/v1/integrations', (c) => c.json({ integrations: integrations.list(c.get('userId')) }));
+
+  app.get('/v1/transactions', async (c) => {
+    const range = z.enum(RANGES).default('week').parse(c.req.query('range') ?? undefined);
+    const set = await biz.transactions(c.get('userId'), range);
+    return c.json({ range, source: set.source, note: set.note, transactions: set.txns });
   });
+
+  app.get('/v1/disputes', async (c) => {
+    const list = await biz.disputes(c.get('userId'));
+    return c.json({ disputes: list });
+  });
+  app.get('/v1/disputes/:id', async (c) => {
+    const id = DisputeId.safeParse(c.req.param('id'));
+    const d = id.success ? await biz.dispute(c.get('userId'), id.data) : null;
+    if (!d) throw new HttpError(404, 'dispute not found');
+    return c.json({ dispute: d });
+  });
+  app.post('/v1/disputes/:id/message', async (c) => {
+    const userId = c.get('userId');
+    const id = DisputeId.safeParse(c.req.param('id'));
+    const { message } = await body(c, DisputeMessageBody);
+    if (!id.success || !(await biz.sendDisputeMessage(userId, id.data, message, idemKey(c)))) throw new HttpError(404, 'dispute not found');
+    log('dispute_message_sent', { user_id: userId, dispute_id: id.data });
+    return c.json({ ok: true, dispute_id: id.data });
+  });
+
+  app.get('/v1/brief', async (c) => c.json(await biz.brief(c.get('userId'))));
+  app.get('/v1/clients', async (c) => c.json(await biz.clients(c.get('userId'))));
 
   app.post('/v1/reply', async (c) => {
     const userId = c.get('userId');

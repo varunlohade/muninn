@@ -62,8 +62,32 @@ try {
   step('payments', { http_ms: p.ms, found: Boolean(row), state: row?.state, paypal_status: row?.paypal_status, amount: row?.amount, item: row?.item });
   if (row?.state !== 'unpaid') throw new Error('invoice not listed as unpaid');
 
+  const ints = await call('GET', '/v1/integrations');
+  step('integrations', ints.json.integrations.map((i: any) => `${i.id}:${i.status}`));
+
+  const tx = await call('GET', '/v1/transactions?range=month');
+  const t0 = tx.json.transactions[0];
+  step('transactions', {
+    http_ms: tx.ms, source: tx.json.source, note: tx.json.note, count: tx.json.transactions.length,
+    first: t0 && { id: t0.id, date: t0.date, amount: t0.amount, fee: t0.fee, net: t0.net, status: t0.status, has_payer: Boolean(t0.payer_name || t0.payer_email) },
+  });
+
   const sum = await call('GET', '/v1/summary');
-  step('summary', sum.json);
+  step('summary', { http_ms: sum.ms, ...sum.json, most_late: sum.json.most_late && { ...sum.json.most_late, client_name: '[redacted]' } });
+
+  const dis = await call('GET', '/v1/disputes');
+  step('disputes', { http_ms: dis.ms, count: dis.json.disputes.length, first: dis.json.disputes[0] ?? null });
+  if (dis.json.disputes[0]) {
+    const one = await call('GET', `/v1/disputes/${dis.json.disputes[0].id}`);
+    step('dispute', { http_ms: one.ms, id: one.json.dispute.id, status: one.json.dispute.status, messages: one.json.dispute.messages.length });
+  }
+
+  const brief = await call('GET', '/v1/brief');
+  step('brief', { http_ms: brief.ms, ...brief.json });
+
+  const cl = await call('GET', '/v1/clients');
+  step('clients', { http_ms: cl.ms, source: cl.json.source, count: cl.json.clients.length,
+    first: cl.json.clients[0] && { ...cl.json.clients[0], name: '[redacted]', email: '[redacted]' } });
   console.log(`E2E PASS user_id=${userId}`);
 } catch (e) {
   failed = true;

@@ -12,7 +12,21 @@ export type PayPal = {
   captureOrder(id: string, requestId: string): Promise<{ status: string; captureId: string | null }>;
   refundCapture(captureId: string, value: string, currency: string, requestId: string): Promise<{ id: string; status: string }>;
   verifyWebhook(headers: Record<string, string | undefined>, event: unknown): Promise<boolean>;
+  searchTransactions(start: Date, end: Date): Promise<PayPalTxn[]>;
+  listDisputes(): Promise<PayPalDispute[]>;
+  getDispute(id: string): Promise<PayPalDisputeDetail | null>;
+  sendDisputeMessage(id: string, message: string, requestId: string): Promise<void>;
   warmUp(): Promise<void>;
+};
+export type Money = { value: string; currency: string };
+export type PayPalTxn = {
+  id: string; event_code: string; date: string; status: string; amount: Money; fee: Money | null;
+  payer_name: string | null; payer_email: string | null; invoice_id: string | null; subject: string | null;
+};
+export type PayPalDispute = { id: string; status: string; reason: string; amount: Money | null; due_date: string | null; created_at: string; stage: string | null };
+export type PayPalDisputeDetail = PayPalDispute & {
+  buyer_name: string | null; transaction_id: string | null;
+  messages: { posted_by: string; time: string; content: string }[];
 };
 export type PayPalProvider = {
   forUser(userId: string): PayPal;
@@ -21,9 +35,11 @@ export type PayPalProvider = {
 
 export class PayPalError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  upstream: number | null;
+  constructor(message: string, status: number, upstream: number | null = null) {
     super(message);
     this.status = status;
+    this.upstream = upstream;
   }
 }
 
@@ -64,7 +80,7 @@ function createClient(creds: Creds): PayPal {
     });
     const text = await res.text();
     const data = text ? JSON.parse(text) : {};
-    if (!res.ok) throw new PayPalError(`PayPal ${method} ${path.split('/').slice(0, 4).join('/')} failed (${res.status}): ${data?.name ?? ''} ${data?.details?.[0]?.issue ?? ''}`.trim(), 502);
+    if (!res.ok) throw new PayPalError(`PayPal ${method} ${path.split('/').slice(0, 4).join('/')} failed (${res.status}): ${data?.name ?? ''} ${data?.details?.[0]?.issue ?? ''}`.trim(), 502, res.status);
     return data;
   }
 
@@ -105,6 +121,14 @@ function createClient(creds: Creds): PayPal {
   }
 
   const link = (links: { rel: string; href: string }[] | undefined, rel: string) => links?.find((l) => l.rel === rel)?.href ?? null;
+
+  const money = (m: { value?: string; currency_code?: string } | undefined): Money | null =>
+    m?.value && m.currency_code ? { value: m.value, currency: m.currency_code } : null;
+  const dispute = (d: any): PayPalDispute => ({
+    id: String(d.dispute_id), status: String(d.status ?? 'UNKNOWN'), reason: String(d.reason ?? 'UNKNOWN'),
+    amount: money(d.dispute_amount), due_date: d.seller_response_due_date ?? null, created_at: String(d.create_time ?? ''),
+    stage: d.dispute_life_cycle_stage ?? null,
+  });
 
   async function getInvoiceRaw(id: string) {
     return rest('GET', `/v2/invoicing/invoices/${encodeURIComponent(id)}`);
@@ -163,6 +187,59 @@ function createClient(creds: Creds): PayPal {
 
     async warmUp() {
       await accessToken();
+    },
+
+    // Transaction Search allows at most 31 days per query and 500 rows per page.
+    async searchTransactions(start, end) {
+      const out: PayPalTxn[] = [];
+      const iso = (d: Date) => `${d.toISOString().slice(0, 19)}Z`;
+      for (let page = 1, pages = 1; page <= pages && page <= 5; page++) {
+        const qs = new URLSearchParams({
+          start_date: iso(start), end_date: iso(end), fields: 'transaction_info,payer_info', page_size: '500', page: String(page),
+        });
+        const r = await rest('GET', `/v1/reporting/transactions?${qs}`);
+        pages = Number(r?.total_pages ?? 1);
+        for (const t of r?.transaction_details ?? []) {
+          const ti = t.transaction_info ?? {};
+          const pi = t.payer_info ?? {};
+          const amount = money(ti.transaction_amount);
+          if (!ti.transaction_id || !amount) continue;
+          const pn = pi.payer_name ?? {};
+          const name = pn.alternate_full_name ?? ([pn.given_name, pn.surname].filter(Boolean).join(' ') || null);
+          out.push({
+            id: ti.transaction_id, event_code: String(ti.transaction_event_code ?? ''), date: String(ti.transaction_initiation_date ?? ''),
+            status: String(ti.transaction_status ?? ''), amount, fee: money(ti.fee_amount),
+            payer_name: name, payer_email: pi.email_address ?? null, invoice_id: ti.invoice_id ?? null, subject: ti.transaction_subject ?? null,
+          });
+        }
+      }
+      return out;
+    },
+
+    async listDisputes() {
+      const r = await rest('GET', '/v1/customer/disputes?page_size=50');
+      return (r?.items ?? []).filter((d: any) => d?.dispute_id).map(dispute);
+    },
+
+    async getDispute(id) {
+      let d: any;
+      try {
+        d = await rest('GET', `/v1/customer/disputes/${encodeURIComponent(id)}`);
+      } catch (e) {
+        if (e instanceof PayPalError && (e.upstream === 404 || e.upstream === 403)) return null;
+        throw e;
+      }
+      const tx = d?.disputed_transactions?.[0];
+      return {
+        ...dispute(d),
+        buyer_name: tx?.buyer?.name ?? null,
+        transaction_id: tx?.seller_transaction_id ?? null,
+        messages: (d?.messages ?? []).map((m: any) => ({ posted_by: String(m.posted_by ?? ''), time: String(m.time_posted ?? ''), content: String(m.content ?? '') })),
+      };
+    },
+
+    async sendDisputeMessage(id, message, requestId) {
+      await rest('POST', `/v1/customer/disputes/${encodeURIComponent(id)}/send-message`, { message }, requestId);
     },
 
     async verifyWebhook(h, event) {

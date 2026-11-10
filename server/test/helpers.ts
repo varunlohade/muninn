@@ -4,11 +4,11 @@ import { createApp } from '../src/app.ts';
 import type { Ai, Classification, Extraction } from '../src/ai.ts';
 import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
-import type { PayPal } from '../src/paypal.ts';
+import type { PayPal, PayPalDispute, PayPalDisputeDetail, PayPalTxn } from '../src/paypal.ts';
 
 export const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
-export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number } = {}) {
+export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; now?: () => number } = {}) {
   const db = openDb(':memory:');
   const cipher = createCipher(randomBytes(32));
   const calls: { fn: string; args: unknown[] }[] = [];
@@ -30,13 +30,39 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     async refundCapture(...args) { calls.push({ fn: 'refund', args }); await sleep(opts.paypalDelayMs); return { id: 'REF1', status: 'COMPLETED' }; },
     async verifyWebhook(h) { return typeof opts.verify === 'function' ? opts.verify(h) : opts.verify ?? true; },
     async warmUp() {},
+    async searchTransactions() { return []; },
+    async listDisputes() { return []; },
+    async getDispute() { return null; },
+    async sendDisputeMessage() {},
+  };
+  // PayPal data per user, standing in for each user's own connected merchant account.
+  const ppData = new Map<string, { txns?: PayPalTxn[] | Error; disputes?: PayPalDisputeDetail[] }>();
+  const forUser = (userId: string): PayPal => {
+    const d = ppData.get(userId) ?? {};
+    const list = (): PayPalDispute[] => (d.disputes ?? []).map(({ buyer_name, transaction_id, messages, ...x }) => x);
+    return {
+      ...pp,
+      async searchTransactions(...args) {
+        calls.push({ fn: 'search', args: [userId, ...args] });
+        if (d.txns instanceof Error) throw d.txns;
+        return d.txns ?? [];
+      },
+      async listDisputes() { calls.push({ fn: 'disputes', args: [userId] }); return list(); },
+      async getDispute(id) { return d.disputes?.find((x) => x.id === id) ?? null; },
+      async sendDisputeMessage(...args) { calls.push({ fn: 'dispute_message', args: [userId, ...args] }); },
+    };
   };
   const ai: Ai = {
     async classify(text) { aiCalls.push({ fn: 'classify', args: [text] }); await sleep(opts.delayMs); return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
     async extract(text, catalog) { aiCalls.push({ fn: 'extract', args: [text, catalog] }); await sleep(opts.delayMs); return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...opts.ext }; },
     async reply() { return 'Haircut is $45. Want a slot tomorrow?'; },
+    async brief(facts) {
+      aiCalls.push({ fn: 'brief', args: [facts] });
+      if (opts.brief instanceof Error) throw opts.brief;
+      return opts.brief ?? facts.split('\n').slice(0, 2).join('\n');
+    },
   };
-  const app = createApp({ db, cipher, ai, paypal: { forUser: () => pp, platform: () => pp } });
+  const app = createApp({ db, cipher, ai, paypal: { forUser, platform: () => pp }, now: opts.now });
   const device = () => {
     const userId = db.createUser();
     const token = randomToken('pkd');
@@ -55,7 +81,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  return { db, cipher, app, calls, aiCalls, device, call };
+  return { db, cipher, app, calls, aiCalls, device, call, ppData };
 }
 
 export const webhookHeaders = {
