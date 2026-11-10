@@ -12,6 +12,7 @@ export type PayPal = {
   captureOrder(id: string, requestId: string): Promise<{ status: string; captureId: string | null }>;
   refundCapture(captureId: string, value: string, currency: string, requestId: string): Promise<{ id: string; status: string }>;
   verifyWebhook(headers: Record<string, string | undefined>, event: unknown): Promise<boolean>;
+  warmUp(): Promise<void>;
 };
 export type PayPalProvider = {
   forUser(userId: string): PayPal;
@@ -30,9 +31,9 @@ type Creds = { clientId: string; clientSecret: string };
 
 function createClient(creds: Creds): PayPal {
   let token: { value: string; exp: number } | null = null;
+  let tokenInFlight: Promise<string> | null = null;
 
-  async function accessToken(): Promise<string> {
-    if (token && token.exp > Date.now()) return token.value;
+  async function fetchToken(): Promise<string> {
     const res = await fetch(`${config.paypal.baseUrl}/v1/oauth2/token`, {
       method: 'POST',
       headers: {
@@ -48,6 +49,12 @@ function createClient(creds: Creds): PayPal {
     return token.value;
   }
 
+  async function accessToken(): Promise<string> {
+    if (token && token.exp > Date.now()) return token.value;
+    tokenInFlight ??= fetchToken().finally(() => { tokenInFlight = null; });
+    return tokenInFlight;
+  }
+
   async function rest(method: string, path: string, body?: unknown, requestId?: string): Promise<any> {
     const headers: Record<string, string> = { Authorization: `Bearer ${await accessToken()}`, 'Content-Type': 'application/json' };
     if (requestId) headers['PayPal-Request-Id'] = requestId;
@@ -61,18 +68,35 @@ function createClient(creds: Creds): PayPal {
     return data;
   }
 
+  // One toolkit per PayPal client. The toolkit keeps its own token forever and takes the request id
+  // from its context, so each call gets our cached token and its own PayPal-Request-Id. Calls run one at a time.
+  const toolkit = new PayPalAgentToolkit({
+    clientId: creds.clientId,
+    clientSecret: creds.clientSecret,
+    configuration: {
+      actions: { invoices: { create: true, send: true, sendReminder: true } },
+      context: { sandbox: config.paypal.sandbox },
+    },
+  });
+  const tkClient = toolkit.client as unknown as { _accessToken?: string; _context: Record<string, unknown> };
+  const tools = toolkit.getTools();
+  let queue: Promise<unknown> = Promise.resolve();
+
   async function toolkitCall(tool: string, args: Record<string, unknown>, requestId: string): Promise<any> {
-    const toolkit = new PayPalAgentToolkit({
-      clientId: creds.clientId,
-      clientSecret: creds.clientSecret,
-      configuration: {
-        actions: { invoices: { create: true, send: true, sendReminder: true } },
-        context: { sandbox: config.paypal.sandbox, request_id: requestId },
-      },
-    });
-    const t = toolkit.getTools()[tool];
+    const t = tools[tool];
     if (!t?.execute) throw new PayPalError(`toolkit tool ${tool} missing`, 500);
-    const out = await t.execute(args, { toolCallId: requestId, messages: [] });
+    const run = async () => {
+      tkClient._accessToken = await accessToken();
+      tkClient._context.request_id = requestId;
+      try {
+        return await t.execute!(args, { toolCallId: requestId, messages: [] });
+      } finally {
+        delete tkClient._context.request_id;
+      }
+    };
+    const p = queue.then(run, run);
+    queue = p.catch(() => undefined);
+    const out = await p;
     const data = typeof out === 'string' ? (out ? JSON.parse(out) : {}) : out;
     if (data?.error || data?.code === 'PAYPAL_API_HTTP_ERROR') {
       throw new PayPalError(`PayPal toolkit ${tool} failed: ${String(data?.error?.message ?? data?.message ?? 'error').slice(0, 200)}`, 502);
@@ -100,10 +124,8 @@ function createClient(creds: Creds): PayPal {
       const id: string | undefined = created.id ?? String(created.href ?? '').split('/').pop();
       if (!id || !/^INV2-[A-Z0-9-]+$/.test(id)) throw new PayPalError('PayPal returned no invoice id', 502);
       const sent = await toolkitCall('send_invoice', { invoice_id: id, send_to_recipient: Boolean(i.clientEmail) }, `${requestId}-send`);
-      let payLink: string | null = typeof sent?.href === 'string' && sent.rel === 'payer-view' ? sent.href : null;
-      const full = await getInvoiceRaw(id);
-      payLink = payLink ?? full?.detail?.metadata?.recipient_view_url ?? null;
-      return { id, status: String(full?.status ?? 'SENT'), payLink };
+      const payLink = typeof sent?.href === 'string' && sent.rel === 'payer-view' ? sent.href : `${config.paypal.webUrl}/invoice/p/#${id}`;
+      return { id, status: 'SENT', payLink };
     },
 
     async createOrder(i, requestId) {
@@ -137,6 +159,10 @@ function createClient(creds: Creds): PayPal {
       const r = await rest('POST', `/v2/payments/captures/${encodeURIComponent(captureId)}/refund`,
         { amount: { value, currency_code: currency } }, requestId);
       return { id: r.id, status: r.status };
+    },
+
+    async warmUp() {
+      await accessToken();
     },
 
     async verifyWebhook(h, event) {

@@ -151,6 +151,14 @@ export function createApp(deps: Deps) {
       return c.json({ chips, intent, confidence, timings });
     };
 
+    const items = db.listItems(userId);
+    const profile = profileOf(userId);
+    // Speculative: extraction runs alongside jev, so the total is about max(jev, extract), not the sum.
+    const extracting = ai.extract(text, catalogText(items)).then(
+      (ext) => { timings.extract_ms = Math.round(performance.now() - t0); return ext; },
+      (e) => { timings.extract_ms = Math.round(performance.now() - t0); log('extract_failed', { err: (e as Error).message }); return null; },
+    );
+
     let cls;
     try {
       cls = await ai.classify(text);
@@ -162,17 +170,9 @@ export function createApp(deps: Deps) {
     timings.classify_ms = cls.ms;
     if (cls.intent === 'none' || cls.confidence < config.jev.minConfidence) return done([], cls.intent, cls.confidence);
 
-    const items = db.listItems(userId);
-    const profile = profileOf(userId);
     let ext: Extraction | null = null;
     if (['create_invoice', 'pay_link', 'send_reminder', 'refund'].includes(cls.intent)) {
-      const t1 = performance.now();
-      try {
-        ext = await ai.extract(text, catalogText(items));
-      } catch (e) {
-        log('extract_failed', { err: (e as Error).message });
-      }
-      timings.extract_ms = Math.round(performance.now() - t1);
+      ext = await extracting;
       if (!ext) return done([], cls.intent, cls.confidence);
     }
 

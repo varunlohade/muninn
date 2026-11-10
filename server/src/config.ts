@@ -13,6 +13,7 @@ export const config = {
   paypal: {
     sandbox: env.PAYPAL_ENV !== 'live',
     baseUrl: env.PAYPAL_ENV === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com',
+    webUrl: env.PAYPAL_ENV === 'live' ? 'https://www.paypal.com' : 'https://www.sandbox.paypal.com',
     webhookId: env.PAYPAL_WEBHOOK_ID ?? '',
     timeoutMs: 15000,
   },

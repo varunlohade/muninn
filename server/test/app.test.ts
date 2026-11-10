@@ -8,7 +8,9 @@ import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
 import type { PayPal } from '../src/paypal.ts';
 
-function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; verify?: boolean } = {}) {
+const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+
+function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; verify?: boolean; delayMs?: number } = {}) {
   const db = openDb(':memory:');
   const cipher = createCipher(randomBytes(32));
   const calls: { fn: string; args: unknown[] }[] = [];
@@ -27,10 +29,11 @@ function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>;
     async captureOrder() { return { status: 'COMPLETED', captureId: 'CAP1' }; },
     async refundCapture(...args) { calls.push({ fn: 'refund', args }); return { id: 'REF1', status: 'COMPLETED' }; },
     async verifyWebhook() { return opts.verify ?? true; },
+    async warmUp() {},
   };
   const ai: Ai = {
-    async classify() { return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
-    async extract() { return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...opts.ext }; },
+    async classify() { await sleep(opts.delayMs); return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
+    async extract() { await sleep(opts.delayMs); return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...opts.ext }; },
     async reply() { return 'Haircut is $45. Want a slot tomorrow?'; },
   };
   const app = createApp({ db, cipher, ai, paypal: { forUser: () => pp, platform: () => pp } });
@@ -124,6 +127,15 @@ test('suggest: invoice chip from text, no auto-run, low confidence gives no chip
   const bad = setup({ ext: { amount: 99999 } });
   const t3 = bad.device().token;
   assert.deepEqual((await (await bad.call(t3, 'POST', '/v1/suggest', { text: 'that is $99999' })).json()).chips, []);
+});
+
+test('suggest: jev and extraction run in parallel', async () => {
+  const s = setup({ delayMs: 150 });
+  const { token } = s.device();
+  const t = performance.now();
+  const r = await (await s.call(token, 'POST', '/v1/suggest', { text: "that'll be $45 for the haircut" })).json();
+  assert.equal(r.chips.length, 2);
+  assert.ok(performance.now() - t < 280, `took ${performance.now() - t} ms`);
 });
 
 test('extraction parsing: fences, "null" strings, string numbers', () => {

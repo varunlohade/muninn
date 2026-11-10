@@ -11,11 +11,15 @@ import { createPayPalProvider } from '../src/paypal.ts';
 
 const env = process.env as Record<string, string>;
 const db = openDb(config.dbPath);
+const paypal = createPayPalProvider({ clientId: env.PAYPAL_CLIENT_ID, clientSecret: env.PAYPAL_CLIENT_SECRET });
+const warm = performance.now();
+await paypal.platform().warmUp();
+console.log(`E2E warmup: ${JSON.stringify({ paypal_token_ms: Math.round(performance.now() - warm) })}`);
 const app = createApp({
   db,
   cipher: createCipher(parseMasterKey(env.DATA_ENCRYPTION_KEY)),
   ai: createAi({ typesafeKey: env.TYPESAFE_API_KEY, openrouterKey: env.OPENROUTER_API_KEY }),
-  paypal: createPayPalProvider({ clientId: env.PAYPAL_CLIENT_ID, clientSecret: env.PAYPAL_CLIENT_SECRET }),
+  paypal,
 });
 const server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });
 await new Promise((r) => server.once('listening', r));
