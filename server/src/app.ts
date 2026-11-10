@@ -77,6 +77,11 @@ const ClientName = CleanText(100).nullish();
 const ClientEmail = z.string().trim().toLowerCase().email().max(254).nullish();
 const Item = CleanText(120);
 const TextBody = z.object({ text: z.string().trim().min(1).max(config.maxTextChars) }).strict();
+// context: text the owner copied from the client (e.g. "how much do I owe you?"). Cleaned and capped, never trusted for recipients.
+const SuggestBody = z.object({
+  text: z.string().trim().max(config.maxTextChars),
+  context: z.string().transform((v) => clean(v).slice(0, config.maxContextChars)).optional(),
+}).strict().refine((b) => b.text || b.context, { message: 'text or context is required' });
 const InvoiceBody = z.object({
   amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName, client_email: ClientEmail, confirm_recipient: ClientEmail,
 }).strict();
@@ -190,7 +195,8 @@ export function createApp(deps: Deps) {
   // ---- suggest
   app.post('/v1/suggest', async (c) => {
     const userId = c.get('userId');
-    const { text } = await body(c, TextBody);
+    const { text, context } = await body(c, SuggestBody);
+    const prompt = context ? `Client said: ${context}\nOwner is typing: ${text}` : text;
     const t0 = performance.now();
     const timings: Record<string, number> = {};
     const done = (chips: Chip[], intent: string, confidence: number) => {
@@ -202,14 +208,14 @@ export function createApp(deps: Deps) {
     const items = db.listItems(userId);
     const profile = profileOf(userId);
     // Speculative: extraction runs alongside jev, so the total is about max(jev, extract), not the sum.
-    const extracting = ai.extract(text, catalogText(items)).then(
+    const extracting = ai.extract(prompt, catalogText(items)).then(
       (ext) => { timings.extract_ms = Math.round(performance.now() - t0); return ext; },
       (e) => { timings.extract_ms = Math.round(performance.now() - t0); log('extract_failed', { err: (e as Error).message }); return null; },
     );
 
     let cls;
     try {
-      cls = await ai.classify(text);
+      cls = await ai.classify(prompt);
     } catch (e) {
       timings.classify_ms = Math.round(performance.now() - t0);
       log('classify_failed', { err: (e as Error).message });
@@ -224,7 +230,7 @@ export function createApp(deps: Deps) {
       if (!ext) return done([], cls.intent, cls.confidence);
     }
 
-    const chips = buildChips(userId, cls.intent, ext, text, items, profile.currency);
+    const chips = buildChips(userId, cls.intent, ext, text, context ?? '', items, profile.currency);
     return done(chips, cls.intent, cls.confidence);
   });
 
@@ -234,10 +240,12 @@ export function createApp(deps: Deps) {
 
   const knownClient = (userId: string, email: string) => db.listInvoices(userId, 200).some((r) => dec(userId, r.client_email_enc) === email);
 
-  function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, items: CatalogItem[], defaultCurrency: string): Chip[] {
+  function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, context: string, items: CatalogItem[], defaultCurrency: string): Chip[] {
     const ext = rawExt && { ...rawExt, item: cleanOrNull(rawExt.item, 120), client_name: cleanOrNull(rawExt.client_name, 100) };
+    // Only the owner's own typing pre-confirms an email. Copied client text may only help match the catalog.
     const lower = text.toLowerCase();
-    const match = items.find((i) => lower.includes(i.name.toLowerCase()) || (ext?.item && ext.item.toLowerCase().includes(i.name.toLowerCase())));
+    const seen = `${lower} ${context.toLowerCase()}`;
+    const match = items.find((i) => seen.includes(i.name.toLowerCase()) || (ext?.item && ext.item.toLowerCase().includes(i.name.toLowerCase())));
     const currency = (config.money.currencies as readonly string[]).includes(ext?.currency ?? '') ? ext!.currency! : match?.currency ?? defaultCurrency;
 
     if (intent === 'create_invoice' || intent === 'pay_link') {

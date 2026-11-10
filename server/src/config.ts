@@ -10,6 +10,7 @@ export const config = {
   trustProxy: env.TRUST_PROXY === '1',
   bodyLimitBytes: 16 * 1024,
   maxTextChars: 2000,
+  maxContextChars: 1000,
 
   paypal: {
     sandbox: env.PAYPAL_ENV !== 'live',

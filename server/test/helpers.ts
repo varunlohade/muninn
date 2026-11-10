@@ -12,6 +12,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
   const db = openDb(':memory:');
   const cipher = createCipher(randomBytes(32));
   const calls: { fn: string; args: unknown[] }[] = [];
+  const aiCalls: { fn: string; args: unknown[] }[] = [];
   let n = 0;
   const pp: PayPal = {
     async createAndSendInvoice(...args) {
@@ -31,8 +32,8 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     async warmUp() {},
   };
   const ai: Ai = {
-    async classify() { await sleep(opts.delayMs); return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
-    async extract() { await sleep(opts.delayMs); return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...opts.ext }; },
+    async classify(text) { aiCalls.push({ fn: 'classify', args: [text] }); await sleep(opts.delayMs); return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
+    async extract(text, catalog) { aiCalls.push({ fn: 'extract', args: [text, catalog] }); await sleep(opts.delayMs); return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...opts.ext }; },
     async reply() { return 'Haircut is $45. Want a slot tomorrow?'; },
   };
   const app = createApp({ db, cipher, ai, paypal: { forUser: () => pp, platform: () => pp } });
@@ -54,7 +55,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  return { db, cipher, app, calls, device, call };
+  return { db, cipher, app, calls, aiCalls, device, call };
 }
 
 export const webhookHeaders = {

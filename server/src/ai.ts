@@ -104,6 +104,8 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
             'Reply with one JSON object only, no prose: {"client_name": string|null, "client_email": string|null, ' +
             '"amount": number|null, "currency": "USD"|"EUR"|"GBP"|"CAD"|"AUD"|null, "item": string|null}. ' +
             'Use null for anything not stated. item is a short product or service name. ' +
+            'The message may start with "Client said:". If the client asks what they owe and no amount is stated, ' +
+            'use the price of the catalog item they mention, or of the only catalog item if there is just one. ' +
             (catalog ? `The owner's catalog: ${catalog}` : ''),
         },
         { role: 'user', content: text.slice(0, config.maxTextChars) },
