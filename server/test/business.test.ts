@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkBrief } from '../src/business.ts';
+import { DEMO_INVOICES, seedDemo } from '../src/seed.ts';
 import type { PayPalDisputeDetail, PayPalTxn } from '../src/paypal.ts';
 import { paidEvent, setup, webhookHeaders } from './helpers.ts';
 
@@ -65,7 +66,7 @@ test('transactions: PayPal rows normalized, non-payments dropped, linked invoice
   assert.deepEqual(today.transactions.map((x: any) => x.id), ['TX-TODAY']);
   assert.deepEqual(today.transactions[0], {
     id: 'TX-TODAY', date: iso(T0 - 3600_000), amount: '100.00', fee: '3.49', net: '96.51', currency: 'USD',
-    payer_name: 'Maya Lopez', payer_email: 'maya@example.com', status: 'COMPLETED', invoice_id: null, order_id: null, source: 'paypal',
+    payer_name: 'Maya Lopez', payer_email: 'maya@example.com', status: 'COMPLETED', invoice_id: null, order_id: null, source: 'paypal', kind: 'paypal_transaction',
   });
   const week = (await get(s, s.A.token, '/v1/transactions?range=week')).json.transactions;
   assert.deepEqual(week.map((x: any) => x.id), ['TX-TODAY', 'CAP-INV']);
@@ -178,7 +179,7 @@ test('brief: model lines pass when every number is in the facts, else the templa
   assert.match(facts, /Jordan, 4 days over/);
   assert.ok(!/Ray|example\.com/.test(facts), 'only first names reach the model');
 
-  for (const out of ['Brought back $1,300 today.', 'Three invoices are late.', 'Brought back $1284 today. Jordan is 5 days over.']) {
+  for (const out of ['Brought back $1,300 today.', '3 invoices are late.', 'Brought back $1284 today. Jordan is 5 days over.']) {
     let t = T0;
     const s = setup({ now: () => t, brief: out });
     const A = s.device();
@@ -204,8 +205,10 @@ test('checkBrief: digits and number words must appear in the facts', () => {
   const facts = 'Earned today: $1284\nLate invoices: 3\nMost late: Jordan, 4 days over, $80';
   assert.deepEqual(checkBrief('Brought back $1,284 today.\n3 invoices are late, Jordan is 4 days over.', facts),
     ['Brought back $1,284 today.', '3 invoices are late, Jordan is 4 days over.']);
-  assert.deepEqual(checkBrief('- Three late, Jordan owes $80.', facts), ['Three late, Jordan owes $80.']);
-  assert.equal(checkBrief('Two invoices are late.', facts), null);
+  assert.deepEqual(checkBrief('- 3 late, Jordan owes $80.', facts), ['3 late, Jordan owes $80.']);
+  assert.deepEqual(checkBrief('No one paid late fees. A few clients are new.', facts), ['No one paid late fees. A few clients are new.']);
+  assert.equal(checkBrief('2 invoices are late.', facts), null);
+  assert.equal(checkBrief('Jordan owes $80.01.', facts), null);
   assert.equal(checkBrief('Brought back $1284.50 today.', facts), null);
   assert.equal(checkBrief('a\nb\nc\nd', facts), null);
   assert.equal(checkBrief('', facts), null);
@@ -226,4 +229,33 @@ test('clients: aggregate invoices and unlinked PayPal payers; B sees none of A c
   assert.equal(by['Lee Park'].email, 'lee@example.com');
   assert.equal(by.Sam.visits, 0);
   assert.deepEqual((await get(s, s.B.token, '/v1/clients')).json.clients, []);
+});
+
+test('seed: 12 real-shaped invoices, 6 recorded payments, re-run is a no-op; B sees none of it', async () => {
+  const s = world();
+  const run = () => seedDemo({ db: s.db, cipher: s.cipher, paypal: s.mockPayPal, userId: s.A.userId, now: T0 });
+  assert.deepEqual(await run(), { created: 12, recorded: 6, reused: 0 });
+  assert.deepEqual(await run(), { created: 0, recorded: 0, reused: 12 });
+  assert.equal(s.calls.filter((c) => c.fn === 'dated_invoice').length, DEMO_INVOICES.length);
+  assert.equal(s.calls.filter((c) => c.fn === 'record_payment').length, 6);
+  assert.ok(s.calls.filter((c) => c.fn === 'dated_invoice').every((c) => (c.args[0] as any).reference === 'muninn-demo-seed'));
+
+  const sum = (await get(s, s.A.token, '/v1/summary')).json;
+  assert.deepEqual(sum.earned_today, { USD: '165.00' });
+  assert.equal(sum.unpaid_count, 6);
+  assert.equal(sum.late_count, 3);
+  assert.equal(sum.most_late.client_name, 'Leo Martins');
+  assert.equal(sum.source, 'local');
+  const pay = (await get(s, s.A.token, '/v1/payments')).json.payments;
+  const paid = pay.filter((p: any) => p.state === 'paid');
+  assert.equal(paid.length, 6);
+  assert.ok(paid.every((p: any) => p.paid_via === 'recorded_payment' && p.seeded && p.origin === 'paypal_invoice'));
+  const tx = (await get(s, s.A.token, '/v1/transactions?range=month')).json.transactions;
+  assert.ok(tx.length > 0 && tx.every((t: any) => t.kind === 'recorded_payment'));
+  assert.equal((await get(s, s.A.token, '/v1/clients')).json.clients.length, 8);
+  assert.equal((await s.call(s.A.token, 'POST', '/v1/actions/refund', { id: paid[0].id })).status, 409, 'recorded payments have no capture to refund');
+
+  assert.deepEqual((await get(s, s.B.token, '/v1/clients')).json.clients, []);
+  assert.equal((await get(s, s.B.token, '/v1/summary')).json.late_count, 0);
+  assert.equal((await get(s, s.B.token, '/v1/payments')).json.payments.length, 0);
 });

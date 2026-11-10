@@ -15,6 +15,8 @@ export type Txn = {
   id: string; date: string; amount: string; fee: string | null; net: string | null; currency: string;
   payer_name: string | null; payer_email: string | null; status: string;
   invoice_id: string | null; order_id: string | null; source: 'paypal' | 'local';
+  // paypal_transaction: from Transaction Search. recorded_payment: an invoice marked paid in PayPal, no PayPal money moved.
+  kind: 'paypal_transaction' | 'invoice_payment' | 'recorded_payment' | 'pay_link_payment';
 };
 type TxnSet = { source: 'paypal' | 'local'; note: 'paypal_empty' | 'paypal_error' | null; txns: Txn[] };
 type Totals = Record<string, string>;
@@ -66,6 +68,7 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
       fee: feeCents === null ? null : centsToValue(feeCents), net: centsToValue(cents - (feeCents ?? 0)),
       payer_name: t.payer_name ? clean(t.payer_name) : null, payer_email: t.payer_email?.toLowerCase() ?? null,
       status: TXN_STATUS[t.status] ?? t.status, invoice_id: inv?.id ?? null, order_id: ord?.id ?? null, source: 'paypal',
+      kind: 'paypal_transaction',
     };
   }
 
@@ -74,6 +77,7 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
       id: r.capture_id ?? r.id, date: new Date(r.paid_at!).toISOString(), amount: centsToValue(r.amount_cents), fee: null, net: null,
       currency: r.currency, payer_name: dec(userId, r.client_name_enc), payer_email: 'client_email_enc' in r ? dec(userId, r.client_email_enc) : null,
       status: r.status, invoice_id: kind === 'invoice' ? r.id : null, order_id: kind === 'order' ? r.id : null, source: 'local',
+      kind: kind === 'order' ? 'pay_link_payment' : r.status === 'MARKED_AS_PAID' ? 'recorded_payment' : 'invoice_payment',
     });
     return [
       ...db.listInvoices(userId, 500).filter((r) => r.paid_at && r.paid_at >= since).map((r) => row(r, 'invoice')),
@@ -312,19 +316,14 @@ export function briefTemplate(s: Summary, at: number): string[] {
   return lines;
 }
 
-const NUMBER_WORDS: Record<string, number> = {
-  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
-  dozen: 12, twenty: 20, hundred: 100, thousand: 1000, once: 1, twice: 2, single: 1, couple: 2, few: -1, several: -1, half: 0.5,
-};
-
+// Digit tokens and currency amounts only. Words like "no one" or "a few" are not counted.
 function numbersIn(text: string): Set<string> {
   const out = new Set<string>();
   for (const m of text.matchAll(/\d[\d,]*(?:\.\d+)?/g)) out.add(String(Number(m[0].replace(/,/g, ''))));
-  for (const m of text.toLowerCase().matchAll(/[a-z]+/g)) if (m[0] in NUMBER_WORDS) out.add(String(NUMBER_WORDS[m[0]]));
   return out;
 }
 
-// The model may only restate numbers from the facts. Any other number, spelled or in digits, rejects the brief.
+// The model may only restate numbers from the facts. Any other digit token or amount rejects the brief.
 export function checkBrief(out: string, facts: string): string[] | null {
   const lines = out.split('\n').map((l) => clean(l).replace(/^(?:[-*•]|\d[.)])\s+/, '').trim()).filter(Boolean);
   if (lines.length < 1 || lines.length > 3 || lines.some((l) => l.length > 160)) return null;

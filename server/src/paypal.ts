@@ -16,8 +16,13 @@ export type PayPal = {
   listDisputes(): Promise<PayPalDispute[]>;
   getDispute(id: string): Promise<PayPalDisputeDetail | null>;
   sendDisputeMessage(id: string, message: string, requestId: string): Promise<void>;
+  createDatedInvoice(i: DatedInvoiceInput, requestId: string): Promise<{ id: string; status: string; payLink: string; dueDate: string }>;
+  recordPayment(id: string, p: { date: string; value: string; currency: string; method: string; note: string }, requestId: string): Promise<{ paymentId: string }>;
   warmUp(): Promise<void>;
 };
+// Explicit dates and a reference tag; sent without emailing the recipient. Used by the demo seed.
+// invoiceNumber is unique per merchant, so a re-run finds the invoice a crashed run left behind instead of making a second one.
+export type DatedInvoiceInput = InvoiceInput & { invoiceDate: string; dueDate: string; reference: string; invoiceNumber: string };
 export type Money = { value: string; currency: string };
 export type PayPalTxn = {
   id: string; event_code: string; date: string; status: string; amount: Money; fee: Money | null;
@@ -236,6 +241,38 @@ function createClient(creds: Creds): PayPal {
         transaction_id: tx?.seller_transaction_id ?? null,
         messages: (d?.messages ?? []).map((m: any) => ({ posted_by: String(m.posted_by ?? ''), time: String(m.time_posted ?? ''), content: String(m.content ?? '') })),
       };
+    },
+
+    async createDatedInvoice(i, requestId) {
+      const [given, ...more] = (i.clientName ?? '').split(' ');
+      const found = await rest('POST', '/v2/invoicing/search-invoices?page_size=1', { invoice_number: i.invoiceNumber });
+      const inv = found?.items?.[0] ?? await rest('POST', '/v2/invoicing/invoices', {
+        detail: {
+          currency_code: i.currency, invoice_date: i.invoiceDate, reference: i.reference, invoice_number: i.invoiceNumber,
+          payment_term: { due_date: i.dueDate },
+        },
+        ...(i.businessName ? { invoicer: { business_name: i.businessName } } : {}),
+        primary_recipients: [{
+          billing_info: { ...(i.clientName ? { name: { given_name: given, ...(more.length ? { surname: more.join(' ') } : {}) } } : {}), ...(i.clientEmail ? { email_address: i.clientEmail } : {}) },
+        }],
+        items: [{ name: i.item, quantity: '1', unit_amount: { currency_code: i.currency, value: i.value } }],
+      }, `${requestId}-create`);
+      if (!/^INV2-[A-Z0-9-]+$/.test(inv?.id ?? '')) throw new PayPalError('PayPal returned no invoice id', 502);
+      if (inv.status === 'DRAFT') {
+        await rest('POST', `/v2/invoicing/invoices/${inv.id}/send`, { send_to_recipient: false, send_to_invoicer: false }, `${requestId}-send`);
+      }
+      const now = await getInvoiceRaw(inv.id);
+      return {
+        id: inv.id, status: String(now?.status ?? 'UNPAID'), payLink: `${config.paypal.webUrl}/invoice/p/#${inv.id}`,
+        dueDate: String(now?.detail?.payment_term?.due_date ?? i.dueDate),
+      };
+    },
+
+    async recordPayment(id, p, requestId) {
+      const r = await rest('POST', `/v2/invoicing/invoices/${encodeURIComponent(id)}/payments`, {
+        method: p.method, payment_date: p.date, note: p.note, amount: { currency_code: p.currency, value: p.value },
+      }, requestId);
+      return { paymentId: String(r?.payment_id ?? '') };
     },
 
     async sendDisputeMessage(id, message, requestId) {

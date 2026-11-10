@@ -424,11 +424,13 @@ export function createApp(deps: Deps) {
         kind: 'invoice', id: r.id, state, paypal_status: r.status, amount: centsToValue(r.amount_cents), currency: r.currency, item: r.item,
         client_name: dec(userId, r.client_name_enc), link: r.pay_link, created_at: new Date(r.created_at).toISOString(),
         days_overdue: state === 'unpaid' && t > r.due_at ? Math.floor((t - r.due_at) / DAY) : 0,
+        origin: 'paypal_invoice', paid_via: !r.paid_at ? null : r.status === 'MARKED_AS_PAID' ? 'recorded_payment' : 'paypal', seeded: r.source === 'demo_seed',
       };
     });
     const orders = db.listOrders(userId).map((r) => ({
       kind: 'order', id: r.id, state: orderState(r.status), paypal_status: r.status, amount: centsToValue(r.amount_cents), currency: r.currency,
       item: r.item, client_name: dec(userId, r.client_name_enc), link: r.approve_link, created_at: new Date(r.created_at).toISOString(), days_overdue: 0,
+      origin: 'paypal_order', paid_via: r.paid_at ? 'paypal' : null, seeded: false,
     }));
     const payments = [...invoices, ...orders].sort((a, b) => b.created_at.localeCompare(a.created_at));
     return c.json({ payments });

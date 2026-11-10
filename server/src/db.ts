@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), status TEXT NOT NULL,
   amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, item TEXT NOT NULL,
   client_name_enc TEXT, client_email_enc TEXT, pay_link TEXT, due_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL, paid_at INTEGER, capture_id TEXT);
+  created_at INTEGER NOT NULL, paid_at INTEGER, capture_id TEXT, source TEXT NOT NULL DEFAULT 'app', seed_key TEXT);
 CREATE TABLE IF NOT EXISTS orders (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), status TEXT NOT NULL,
   amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, item TEXT NOT NULL,
@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS integrations (
   user_id TEXT NOT NULL REFERENCES users(id), provider TEXT NOT NULL, status TEXT NOT NULL,
   connected_at INTEGER, config_enc TEXT, PRIMARY KEY (user_id, provider));
 CREATE INDEX IF NOT EXISTS refunds_target ON refunds(user_id, target_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS invoices_seed ON invoices(user_id, seed_key) WHERE seed_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS invoices_user ON invoices(user_id, created_at);
 CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id, created_at);
 CREATE INDEX IF NOT EXISTS catalog_user ON catalog_items(user_id);
@@ -47,6 +48,7 @@ export type InvoiceRow = {
   id: string; user_id: string; status: string; amount_cents: number; currency: string; item: string;
   client_name_enc: string | null; client_email_enc: string | null; pay_link: string | null;
   due_at: number; created_at: number; paid_at: number | null; capture_id: string | null;
+  source: 'app' | 'demo_seed'; seed_key: string | null;
 };
 export type OrderRow = {
   id: string; user_id: string; status: string; amount_cents: number; currency: string; item: string;
@@ -68,6 +70,10 @@ export function openDb(path: string) {
   const db = new DatabaseSync(path);
   const idemCols = db.prepare('PRAGMA table_info(idempotency)').all() as { name: string }[];
   if (idemCols.length && !idemCols.some((c) => c.name === 'body_hash')) db.exec('DROP TABLE idempotency');
+  const invCols = db.prepare('PRAGMA table_info(invoices)').all() as { name: string }[];
+  if (invCols.length && !invCols.some((c) => c.name === 'source')) {
+    db.exec("ALTER TABLE invoices ADD COLUMN source TEXT NOT NULL DEFAULT 'app'; ALTER TABLE invoices ADD COLUMN seed_key TEXT;");
+  }
   db.exec(SCHEMA);
   const now = () => Date.now();
   const q = (sql: string) => db.prepare(sql);
@@ -82,6 +88,12 @@ export function openDb(path: string) {
     },
     addDevice(userId: string, tokenHash: string, label: string | null) {
       q('INSERT INTO devices (token_hash, user_id, label, created_at) VALUES (?, ?, ?, ?)').run(tokenHash, userId, label, now());
+    },
+    userForDeviceLabel(label: string): string | undefined {
+      return (q('SELECT user_id FROM devices WHERE label = ? ORDER BY created_at LIMIT 1').get(label) as { user_id: string } | undefined)?.user_id;
+    },
+    removeDevice(tokenHash: string) {
+      q('DELETE FROM devices WHERE token_hash = ?').run(tokenHash);
     },
     userForTokenHash(tokenHash: string): string | undefined {
       const r = q('SELECT user_id FROM devices WHERE token_hash = ?').get(tokenHash) as { user_id: string } | undefined;
@@ -120,10 +132,14 @@ export function openDb(path: string) {
       return q('DELETE FROM catalog_items WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
     },
 
-    insertInvoice(r: Omit<InvoiceRow, 'paid_at' | 'capture_id'>) {
-      q(`INSERT OR IGNORE INTO invoices (id, user_id, status, amount_cents, currency, item, client_name_enc, client_email_enc, pay_link, due_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(r.id, r.user_id, r.status, r.amount_cents, r.currency, r.item, r.client_name_enc, r.client_email_enc, r.pay_link, r.due_at, r.created_at);
+    insertInvoice(r: Omit<InvoiceRow, 'paid_at' | 'capture_id' | 'source' | 'seed_key'> & Partial<Pick<InvoiceRow, 'source' | 'seed_key'>>) {
+      q(`INSERT OR IGNORE INTO invoices (id, user_id, status, amount_cents, currency, item, client_name_enc, client_email_enc, pay_link, due_at, created_at, source, seed_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(r.id, r.user_id, r.status, r.amount_cents, r.currency, r.item, r.client_name_enc, r.client_email_enc, r.pay_link, r.due_at, r.created_at,
+          r.source ?? 'app', r.seed_key ?? null);
+    },
+    invoiceBySeedKey(userId: string, key: string): InvoiceRow | undefined {
+      return q('SELECT * FROM invoices WHERE user_id = ? AND seed_key = ?').get(userId, key) as InvoiceRow | undefined;
     },
     getInvoice(userId: string, id: string): InvoiceRow | undefined {
       return q('SELECT * FROM invoices WHERE id = ? AND user_id = ?').get(id, userId) as InvoiceRow | undefined;

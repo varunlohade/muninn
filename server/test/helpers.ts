@@ -34,6 +34,11 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     async listDisputes() { return []; },
     async getDispute() { return null; },
     async sendDisputeMessage() {},
+    async createDatedInvoice(...args) {
+      calls.push({ fn: 'dated_invoice', args });
+      return { id: `INV2-SEED-${++n}`, status: 'UNPAID', payLink: `https://paypal.test/inv/${n}`, dueDate: args[0].dueDate };
+    },
+    async recordPayment(...args) { calls.push({ fn: 'record_payment', args }); return { paymentId: `EXTR-${++n}` }; },
   };
   // PayPal data per user, standing in for each user's own connected merchant account.
   const ppData = new Map<string, { txns?: PayPalTxn[] | Error; disputes?: PayPalDisputeDetail[] }>();
@@ -81,7 +86,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  return { db, cipher, app, calls, aiCalls, device, call, ppData };
+  return { db, cipher, app, calls, aiCalls, device, call, ppData, mockPayPal: pp };
 }
 
 export const webhookHeaders = {
