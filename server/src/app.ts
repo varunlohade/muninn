@@ -77,7 +77,9 @@ const ClientName = CleanText(100).nullish();
 const ClientEmail = z.string().trim().toLowerCase().email().max(254).nullish();
 const Item = CleanText(120);
 const TextBody = z.object({ text: z.string().trim().min(1).max(config.maxTextChars) }).strict();
-const InvoiceBody = z.object({ amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName, client_email: ClientEmail }).strict();
+const InvoiceBody = z.object({
+  amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName, client_email: ClientEmail, confirm_recipient: ClientEmail,
+}).strict();
 const PayLinkBody = z.object({ amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName }).strict();
 const RemindBody = z.object({ invoice_id: z.string().min(1).max(64) }).strict();
 const RefundBody = z.union([
@@ -93,6 +95,16 @@ export function createApp(deps: Deps) {
   const { db, cipher, ai, paypal } = deps;
   const now = deps.now ?? Date.now;
   const app = new Hono<Env>();
+
+  // Clean stored text that reaches PayPal or the model, in case it was written before clean() covered it.
+  for (const it of db.allItems()) {
+    const name = clean(it.name);
+    if (name && name !== it.name) db.updateItem(it.user_id, it.id, { name, price_cents: it.price_cents, currency: it.currency });
+  }
+  for (const p of db.allProfiles()) {
+    const fixed = { business_name: clean(p.business_name) || p.business_name, tone: clean(p.tone) || p.tone, currency: p.currency };
+    if (fixed.business_name !== p.business_name || fixed.tone !== p.tone) db.putProfile(p.user_id, fixed);
+  }
 
   const enc = (userId: string, v: string | null | undefined) => (v ? cipher.encrypt(userId, v) : null);
   const dec = (userId: string, v: string | null) => {
@@ -220,10 +232,7 @@ export function createApp(deps: Deps) {
     ({ kind, label: clean(label), payload, needs_confirm: needsConfirm });
   const cleanOrNull = (v: string | null | undefined, max: number) => (v ? clean(v).slice(0, max) || null : null);
 
-  function knownEmail(userId: string, email: string, text: string): boolean {
-    if (text.toLowerCase().includes(email)) return true;
-    return db.listInvoices(userId, 200).some((r) => dec(userId, r.client_email_enc) === email);
-  }
+  const knownClient = (userId: string, email: string) => db.listInvoices(userId, 200).some((r) => dec(userId, r.client_email_enc) === email);
 
   function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, items: CatalogItem[], defaultCurrency: string): Chip[] {
     const ext = rawExt && { ...rawExt, item: cleanOrNull(rawExt.item, 120), client_name: cleanOrNull(rawExt.client_name, 100) };
@@ -239,8 +248,10 @@ export function createApp(deps: Deps) {
       const base = { amount: centsToValue(cents), currency, item, client_name: ext?.client_name ?? null };
       const email = ext?.client_email ?? null;
       const recipient = email ?? ext?.client_name ?? null;
-      const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`, { ...base, client_email: email },
-        email ? !knownEmail(userId, email, text) : false);
+      // The model can inject an email. Only an email the owner typed, or a known client, is pre-confirmed.
+      const confirmed = email ? lower.includes(email) || knownClient(userId, email) : true;
+      const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`,
+        { ...base, client_email: email, ...(email && confirmed ? { confirm_recipient: email } : {}) }, !confirmed);
       const link = chip('paylink', `Pay link ${money} · ${item}`, base);
       return intent === 'create_invoice' ? [invoice, link] : [link, invoice];
     }
@@ -277,6 +288,10 @@ export function createApp(deps: Deps) {
   app.post('/v1/actions/invoice', async (c) => {
     const userId = c.get('userId');
     const b = await body(c, InvoiceBody);
+    if (b.client_email && b.confirm_recipient !== b.client_email && !knownClient(userId, b.client_email)) {
+      c.set('idemSkip', true);
+      return c.json({ error: 'confirm the recipient', needs_confirm: true, recipient: b.client_email }, 409);
+    }
     const profile = db.getProfile(userId);
     const currency = b.currency ?? profile?.currency ?? 'USD';
     const t = performance.now();

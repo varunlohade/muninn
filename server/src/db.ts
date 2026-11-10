@@ -92,6 +92,12 @@ export function openDb(path: string) {
         .run(userId, p.business_name, p.tone, p.currency);
     },
 
+    allItems(): (CatalogItem & { user_id: string })[] {
+      return q('SELECT id, user_id, name, price_cents, currency FROM catalog_items').all() as (CatalogItem & { user_id: string })[];
+    },
+    allProfiles(): (Profile & { user_id: string })[] {
+      return q('SELECT user_id, business_name, tone, currency FROM profiles').all() as (Profile & { user_id: string })[];
+    },
     listItems(userId: string): CatalogItem[] {
       return q('SELECT id, name, price_cents, currency FROM catalog_items WHERE user_id = ? ORDER BY created_at').all(userId) as CatalogItem[];
     },
