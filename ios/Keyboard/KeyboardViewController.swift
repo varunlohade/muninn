@@ -27,6 +27,11 @@ final class KeyboardViewController: UIInputViewController, TextHost {
         model.keyboardAppeared()
     }
 
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        model.keyboardDisappeared()
+    }
+
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
         model.textChanged()

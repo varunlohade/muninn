@@ -49,9 +49,36 @@ struct Summary: Decodable {
     let earned_today: [String: String]
     let earned_this_week: [String: String]
     let unpaid_count: Int
+    let late_count: Int?
+    let open_disputes: Int?
 }
 
-struct Payment: Decodable, Identifiable {
+struct Brief: Decodable { let lines: [String]; let source: String }
+
+struct Client: Decodable, Identifiable, Hashable {
+    let name: String?
+    let email: String?
+    let total_paid: [String: String]
+    let open_amount: [String: String]
+    let visits: Int
+    let last_seen: String?
+    let channels: [String]
+    var id: String { (email ?? "") + "|" + (name ?? "") }
+    var displayName: String { name ?? email ?? "Client" }
+}
+struct ClientsResponse: Decodable { let clients: [Client] }
+
+struct Transaction: Decodable, Identifiable { let id: String; let date: String; let amount: String; let currency: String; let payer_name: String? }
+struct TransactionsResponse: Decodable { let source: String; let transactions: [Transaction] }
+
+struct Money: Decodable, Hashable { let value: String; let currency_code: String }
+struct Dispute: Decodable, Identifiable { let id: String; let status: String; let reason: String; let amount: Money?; let due_date: String? }
+struct DisputesResponse: Decodable { let disputes: [Dispute] }
+
+struct Integration: Decodable, Identifiable { let id: String; let name: String; let status: String }
+struct IntegrationsResponse: Decodable { let integrations: [Integration] }
+
+struct Payment: Decodable, Identifiable, Hashable {
     let kind: String
     let id: String
     let state: String
@@ -147,4 +174,34 @@ struct APIClient {
     func payments() async throws -> [Payment] {
         try await send(request("GET", "/v1/payments"), as: PaymentsResponse.self).payments
     }
+
+    func brief() async throws -> Brief { try await send(request("GET", "/v1/brief"), as: Brief.self) }
+    func clients() async throws -> [Client] { try await send(request("GET", "/v1/clients"), as: ClientsResponse.self).clients }
+    func transactions(range: String = "today") async throws -> TransactionsResponse {
+        try await send(request("GET", "/v1/transactions?range=\(range)"), as: TransactionsResponse.self)
+    }
+    func disputes() async throws -> [Dispute] { try await send(request("GET", "/v1/disputes"), as: DisputesResponse.self).disputes }
+    func integrations() async throws -> [Integration] {
+        try await send(request("GET", "/v1/integrations"), as: IntegrationsResponse.self).integrations
+    }
+}
+
+/// "$1,284" and ".50", for numbers set as value plus dimmed cents.
+func moneyParts(_ amount: String, _ currency: String) -> (whole: String, cents: String) {
+    let symbols = ["USD": "$", "CAD": "CA$", "AUD": "A$", "EUR": "€", "GBP": "£"]
+    let parts = amount.split(separator: ".", maxSplits: 1).map(String.init)
+    let f = NumberFormatter()
+    f.numberStyle = .decimal
+    f.locale = Locale(identifier: "en_US")
+    let whole = f.string(from: NSNumber(value: Int(parts.first ?? "0") ?? 0)) ?? (parts.first ?? "0")
+    let cents = parts.count > 1 ? "." + parts[1] : ""
+    return ((symbols[currency] ?? currency + " ") + whole, cents)
+}
+
+/// The USD total if there is one, else the first currency. Nil when empty.
+func mainTotal(_ totals: [String: String]?) -> (amount: String, currency: String)? {
+    guard let totals, !totals.isEmpty else { return nil }
+    if let usd = totals["USD"] { return (usd, "USD") }
+    let k = totals.keys.sorted()[0]
+    return (totals[k]!, k)
 }

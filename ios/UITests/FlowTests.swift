@@ -190,4 +190,119 @@ final class FlowTests: XCTestCase {
         shot("12-memory-idle")
         Thread.sleep(forTimeInterval: 10)
     }
+
+    // MARK: v3 proof
+
+    /// Fresh keychain: onboarding, pair with the demo token, Home, Integrations.
+    func test7Screens() throws {
+        let token = try XCTUnwrap(env["DEVICE_TOKEN"])
+        let app = XCUIApplication()
+        app.launch()
+        let field = app.secureTextFields["token"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5), app.debugDescription)
+        if env["USE_DEMO_SERVER"] == "1" { element(app, "identifier == %@", "server.demo").tap() }
+        shot("13-onboarding")
+        app.swipeUp()
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("14-onboarding-steps")
+        app.swipeDown()
+        field.tap()
+        field.typeText(token)
+        app.buttons["Pair"].tap()
+        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15))
+        for a in [app, springboard] where a.buttons["Not Now"].waitForExistence(timeout: 2) { a.buttons["Not Now"].tap() }
+        _ = element(app, "identifier == %@", "home.brief").waitForExistence(timeout: 15)
+        Thread.sleep(forTimeInterval: 1)
+        shot("15-home")
+        app.swipeUp()
+        Thread.sleep(forTimeInterval: 0.8)
+        shot("16-home-lower")
+        app.swipeDown()
+        Thread.sleep(forTimeInterval: 0.5)
+        element(app, "identifier == %@", "nav.integrations").tap()
+        XCTAssertTrue(element(app, "identifier == %@", "integration.paypal").waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("17-integrations")
+    }
+
+    /// Recorded from the host: tap the first folder, the glass squashes and papers fan, rows slide in.
+    func test8FolderOpen() {
+        let app = XCUIApplication()
+        app.launch()
+        let folder = element(app, "identifier BEGINSWITH %@", "folder.")
+        XCTAssertTrue(folder.waitForExistence(timeout: 15), app.debugDescription)
+        Thread.sleep(forTimeInterval: 1.5)
+        folder.tap()
+        Thread.sleep(forTimeInterval: 2.5)
+        shot("18-client-detail")
+    }
+
+    /// Clears the chat draft with the system keyboard, so our keyboard never sends the old draft.
+    func test9aPrepareChat() {
+        let messages = XCUIApplication(bundleIdentifier: "com.apple.MobileSMS")
+        messages.launch()
+        let search = messages.searchFields.firstMatch
+        if search.waitForExistence(timeout: 5) {
+            search.tap()
+            // Move to the system English keyboard while the field is empty.
+            for _ in 0..<4 where !(messages.keys["q"].waitForExistence(timeout: 1.5) || messages.keys["Q"].exists) {
+                element(messages, "label == %@", "Next keyboard").tap()
+            }
+            XCTAssertTrue(messages.keys["q"].exists || messages.keys["Q"].exists, "system keyboard not reached")
+            let close = messages.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Close", "close"])).firstMatch
+            if close.exists { close.tap() } else { print("BUTTONS", messages.buttons.allElementsBoundByIndex.map(\.label)) }
+        }
+        let convo = messages.cells.firstMatch
+        XCTAssertTrue(convo.waitForExistence(timeout: 5))
+        convo.tap()
+        let field = messages.textFields["messageBodyField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        XCTAssertFalse(element(messages, "identifier == %@", "muninn.more").waitForExistence(timeout: 2), "our keyboard is up with the draft")
+        let delete = element(messages, "label == %@", "delete")
+        if delete.waitForExistence(timeout: 3) { delete.press(forDuration: 8) }
+        let value = field.value as? String ?? ""
+        XCTAssertTrue(value.isEmpty || value == "iMessage", value)
+    }
+
+    /// Recorded from the host: copied client message, tap "Use copied message", invoice chip, link inserted.
+    func test9bChipToLink() {
+        UIPasteboard.general.string = "What do I owe you for the haircut?"
+        let messages = XCUIApplication(bundleIdentifier: "com.apple.MobileSMS")
+        messages.activate()
+        let field = messages.textFields["messageBodyField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        let ours = element(messages, "identifier == %@", "muninn.more")
+        for _ in 0..<4 where !ours.waitForExistence(timeout: 1.5) {
+            element(messages, "label == %@", "Next keyboard").tap()
+        }
+        XCTAssertTrue(ours.exists)
+        let copied = element(messages, "identifier == %@", "chip.copied")
+        XCTAssertTrue(copied.waitForExistence(timeout: 5), messages.debugDescription)
+        shot("19-keyboard-copied-chip")
+        copied.tap()
+        let allow = springboard.buttons["Allow Paste"]
+        if allow.waitForExistence(timeout: 6) { allow.tap() }
+        let chip = element(messages, "identifier == %@", "chip.invoice")
+        XCTAssertTrue(chip.waitForExistence(timeout: 15), messages.debugDescription)
+        Thread.sleep(forTimeInterval: 0.6)
+        shot("20-keyboard-chips")
+        chip.tap()
+        XCTAssertTrue(element(messages, "identifier == %@", "chip.waiting").waitForExistence(timeout: 30), messages.debugDescription)
+        Thread.sleep(forTimeInterval: 0.8)
+        shot("21-keyboard-link-inserted")
+        let value = field.value as? String ?? ""
+        print("FIELD_VALUE", value)
+        XCTAssertTrue(value.hasPrefix("Here's your invoice for "), value)
+    }
+
+    func test10Raven() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ravenDemo"]
+        app.launch()
+        XCTAssertTrue(element(app, "identifier == %@", "raven.stamp").waitForExistence(timeout: 15))
+        Thread.sleep(forTimeInterval: 0.9)
+        shot("22-raven-returns")
+    }
 }

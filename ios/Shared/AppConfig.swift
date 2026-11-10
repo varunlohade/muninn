@@ -16,6 +16,12 @@ enum AppConfig {
         let prefix = Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String ?? ""
         return prefix + "com.orseliyas.muninn.shared"
     }
-    static let defaultServerURL = "http://localhost:8787"
+    /// From the DEFAULT_SERVER_URL build setting: localhost in Debug, the demo server in Release.
+    static var defaultServerURL: String {
+        Bundle.main.object(forInfoDictionaryKey: "DefaultServerURL") as? String ?? "http://localhost:8787"
+    }
+    static var demoServerURL: String? {
+        (Bundle.main.object(forInfoDictionaryKey: "DemoServerURL") as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
     static let suggestDebounce: Duration = .milliseconds(350)
 }

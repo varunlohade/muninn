@@ -16,7 +16,7 @@ struct KeyboardLabView: View {
                     .accessibilityIdentifier("lab.text")
             }
             if let ms = lab.model.lastLatencyMs {
-                Text("keystroke → chip \(ms) ms").font(Theme.Font.secondary).foregroundStyle(Theme.Color.text3)
+                Text("keystroke → chip \(ms) ms").font(Theme.Font.label).foregroundStyle(Theme.Color.text3)
             }
             KeyboardView(model: lab.model)
         }

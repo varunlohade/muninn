@@ -8,6 +8,7 @@ enum SharedStore {
     private static let account = "device_token"
     private static let serverKey = "server_url"
     private static let pasteboardKey = "pasteboard_change_count"
+    private static let keyboardSeenKey = "keyboard_last_seen"
 
     private static var defaults: UserDefaults? { UserDefaults(suiteName: AppConfig.appGroupID) }
 
@@ -20,6 +21,12 @@ enum SharedStore {
     static var lastPasteboardChange: Int {
         get { defaults?.integer(forKey: pasteboardKey) ?? 0 }
         set { defaults?.set(newValue, forKey: pasteboardKey) }
+    }
+
+    /// Set by the keyboard each time it appears with Full Access, so the app can say "Keyboard is on".
+    static var keyboardLastSeen: Date? {
+        get { defaults?.object(forKey: keyboardSeenKey) as? Date }
+        set { defaults?.set(newValue, forKey: keyboardSeenKey) }
     }
 
     private static func baseQuery() -> [String: Any] {

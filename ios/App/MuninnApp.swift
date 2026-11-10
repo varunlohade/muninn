@@ -33,6 +33,8 @@ final class Session: ObservableObject {
         let status = SharedStore.setDeviceToken(token)
         guard status == errSecSuccess else { self.error = "Keychain error \(status)"; return }
         serverURL = server
+        // Cached brief and seen payments belong to the old pairing.
+        for key in ["brief_cache", "brief_cache.at", "known_paid_ids"] { UserDefaults.standard.removeObject(forKey: key) }
         error = nil
         paired = true
     }

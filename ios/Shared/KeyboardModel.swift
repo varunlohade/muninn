@@ -23,9 +23,19 @@ enum BarState: Equatable {
     case error(String)
 }
 
+/// A sent invoice or pay link the keyboard watches until it is paid.
+struct Watch: Equatable {
+    let id: String
+    let who: String
+    let money: String
+    var paid = false
+}
+
 @MainActor
 final class KeyboardModel: ObservableObject {
     @Published var bar: BarState = .idle
+    @Published var watch: Watch?
+    @Published var copiedAvailable = false
     @Published var shifted = true
     @Published var symbols = false
     @Published var hasFullAccess = false
@@ -35,8 +45,11 @@ final class KeyboardModel: ObservableObject {
     weak var host: TextHost?
     var api: () -> APIClient = APIClient.shared
     private var suggestTask: Task<Void, Never>?
+    private var pollTask: Task<Void, Never>?
     private var lastSent = ""
     private let log = Logger(subsystem: "com.orseliyas.muninn", category: "keyboard")
+    static let pollInterval: Duration = .seconds(10)
+    static let pasteTimeout: TimeInterval = 8
 
     func refreshAccess() {
         hasFullAccess = host?.hasFullAccess ?? false
@@ -55,6 +68,25 @@ final class KeyboardModel: ObservableObject {
     func tapReturn() { host?.insert("\n"); textChanged() }
     func tapDelete() { host?.deleteBackward(); textChanged() }
 
+    // MARK: lifecycle
+
+    /// On appear: note that the keyboard is on, offer copied text (without reading it), resume watching.
+    func keyboardAppeared() {
+        refreshAccess()
+        guard hasFullAccess else { copiedAvailable = false; return }
+        SharedStore.keyboardLastSeen = Date()
+        guard paired else { return }
+        // hasStrings and changeCount do not trigger the paste prompt; only reading the string does.
+        let pasteboard = UIPasteboard.general
+        copiedAvailable = pasteboard.hasStrings && pasteboard.changeCount != SharedStore.lastPasteboardChange
+        if let watch, !watch.paid { startPolling() }
+    }
+
+    func keyboardDisappeared() {
+        pollTask?.cancel()
+        if watch?.paid == true { watch = nil }
+    }
+
     // MARK: suggestions
 
     /// Called on every edit, from our keys and from textDidChange.
@@ -72,19 +104,42 @@ final class KeyboardModel: ObservableObject {
         requestSuggest(text: text, context: nil, debounce: true)
     }
 
-    /// When the keyboard appears: if the owner copied new text (e.g. a client's message), send it once as context.
-    /// The pasteboard is never read without Full Access, and each changeCount is used at most once.
-    func keyboardAppeared() {
-        refreshAccess()
-        guard hasFullAccess, paired else { return }
+    /// Tap on "Use copied message". Reading may show the system paste prompt once, so the read runs
+    /// off the main thread with a timeout; the keyboard never waits on it.
+    func useCopied() {
         let pasteboard = UIPasteboard.general
-        guard pasteboard.changeCount != SharedStore.lastPasteboardChange else { return }
         SharedStore.lastPasteboardChange = pasteboard.changeCount
-        guard pasteboard.hasStrings,
-              let copied = pasteboard.string?.trimmingCharacters(in: .whitespacesAndNewlines), !copied.isEmpty else { return }
-        let text = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        copiedAvailable = false
         suggestTask?.cancel()
-        requestSuggest(text: text, context: String(copied.prefix(1000)), debounce: false)
+        bar = .working("Reading copied message…")
+        suggestTask = Task { [weak self] in
+            let copied = await Self.readPasteboard(timeout: Self.pasteTimeout)
+            guard let self, !Task.isCancelled else { return }
+            guard let copied = copied?.trimmingCharacters(in: .whitespacesAndNewlines), !copied.isEmpty else {
+                self.bar = .error("Copied text not available")
+                return
+            }
+            let text = (self.host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            self.bar = .idle
+            self.requestSuggest(text: text, context: String(copied.prefix(1000)), debounce: false)
+        }
+    }
+
+    nonisolated static func readPasteboard(timeout: TimeInterval) async -> String? {
+        final class Once: @unchecked Sendable {
+            private let lock = NSLock()
+            private var cont: CheckedContinuation<String?, Never>?
+            init(_ c: CheckedContinuation<String?, Never>) { cont = c }
+            func resume(_ v: String?) {
+                lock.lock(); let c = cont; cont = nil; lock.unlock()
+                c?.resume(returning: v)
+            }
+        }
+        return await withCheckedContinuation { cont in
+            let once = Once(cont)
+            DispatchQueue.global(qos: .userInitiated).async { once.resume(UIPasteboard.general.string) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { once.resume(nil) }
+        }
     }
 
     private func requestSuggest(text: String, context: String?, debounce: Bool) {
@@ -127,10 +182,13 @@ final class KeyboardModel: ObservableObject {
     private func run(_ chip: Chip, confirmed: String?) {
         suggestTask?.cancel()
         bar = .working(chip.kind == "invoice" ? "Creating invoice…" : "Creating link…")
+        let who = if case .string(let v)? = chip.payload["client_name"] { v } else { "Client" }
         Task {
             do {
                 let insertion: String
                 let separator: String
+                let id: String
+                let money: String
                 switch chip.kind {
                 case "invoice":
                     var payload = chip.payload
@@ -139,12 +197,17 @@ final class KeyboardModel: ObservableObject {
                     guard let link = res.pay_link else { bar = .error("No link came back"); return }
                     // Item comes from the server-built chip, amount from the server's reply.
                     let item = if case .string(let v)? = chip.payload["item"] { v } else { "your order" }
-                    insertion = "Here's your invoice for \(item) (\(formatMoney(res.amount, res.currency))): \(link)"
+                    money = formatMoney(res.amount, res.currency)
+                    insertion = "Here's your invoice for \(item) (\(money)): \(link)"
                     separator = "\n"
+                    id = res.id
                 case "paylink":
-                    guard let link = try await api().payLink(chip.payload).approve_link else { bar = .error("No link came back"); return }
+                    let res = try await api().payLink(chip.payload)
+                    guard let link = res.approve_link else { bar = .error("No link came back"); return }
+                    money = if case .string(let a)? = chip.payload["amount"], case .string(let c)? = chip.payload["currency"] { formatMoney(a, c) } else { "" }
                     insertion = link
                     separator = " "
+                    id = res.id
                 default:
                     bar = .done("Open \(AppConfig.displayName) for this one")
                     return
@@ -153,11 +216,29 @@ final class KeyboardModel: ObservableObject {
                 let needsGap = !(before.last?.isWhitespace ?? true)
                 host?.insert((needsGap ? separator : "") + insertion)
                 lastSent = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                bar = .done(chip.kind == "invoice" ? "Invoice sent · link added" : "Link added")
+                bar = .idle
+                watch = Watch(id: id, who: who, money: money)
+                startPolling()
             } catch APIError.needsConfirm(let recipient) {
                 bar = .confirm(chip, recipient: recipient)
             } catch {
                 bar = .error(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Light polling, only while the keyboard is visible: at most one /v1/payments call every 10 s.
+    private func startPolling() {
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.pollInterval)
+                guard let self, !Task.isCancelled, let w = self.watch, !w.paid else { return }
+                guard let payments = try? await self.api().payments() else { continue }
+                if payments.first(where: { $0.id == w.id })?.state == "paid" {
+                    self.watch?.paid = true
+                    return
+                }
             }
         }
     }

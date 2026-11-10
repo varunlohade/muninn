@@ -15,7 +15,14 @@ settings:
     PRODUCT_DISPLAY_NAME: Muninn
     KEYBOARD_DISPLAY_NAME: $(PRODUCT_DISPLAY_NAME) Keyboard
     APP_GROUP_ID: group.com.orseliyas.muninn
+    # Server URLs. Debug builds default to the local server; Release defaults to the hosted demo server.
+    DEMO_SERVER_URL: https:/$()/muninn-api-production-ea1c.up.railway.app
     GENERATE_INFOPLIST_FILE: NO
+  configs:
+    Debug:
+      DEFAULT_SERVER_URL: http:/$()/localhost:8787
+    Release:
+      DEFAULT_SERVER_URL: $(DEMO_SERVER_URL)
 targets:
   Muninn:
     type: application
@@ -28,8 +35,10 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         AppName: $(PRODUCT_DISPLAY_NAME)
+        DefaultServerURL: $(DEFAULT_SERVER_URL)
+        DemoServerURL: $(DEMO_SERVER_URL)
         KeyboardName: $(KEYBOARD_DISPLAY_NAME)
-        UIAppFonts: [Geist-Regular.ttf, Geist-Medium.ttf, Geist-SemiBold.ttf, GeistMono-Medium.ttf]
+        UIAppFonts: [Urbanist-400.ttf, Urbanist-500.ttf, Urbanist-600.ttf, GeistMono-Medium.ttf]
         AppGroupID: $(APP_GROUP_ID)
         AppIdentifierPrefix: $(AppIdentifierPrefix)
         UILaunchScreen: {}
@@ -61,6 +70,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         AppName: $(PRODUCT_DISPLAY_NAME)
+        DefaultServerURL: $(DEFAULT_SERVER_URL)
+        DemoServerURL: $(DEMO_SERVER_URL)
         KeyboardName: $(KEYBOARD_DISPLAY_NAME)
         AppGroupID: $(APP_GROUP_ID)
         AppIdentifierPrefix: $(AppIdentifierPrefix)

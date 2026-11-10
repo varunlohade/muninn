@@ -37,6 +37,10 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>DefaultServerURL</key>
+	<string>$(DEFAULT_SERVER_URL)</string>
+	<key>DemoServerURL</key>
+	<string>$(DEMO_SERVER_URL)</string>
 	<key>KeyboardName</key>
 	<string>$(KEYBOARD_DISPLAY_NAME)</string>
 	<key>NSAppTransportSecurity</key>
@@ -46,9 +50,9 @@
 	</dict>
 	<key>UIAppFonts</key>
 	<array>
-		<string>Geist-Regular.ttf</string>
-		<string>Geist-Medium.ttf</string>
-		<string>Geist-SemiBold.ttf</string>
+		<string>Urbanist-400.ttf</string>
+		<string>Urbanist-500.ttf</string>
+		<string>Urbanist-600.ttf</string>
 		<string>GeistMono-Medium.ttf</string>
 	</array>
 	<key>UILaunchScreen</key>
