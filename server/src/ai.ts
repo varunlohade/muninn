@@ -22,12 +22,13 @@ const CRITERIA: Record<Intent, string> = {
   none: 'Ordinary chat with no payment, pricing or invoice action.',
 };
 
-async function postJson(url: string, key: string, body: unknown, timeoutMs: number): Promise<any> {
+async function postJson(url: string, key: string, body: unknown, timeoutMs: number, signal?: AbortSignal): Promise<any> {
+  const timeout = AbortSignal.timeout(timeoutMs);
   const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
   return res.json();
@@ -55,24 +56,73 @@ export function parseModelJson(content: string): unknown {
   return JSON.parse(s.slice(start, end + 1));
 }
 
+/**
+ * Hedged request: start `primary`. If it has not given a valid result after `delayMs`, or it fails first,
+ * also start `backup`. The first valid result wins and the other call is aborted.
+ */
+export async function hedge<T>(
+  primary: (signal: AbortSignal) => Promise<T>,
+  backup: (signal: AbortSignal) => Promise<T>,
+  delayMs: number,
+): Promise<T> {
+  const ctrl = [new AbortController(), new AbortController()];
+  return new Promise<T>((resolve, reject) => {
+    let failed = 0;
+    let started = 1;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const run = (i: number, fn: (signal: AbortSignal) => Promise<T>) => {
+      fn(ctrl[i].signal).then(
+        (v) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ctrl[1 - i].abort();
+          resolve(v);
+        },
+        (e) => {
+          if (settled) return;
+          failed++;
+          if (i === 0 && started === 1) startBackup();
+          else if (failed === started) { settled = true; reject(e); }
+        },
+      );
+    };
+    const startBackup = () => {
+      if (started === 2 || settled) return;
+      clearTimeout(timer);
+      started = 2;
+      run(1, backup);
+    };
+    run(0, primary);
+    timer = setTimeout(startBackup, delayMs);
+  });
+}
+
 export function createAi(env: { typesafeKey: string; openrouterKey: string }): Ai {
-  async function chat(messages: { role: string; content: string }[], maxTokens: number, purpose: string): Promise<string> {
-    const attempts = [config.llm.primary, config.llm.fallback];
-    let lastErr: unknown;
-    for (const m of attempts) {
-      const t = performance.now();
-      try {
-        const data = await postJson(config.llm.url, env.openrouterKey, { ...m, messages, temperature: 0, max_tokens: maxTokens }, config.llm.timeoutMs);
-        const content = data?.choices?.[0]?.message?.content;
-        if (typeof content !== 'string' || !content.trim()) throw new Error('empty completion');
-        log('llm', { purpose, model: m.model, ms: Math.round(performance.now() - t), ok: true });
-        return content;
-      } catch (e) {
-        lastErr = e;
-        log('llm', { purpose, model: m.model, ms: Math.round(performance.now() - t), ok: false, err: (e as Error).message });
-      }
+  type Model = typeof config.llm.primary | typeof config.llm.fallback;
+  type Messages = { role: string; content: string }[];
+
+  async function chatOnce(m: Model, messages: Messages, maxTokens: number, purpose: string, signal?: AbortSignal): Promise<string> {
+    const t = performance.now();
+    try {
+      const data = await postJson(config.llm.url, env.openrouterKey, { ...m, messages, temperature: 0, max_tokens: maxTokens }, config.llm.timeoutMs, signal);
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string' || !content.trim()) throw new Error('empty completion');
+      log('llm', { purpose, model: m.model, ms: Math.round(performance.now() - t), ok: true });
+      return content;
+    } catch (e) {
+      log('llm', { purpose, model: m.model, ms: Math.round(performance.now() - t), ok: false, err: signal?.aborted ? 'hedge lost' : (e as Error).message });
+      throw e;
     }
-    throw lastErr;
+  }
+
+  async function chat(messages: Messages, maxTokens: number, purpose: string): Promise<string> {
+    try {
+      return await chatOnce(config.llm.primary, messages, maxTokens, purpose);
+    } catch {
+      return chatOnce(config.llm.fallback, messages, maxTokens, purpose);
+    }
   }
 
   return {
@@ -97,7 +147,7 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
     },
 
     async extract(text, catalog) {
-      const content = await chat([
+      const messages = [
         {
           role: 'system',
           content: 'Extract payment details from a chat message a small business owner is writing to a client. ' +
@@ -109,8 +159,11 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
             (catalog ? `The owner's catalog: ${catalog}` : ''),
         },
         { role: 'user', content: text.slice(0, config.maxTextChars) },
-      ], 120, 'extract');
-      return ExtractionSchema.parse(parseModelJson(content));
+      ];
+      // A result counts only once it parses, so a fast but broken answer does not win the race.
+      const attempt = (m: Model) => async (signal: AbortSignal) =>
+        ExtractionSchema.parse(parseModelJson(await chatOnce(m, messages, 120, 'extract', signal)));
+      return hedge(attempt(config.llm.primary), attempt(config.llm.fallback), config.llm.hedgeMs);
     },
 
     async reply(text, profile, catalog) {

@@ -30,6 +30,7 @@ export const config = {
   llm: {
     url: 'https://openrouter.ai/api/v1/chat/completions',
     timeoutMs: 2000,
+    hedgeMs: 700,
     primary: { model: 'meta-llama/llama-3.3-70b-instruct', provider: { order: ['groq'], allow_fallbacks: true } },
     fallback: { model: 'google/gemini-2.5-flash' },
   },
