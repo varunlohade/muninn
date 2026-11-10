@@ -54,6 +54,15 @@ enum SharedStore {
         set { save(newValue, file: "notes.json") }
     }
 
+    /// Built-in action shortcuts with the owner's triggers. A new built-in action appears with its default.
+    static var actionShortcuts: [ActionShortcut] {
+        get {
+            let saved = load([ActionShortcut].self, file: "shortcuts.json") ?? []
+            return ActionShortcut.defaults.map { d in saved.first { $0.action == d.action } ?? d }
+        }
+        set { save(newValue, file: "shortcuts.json") }
+    }
+
     private static func baseQuery() -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,

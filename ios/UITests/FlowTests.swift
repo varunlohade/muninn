@@ -43,6 +43,12 @@ final class FlowTests: XCTestCase {
         let field = app.secureTextFields["token"]
         XCTAssertTrue(field.waitForExistence(timeout: 5), "developer pairing sheet did not open")
         if env["USE_DEMO_SERVER"] == "1" { element(app, "identifier == %@", "server.demo").tap() }
+        // TEST_RUNNER_SERVER_URL: another local server, for example one with a stubbed model.
+        if let url = env["SERVER_URL"] {
+            let server = app.textFields.firstMatch
+            server.tap()
+            server.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 60) + url)
+        }
         field.tap()
         field.typeText(token)
         app.buttons["Pair"].tap()
@@ -588,5 +594,253 @@ final class FlowTests: XCTestCase {
             element(app, "identifier == %@", "note.delete").tap()
             XCTAssertFalse(saved.waitForExistence(timeout: 2), "deleted note is gone")
         }
+    }
+
+    // MARK: writing tools and shortcuts
+
+    /// These tests send text to the writing routes. They run only against a server with a stubbed model
+    /// (TEST_RUNNER_STUB=1 with TEST_RUNNER_SERVER_URL), or with TEST_RUNNER_LIVE=1.
+    private func requireWriting() throws {
+        try XCTSkipUnless(env["STUB"] == "1" || env["LIVE"] == "1", "writing calls a model; set TEST_RUNNER_STUB=1 or TEST_RUNNER_LIVE=1")
+    }
+
+    private func id(_ app: XCUIApplication, _ identifier: String) -> XCUIElement { element(app, "identifier == %@", identifier) }
+
+    /// Types on our own keys in the app. Letters, space, and the 123 layer for everything else.
+    private func typeOnKeys(_ app: XCUIApplication, _ text: String) {
+        var symbols = false
+        func layer(_ wantSymbols: Bool) {
+            if symbols != wantSymbols { id(app, "muninn.more").tap(); symbols = wantSymbols }
+        }
+        for ch in text {
+            if ch == " " {
+                id(app, "space").tap()
+                symbols = false
+            } else if ch.isLetter {
+                layer(false)
+                app.descendants(matching: .any).matching(NSPredicate(format: "label ==[c] %@ AND identifier BEGINSWITH 'k.'", String(ch))).firstMatch.tap()
+            } else {
+                layer(true)
+                app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ AND identifier BEGINSWITH 'k.'", String(ch))).firstMatch.tap()
+            }
+        }
+        layer(false)
+    }
+
+    private func openLab(_ app: XCUIApplication) -> XCUIElement {
+        app.launch()
+        id(app, "nav.integrations").tap()
+        app.swipeUp()
+        tap(app, ["Keyboard Lab (debug)"])
+        let text = id(app, "lab.text")
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        return text
+    }
+
+    private func clearLab(_ app: XCUIApplication, _ text: XCUIElement) {
+        for _ in 0..<6 where text.label != "Type with the keyboard below" { id(app, "delete").press(forDuration: 3.5) }
+    }
+
+    /// The intro after sign-in: Get paid, Fix, Refine, Tone check, Shortcuts. Each scene ends by itself. Needs a fresh keychain.
+    func test19IntroScenes() throws {
+        try requireWriting()
+        let token = try XCTUnwrap(env["DEVICE_TOKEN"])
+        let app = XCUIApplication()
+        app.launch()
+        try XCTSkipUnless(id(app, "onboarding.mark").waitForExistence(timeout: 5), "already signed in; reset the simulator keychain to run onboarding")
+        devPair(app, token: token)
+        if id(app, "onboarding.step.2").waitForExistence(timeout: 6) {
+            Thread.sleep(forTimeInterval: 0.8)
+            // After the developer pairing sheet closes, the first tap can be lost, so tap until the step changes.
+            for _ in 0..<3 where !id(app, "onboarding.step.3").exists {
+                Thread.sleep(forTimeInterval: 1)
+                id(app, "onboarding.later").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            }
+        }
+        XCTAssertTrue(id(app, "onboarding.step.3").waitForExistence(timeout: 10), String(app.debugDescription.suffix(4000)))
+        let example = id(app, "onboarding.example")
+        let message = id(app, "onboarding.message")
+        func start(_ title: String, _ shotName: String) {
+            let found = app.staticTexts[title].waitForExistence(timeout: 8)
+            Thread.sleep(forTimeInterval: 0.7)
+            shot(shotName)
+            XCTAssertTrue(found, "scene \(title) did not start\n\(app.debugDescription.prefix(5000))")
+            let skip = id(app, "onboarding.skip").frame
+            XCTAssertTrue(skip.height > 0 && skip.maxY < id(app, "write.toggle").frame.minY, "Skip stays visible above the keyboard")
+            example.tap()
+        }
+        func gotIt(_ shotName: String) {
+            XCTAssertTrue(app.staticTexts["Got it"].waitForExistence(timeout: 10), app.debugDescription)
+            Thread.sleep(forTimeInterval: 0.5)
+            shot(shotName)
+        }
+
+        start("Try it", "50-intro-paylink")
+        let chip = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "chip.", "Pay link")).firstMatch
+        XCTAssertTrue(chip.waitForExistence(timeout: 15), "no pay link chip")
+        chip.tap()
+        gotIt("51-intro-paylink-done")
+
+        start("Fix", "52-intro-fix")
+        XCTAssertTrue(id(app, "chip.fix").waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("53-intro-fix-chip")
+        id(app, "chip.fix").tap()
+        gotIt("54-intro-fix-done")
+
+        start("Refine", "55-intro-refine")
+        id(app, "write.toggle").tap()
+        XCTAssertTrue(id(app, "write.friendly").waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("56-intro-refine-panel")
+        id(app, "write.friendly").tap()
+        XCTAssertTrue(id(app, "write.use").waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("57-intro-refine-preview")
+        id(app, "write.use").tap()
+        gotIt("58-intro-refine-done")
+
+        start("Tone check", "59-intro-tone")
+        id(app, "write.toggle").tap()
+        id(app, "write.tone").tap()
+        XCTAssertTrue(id(app, "write.use").waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("60-intro-tone-preview")
+        id(app, "write.use").tap()
+        gotIt("61-intro-tone-done")
+
+        start("Shortcuts", "62-intro-shortcuts")
+        XCTAssertEqual(message.label, ";prices")
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("63-intro-shortcuts-typed")
+        id(app, "space").tap()
+        XCTAssertTrue(app.staticTexts["Got it"].waitForExistence(timeout: 10))
+        XCTAssertEqual(message.label, "Prices: cut $45, color $120, blowout $35")
+        shot("64-intro-shortcuts-done")
+        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15), "the intro ends on Home")
+    }
+
+    /// Keyboard Lab: Fix with Undo, the Refine panel, Tone check, and the three kinds of shortcut.
+    func test20WritingAndShortcuts() throws {
+        try requireWriting()
+        let app = XCUIApplication()
+        let text = openLab(app)
+
+        typeOnKeys(app, "i can do teh job")
+        let fix = id(app, "chip.fix")
+        XCTAssertTrue(fix.waitForExistence(timeout: 5), app.debugDescription)
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("40-fix-before")
+        fix.tap()
+        XCTAssertTrue(id(app, "chip.undo").waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(text.label, "I can do the job.")
+        shot("41-fix-after")
+        id(app, "chip.undo").tap()
+        XCTAssertEqual(text.label, "I can do teh job", "Undo puts the old text back")
+        XCTAssertFalse(id(app, "chip.undo").exists)
+        XCTAssertFalse(fix.exists, "Fix is not offered again for text the owner chose to keep")
+        typeOnKeys(app, " ok")
+        fix.tap()
+        XCTAssertTrue(id(app, "chip.undo").waitForExistence(timeout: 10))
+        XCTAssertEqual(text.label, "I can do the job ok.")
+        Thread.sleep(forTimeInterval: 6.5)
+        XCTAssertFalse(id(app, "chip.undo").exists, "Undo goes away after about 5 s")
+
+        id(app, "write.toggle").tap()
+        XCTAssertTrue(id(app, "write.professional").waitForExistence(timeout: 5))
+        for tone in ["friendly", "shorter", "firmer", "tone"] { XCTAssertTrue(id(app, "write.\(tone)").exists, tone) }
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("42-refine-panel")
+        id(app, "write.shorter").tap()
+        XCTAssertTrue(id(app, "write.use").waitForExistence(timeout: 10))
+        XCTAssertEqual(text.label, "I can do the job ok.", "a preview does not change the message")
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("43-refine-preview")
+        id(app, "write.preview").tap()
+        XCTAssertEqual(text.label, "Please pay today.")
+        XCTAssertTrue(id(app, "muninn.more").waitForExistence(timeout: 3), "keys come back")
+
+        id(app, "write.toggle").tap()
+        id(app, "write.tone").tap()
+        XCTAssertTrue(element(app, "label BEGINSWITH %@", "The tone is fine").waitForExistence(timeout: 10), "a polite message passes the tone check")
+        id(app, "write.toggle").tap()
+        clearLab(app, text)
+        typeOnKeys(app, "pay me now")
+        id(app, "write.toggle").tap()
+        id(app, "write.tone").tap()
+        XCTAssertTrue(id(app, "write.use").waitForExistence(timeout: 10), app.debugDescription)
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("44-tone-check")
+        id(app, "write.use").tap()
+        XCTAssertTrue(text.label.hasPrefix("Hi, I am following up"), text.label)
+
+        clearLab(app, text)
+        typeOnKeys(app, ";prices")
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("45-shortcut-typed")
+        id(app, "space").tap()
+        XCTAssertEqual(text.label, "Prices: cut $45, color $120, blowout $35")
+        shot("46-shortcut-expanded")
+
+        clearLab(app, text)
+        typeOnKeys(app, ";pay 45")
+        id(app, "space").tap()
+        let pay = id(app, "chip.paylink")
+        XCTAssertTrue(pay.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(text.label, "Type with the keyboard below", "the trigger is gone and no link is made before the tap")
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("47-shortcut-pay-chip")
+        pay.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "lab.text", "paypal.com")).firstMatch.waitForExistence(timeout: 15))
+
+        clearLab(app, text)
+        typeOnKeys(app, ";late")
+        id(app, "space").tap()
+        XCTAssertTrue(element(app, "label BEGINSWITH %@", "Ana $90").waitForExistence(timeout: 10), app.debugDescription)
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("48-shortcut-late")
+    }
+
+    /// The Shortcuts screen: the three actions and the price note. Change a trigger, turn it back. No model call.
+    func test21ShortcutsScreen() {
+        let app = XCUIApplication()
+        app.launch()
+        id(app, "nav.shortcuts").tap()
+        XCTAssertTrue(id(app, "shortcut.pay").waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(id(app, "shortcut.late").exists && id(app, "shortcut.fix").exists)
+        XCTAssertTrue(app.staticTexts[";prices"].exists, app.debugDescription)
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("49-shortcuts-screen")
+        func setTrigger(_ value: String) {
+            id(app, "shortcut.late").tap()
+            let field = id(app, "shortcut.trigger")
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            field.tap()
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20) + value)
+        }
+        setTrigger(";pay")
+        XCTAssertTrue(app.staticTexts["Another shortcut uses ;pay."].waitForExistence(timeout: 3), "a trigger in use is refused")
+        let field = id(app, "shortcut.trigger")
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20) + ";owed")
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("49b-shortcut-editor")
+        id(app, "shortcut.save").tap()
+        XCTAssertTrue(app.staticTexts[";owed"].waitForExistence(timeout: 5), app.debugDescription)
+        setTrigger(";late")
+        id(app, "shortcut.save").tap()
+        XCTAssertTrue(app.staticTexts[";late"].waitForExistence(timeout: 5))
+
+        id(app, "shortcuts.new").tap()
+        let trigger = id(app, "note.trigger")
+        XCTAssertTrue(trigger.waitForExistence(timeout: 5))
+        trigger.tap()
+        trigger.typeText("hours")
+        id(app, "note.text").tap()
+        id(app, "note.text").typeText("Open Tue to Sat, 9 to 6.")
+        id(app, "note.save").tap()
+        XCTAssertTrue(app.staticTexts[";hours"].waitForExistence(timeout: 5), app.debugDescription)
+        element(app, "label CONTAINS %@", "Open Tue to Sat").tap()
+        id(app, "note.delete").tap()
+        XCTAssertFalse(app.staticTexts[";hours"].waitForExistence(timeout: 2), "a deleted shortcut is gone")
     }
 }

@@ -2,6 +2,8 @@ const env = process.env;
 
 export const INTENTS = ['create_invoice', 'pay_link', 'payment_status', 'send_reminder', 'refund', 'catalog_reply', 'none'] as const;
 export type Intent = (typeof INTENTS)[number];
+export const TONES = ['professional', 'friendly', 'shorter', 'firmer'] as const;
+export type Tone = (typeof TONES)[number];
 
 export const config = {
   port: Number(env.PORT ?? 8787),
@@ -13,6 +15,7 @@ export const config = {
   bodyLimitBytes: 16 * 1024,
   maxTextChars: 2000,
   maxContextChars: 1000,
+  maxWriteChars: 1500,
 
   apple: {
     // The app bundle id. Apple puts it in the identity token as aud.
@@ -43,6 +46,9 @@ export const config = {
     url: 'https://openrouter.ai/api/v1/chat/completions',
     timeoutMs: 2000,
     hedgeMs: 700,
+    // Rewrites are longer than extraction, so they get more time before the backup model starts.
+    writeTimeoutMs: 6000,
+    writeHedgeMs: 1500,
     primary: { model: 'meta-llama/llama-3.3-70b-instruct', provider: { order: ['groq'], allow_fallbacks: true } },
     fallback: { model: 'google/gemini-2.5-flash' },
   },
@@ -57,6 +63,7 @@ export const config = {
   rateLimit: {
     suggest: { limit: 60, windowMs: 60_000 },
     actions: { limit: 20, windowMs: 60_000 },
+    write: { limit: 30, windowMs: 60_000 },
     other: { limit: 120, windowMs: 60_000 },
     auth: { limit: 10, windowMs: 60_000 },
     webhook: { limit: 120, windowMs: 60_000 },

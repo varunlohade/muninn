@@ -30,7 +30,9 @@ enum ChipActions {
         case "paylink":
             let res = try await api.payLink(chip.payload)
             guard let link = res.approve_link else { throw APIError.http(0, "No link came back") }
-            let money = if case .string(let a)? = chip.payload["amount"], case .string(let c)? = chip.payload["currency"] { formatMoney(a, c) } else { "" }
+            // A ";pay 45" chip has no currency: the server uses the profile's, and says which in its reply.
+            let money = if let a = res.amount, let c = res.currency { formatMoney(a, c) }
+                else if case .string(let a)? = chip.payload["amount"], case .string(let c)? = chip.payload["currency"] { formatMoney(a, c) } else { "" }
             return ActionResult(id: res.id, kind: "paylink", link: link, money: money, who: who, message: link)
         default:
             throw APIError.http(0, "Open \(AppConfig.displayName) for this one")

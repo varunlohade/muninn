@@ -3,21 +3,54 @@ import CryptoKit
 import SwiftUI
 
 /// One scene of the "try it" intro: the owner does one thing with the real keyboard and sees the result.
-/// To add a scene (Fix, Refine, Tone check), add one value to `IntroScene.all`. The flow needs no other change.
+/// To add a scene, add one value to `IntroScene.all`. The flow needs no other change.
 struct IntroScene: Identifiable {
     let id: String
+    var title = "Try it"
     /// One line that says what to do.
     let prompt: String
     /// What the main button types for the owner.
     let example: String
+    /// The main button's label. Nil shows the example itself.
+    var button: String? = nil
+    /// What to do next, once the example is in the message. Nil means the keyboard brings a chip by itself.
+    var hint: (@MainActor (KeyboardModel) -> String)? = nil
     /// One line shown when the scene succeeds.
     let result: String
+    /// Runs before the example is typed.
+    var prepare: @MainActor (KeyboardModel) -> Void = { _ in }
     /// True once the keyboard has done its work. It gets the keyboard model and the text in the message field.
     let succeeded: @MainActor (KeyboardModel, String) -> Bool
 
-    static let all: [IntroScene] = [
+    /// The steps through the Refine panel, for the scenes that use it.
+    @MainActor private static func panelHint(_ pick: String) -> (KeyboardModel) -> String {
+        { model in
+            guard model.writeOpen else { return "Now tap the wand on the keyboard." }
+            switch model.writePanel {
+            case .menu: return "Tap \(pick)."
+            case .busy: return "One moment\u{2026}"
+            case .preview: return "Tap Replace to use it."
+            case .message: return "Tap Back, then try again."
+            }
+        }
+    }
+
+    @MainActor static let all: [IntroScene] = [
         IntroScene(id: "paylink", prompt: "Type a price, or tap the button.", example: "$45 for the cut",
                    result: "A real PayPal link, in one tap.", succeeded: { model, _ in model.watch != nil }),
+        IntroScene(id: "fix", title: "Fix", prompt: "Type fast. Mistakes are fine.", example: "i can do tuesday at 3 if that work for you",
+                   button: "Type a rushed message", hint: { _ in "Now tap Fix on the keyboard." },
+                   result: "Spelling and grammar, fixed in one tap.", succeeded: { model, _ in model.lastWrite == "fix" }),
+        IntroScene(id: "refine", title: "Refine", prompt: "Change how a message sounds.", example: "You have not paid yet. Pay today.",
+                   button: "Type a blunt reminder", hint: panelHint("Friendlier"),
+                   result: "Same message, better tone.", succeeded: { model, _ in model.lastWrite == "refine" }),
+        IntroScene(id: "tone", title: "Tone check", prompt: "Check a message before you send it.", example: "This is the third time I ask. Where is my money?",
+                   button: "Type an angry message", hint: panelHint("Tone check"),
+                   result: "Calm and professional, before you send.", succeeded: { model, _ in model.lastWrite == "tone" }),
+        IntroScene(id: "shortcuts", title: "Shortcuts", prompt: "A few keys can type a whole reply.", example: ";prices",
+                   hint: { _ in "Now tap space on the keyboard." },
+                   result: "Make your own in Shortcuts.", prepare: { $0.addDemoShortcut() },
+                   succeeded: { model, _ in model.lastShortcut != nil }),
     ]
 }
 
@@ -45,7 +78,7 @@ struct OnboardingView: View {
         switch step {
         case .signIn: "Get paid from any chat"
         case .keyboard: "Turn on the keyboard"
-        case .tryIt: checked ? "Got it" : "Try it"
+        case .tryIt: checked ? "Got it" : scene.title
         }
     }
     private var line: String {
@@ -111,6 +144,8 @@ struct OnboardingView: View {
         .onChange(of: typing.model.watch) { _, _ in checkScene() }
         .onChange(of: typing.model.bar) { _, _ in checkScene() }
         .onChange(of: typing.text) { _, _ in checkScene() }
+        .onChange(of: typing.model.lastWrite) { _, _ in checkScene() }
+        .onChange(of: typing.model.lastShortcut) { _, _ in checkScene() }
     }
 
     /// The mark is one view for the whole flow. It is large on the first screen, then moves up and shrinks.
@@ -177,7 +212,7 @@ struct OnboardingView: View {
                 quietButton("Not now") { Task { await advance(from: .keyboard) } }
                     .accessibilityIdentifier("onboarding.later")
             case .tryIt:
-                Button(tryNeedsRetry ? "Try again" : "Type \u{201C}\(scene.example)\u{201D}") { typeExample() }
+                Button(tryNeedsRetry ? "Try again" : scene.button ?? "Type \u{201C}\(scene.example)\u{201D}") { typeExample() }
                     .buttonStyle(PrimaryButton())
                     .opacity(tryBusy ? 0 : 1)
                     .disabled(tryBusy)
@@ -220,7 +255,8 @@ struct OnboardingView: View {
         case .error: return "That did not work. Try again."
         default:
             if tryTimedOut { return "No suggestion this time. Try again." }
-            return typing.text.isEmpty ? scene.prompt : "\(AppConfig.displayName) is reading\u{2026}"
+            if typing.text.isEmpty { return scene.prompt }
+            return scene.hint?(typing.model) ?? "\(AppConfig.displayName) is reading\u{2026}"
         }
     }
     private var tryNeedsRetry: Bool {
@@ -239,12 +275,17 @@ struct OnboardingView: View {
     /// Types the example for the owner. Also the retry: it clears the field first, so the keyboard asks again.
     private func typeExample() {
         tryTimedOut = false
+        typing.model.resetWriting()
         typing.model.bar = .idle
         typing.text = ""
         typing.model.textChanged()
+        typing.model.suggestsWhileTyping = scene.hint == nil
+        scene.prepare(typing.model)
         typing.text = scene.example
         typing.model.textChanged()
         tryTimer?.cancel()
+        // Only a scene that waits for a chip can time out. The others wait for the owner.
+        guard scene.hint == nil else { return }
         tryTimer = Task {
             try? await Task.sleep(for: Self.tryTimeout)
             guard !Task.isCancelled, step == .tryIt, !tryBusy else { return }
@@ -278,6 +319,8 @@ struct OnboardingView: View {
 
     /// The step is done: stamp the check, hold it a moment, then move on.
     private func complete(_ done: Step) async {
+        // Several changes can report the same success. Only the first one counts, or the intro would jump scenes.
+        guard !checked else { return }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         withAnimation(reduceMotion ? Theme.Motion.crossfade : Theme.Motion.stamp) { checked = true }
         // The last step holds longer, so the owner can read the link.
@@ -295,6 +338,7 @@ struct OnboardingView: View {
                 tryTimedOut = false
                 typing.model.keyboardDisappeared()
                 typing.model.watch = nil
+                typing.model.resetWriting()
                 typing.model.bar = .idle
                 typing.text = ""
                 typing.model.textChanged()

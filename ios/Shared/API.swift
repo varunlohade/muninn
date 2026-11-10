@@ -42,7 +42,10 @@ struct SuggestResponse: Decodable {
 }
 
 struct InvoiceResponse: Decodable { let id: String; let status: String; let pay_link: String?; let amount: String; let currency: String }
-struct PayLinkResponse: Decodable { let id: String; let status: String; let approve_link: String? }
+struct PayLinkResponse: Decodable { let id: String; let status: String; let approve_link: String?; let amount: String?; let currency: String? }
+struct WriteResponse: Decodable { let text: String; let changed: Bool? }
+/// tone is "upset" (the client), "blunt" (the owner's draft) or "ok". calm is set unless tone is "ok".
+struct ToneResponse: Decodable { let tone: String; let calm: String? }
 struct NeedsConfirm: Decodable { let needs_confirm: Bool; let recipient: String }
 
 struct Summary: Decodable {
@@ -179,6 +182,22 @@ struct APIClient {
         let keys: Set = ["amount", "currency", "item", "client_name"]
         let body = payload.filter { keys.contains($0.key) && $0.value != .null }
         return try await send(request("POST", "/v1/actions/paylink", body: body, tap: true), as: PayLinkResponse.self)
+    }
+
+    // Writing help. Each call starts from a tap, and the server refuses it without the tap header.
+    func fix(_ text: String) async throws -> WriteResponse {
+        try await send(request("POST", "/v1/write/fix", body: ["text": text], tap: true), as: WriteResponse.self)
+    }
+
+    func refine(_ text: String, tone: String) async throws -> WriteResponse {
+        try await send(request("POST", "/v1/write/refine", body: ["text": text, "tone": tone], tap: true), as: WriteResponse.self)
+    }
+
+    func toneCheck(draft: String, client: String?) async throws -> ToneResponse {
+        var body: [String: String] = [:]
+        if !draft.isEmpty { body["text"] = draft }
+        if let client { body["context"] = client }
+        return try await send(request("POST", "/v1/write/tone", body: body, tap: true), as: ToneResponse.self)
     }
 
     func summary() async throws -> Summary {

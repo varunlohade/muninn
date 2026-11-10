@@ -2,14 +2,14 @@ process.env.LOG_SILENT = '1';
 import { randomBytes } from 'node:crypto';
 import { createApp } from '../src/app.ts';
 import type { AppleVerifier } from '../src/apple.ts';
-import type { Ai, Classification, Extraction } from '../src/ai.ts';
+import type { Ai, Classification, Extraction, ToneCheck } from '../src/ai.ts';
 import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
 import type { PayPal, PayPalDispute, PayPalDisputeDetail, PayPalTxn } from '../src/paypal.ts';
 
 export const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
-export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void } = {}) {
+export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void } = {}) {
   const db = openDb(':memory:');
   const cipher = createCipher(randomBytes(32));
   const calls: { fn: string; args: unknown[] }[] = [];
@@ -58,6 +58,10 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       async sendDisputeMessage(...args) { calls.push({ fn: 'dispute_message', args: [userId, ...args] }); },
     };
   };
+  const rewrite = (text: string) => {
+    if (opts.write instanceof Error) throw opts.write;
+    return opts.write ?? text;
+  };
   const ai: Ai = {
     async classify(text) { aiCalls.push({ fn: 'classify', args: [text] }); await sleep(opts.delayMs); return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
     async extract(text, catalog) { aiCalls.push({ fn: 'extract', args: [text, catalog] }); await sleep(opts.delayMs); return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...opts.ext }; },
@@ -67,6 +71,9 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       if (opts.brief instanceof Error) throw opts.brief;
       return opts.brief ?? facts.split('\n').slice(0, 2).join('\n');
     },
+    async fix(...args) { aiCalls.push({ fn: 'fix', args }); return rewrite(args[0]); },
+    async refine(...args) { aiCalls.push({ fn: 'refine', args }); return rewrite(args[0]); },
+    async toneCheck(...args) { aiCalls.push({ fn: 'toneCheck', args }); return opts.tone ?? { tone: 'ok', calm: null }; },
   };
   const app = createApp({ db, cipher, ai, paypal: { forUser, platform: () => pp }, now: opts.now, apple: opts.apple, onNewUser: opts.onNewUser });
   const device = () => {
@@ -82,6 +89,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(path.startsWith('/v1/write') ? { 'X-User-Action': 'tap' } : {}),
         ...(path.startsWith('/v1/actions') ? { 'X-User-Action': 'tap', 'Idempotency-Key': `key-${Date.now()}-${++k}` } : {}),
         ...headers,
       },

@@ -144,6 +144,9 @@ struct HomeView: View {
             MarkView(size: 36)
             Text(AppConfig.displayName).font(Theme.Font.appName).tracking(Theme.Tracking.appName).foregroundStyle(Theme.Color.text1)
             Spacer()
+            NavigationLink { ShortcutsView() } label: { IconCircle(systemImage: "bolt") }
+                .accessibilityLabel("Shortcuts")
+                .accessibilityIdentifier("nav.shortcuts")
             NavigationLink { NotesView() } label: { IconCircle(systemImage: "note.text") }
                 .accessibilityLabel("Notes")
                 .accessibilityIdentifier("nav.notes")

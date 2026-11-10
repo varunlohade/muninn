@@ -51,6 +51,42 @@ enum BarState: Equatable {
     case error(String)
 }
 
+/// The one-tap rewrites in the Refine panel. The raw value is the server's tone name.
+enum RefineTone: String, CaseIterable, Identifiable {
+    case professional, friendly, shorter, firmer
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .professional: "More professional"
+        case .friendly: "Friendlier"
+        case .shorter: "Shorter"
+        case .firmer: "Firmer"
+        }
+    }
+}
+
+/// A rewrite the owner can look at before it replaces `original`, the text before the cursor.
+struct WritePreview: Equatable {
+    let kind: String
+    let title: String
+    let original: String
+    let text: String
+}
+
+enum WritePanel: Equatable {
+    case menu
+    case busy(String)
+    case preview(WritePreview)
+    case message(String)
+}
+
+/// The last replacement, kept for a few seconds so one tap puts the old text back.
+struct WriteUndo: Equatable {
+    let label: String
+    let original: String
+    let replacement: String
+}
+
 /// A sent invoice or pay link the keyboard watches until it is paid.
 struct Watch: Equatable {
     let id: String
@@ -68,6 +104,16 @@ final class KeyboardModel: ObservableObject {
     @Published var appointments: [Appointment] = []
     @Published var notesOpen = false
     @Published var notes: [Note] = []
+    @Published var writeOpen = false
+    @Published var writePanel: WritePanel = .menu
+    @Published var undo: WriteUndo?
+    /// A sentence is before the cursor, so the bar offers Fix.
+    @Published var fixable = false
+    /// A calm reply for an upset copied message, ready to preview.
+    @Published var calmOffer: WritePreview?
+    /// "fix", "refine" or "tone" after a rewrite went into the field, and the trigger of the last shortcut. The intro watches both.
+    @Published var lastWrite: String?
+    @Published var lastShortcut: String?
     @Published var layout: KeyLayout = .letters
     @Published var shift: ShiftState = .once
     @Published var isDark = false
@@ -79,10 +125,18 @@ final class KeyboardModel: ObservableObject {
     @Published var lastLatencyMs: Int?
 
     weak var host: TextHost?
+    /// False in the intro scenes about writing, where a payment chip would get in the way. Then typing sends nothing.
+    var suggestsWhileTyping = true
     var api: () -> APIClient = APIClient.shared
     private var suggestTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var lastSent = ""
+    private var actions: [ActionShortcut] = ActionShortcut.defaults
+    private var writeTask: Task<Void, Never>?
+    private var undoTask: Task<Void, Never>?
+    /// The last text Fix returned or found clean, so the chip does not offer the same text twice.
+    private var lastFixed = ""
+    static let undoWindow: Duration = .seconds(5)
     /// The appointment whose "Invoice Sam" chip started the current request, and the ones invoiced from here.
     private var billing: Appointment?
     private var billedHere: Set<String> = []
@@ -166,8 +220,10 @@ final class KeyboardModel: ObservableObject {
         case .mode(let to):
             layout = to
         case .space:
+            if expandShortcut() { break }
             tapSpace()
         case .ret:
+            if expandShortcut() { break }
             host?.insert("\n")
             lastSpaceTap = nil
             afterEdit()
@@ -248,6 +304,7 @@ final class KeyboardModel: ObservableObject {
         updateAutoShift()
         guard hasFullAccess else { copiedAvailable = false; return }
         SharedStore.keyboardLastSeen = Date()
+        reloadShortcuts()
         guard paired else { return }
         appointments = SharedStore.appointments
         // hasStrings and changeCount do not trigger the paste prompt; only reading the string does.
@@ -258,6 +315,7 @@ final class KeyboardModel: ObservableObject {
 
     func keyboardDisappeared() {
         notesOpen = false
+        resetWriting()
         pollTask?.cancel()
         if watch?.paid == true { watch = nil }
     }
@@ -268,6 +326,7 @@ final class KeyboardModel: ObservableObject {
 
     func toggleNotes() {
         host?.playClick()
+        writeOpen = false
         if !notesOpen { notes = SharedStore.notes }
         notesOpen.toggle()
     }
@@ -298,7 +357,9 @@ final class KeyboardModel: ObservableObject {
     func textChanged() {
         refreshAccess()
         updateAutoShift()
-        guard paired else { return }
+        updateFixable()
+        if let u = undo, !(host?.contextBeforeInput ?? "").hasSuffix(u.replacement) { undo = nil }
+        guard paired, suggestsWhileTyping else { return }
         if case .working = bar { return }
         if case .confirm = bar { return }
         let text = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -326,6 +387,7 @@ final class KeyboardModel: ObservableObject {
             let text = (self.host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             self.bar = .idle
             self.requestSuggest(text: text, context: String(copied.prefix(1000)), debounce: false)
+            self.checkCopiedTone(String(copied.prefix(1000)))
         }
     }
 
@@ -392,6 +454,273 @@ final class KeyboardModel: ObservableObject {
                 self.bar = .error(error.localizedDescription)
             }
         }
+    }
+
+    // MARK: writing help (Fix, Refine, Tone check). Text leaves the phone only on a tap.
+
+    /// The paragraph before the cursor: `text` goes to the server, `original` is what a rewrite replaces.
+    private var draft: (text: String, original: String) {
+        let before = host?.contextBeforeInput ?? ""
+        let start = before.lastIndex(where: \.isNewline).map { before.index(after: $0) } ?? before.startIndex
+        let original = String(before[start...].drop(while: \.isWhitespace))
+        return (original.trimmingCharacters(in: .whitespaces), original)
+    }
+
+    private func updateFixable() {
+        let text = draft.text
+        fixable = paired && text != lastFixed && text.split(separator: " ").count >= 3
+    }
+
+    /// Deletes exactly `original` before the cursor and types `new`. False when the text is no longer there.
+    private func replace(_ original: String, with new: String) -> Bool {
+        guard let host, (host.contextBeforeInput ?? "").hasSuffix(original) else { return false }
+        for _ in 0..<original.count { host.deleteBackward() }
+        host.insert(new)
+        lastSent = typed
+        updateAutoShift()
+        return true
+    }
+
+    private func apply(_ p: WritePreview, label: String) {
+        guard replace(p.original, with: p.text) else { bar = .error("The text changed. Try again."); return }
+        lastFixed = p.text
+        fixable = false
+        bar = .idle
+        lastWrite = p.kind
+        undo = WriteUndo(label: label, original: p.original, replacement: p.text)
+        undoTask?.cancel()
+        undoTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.undoWindow)
+            guard !Task.isCancelled else { return }
+            self?.undo = nil
+        }
+    }
+
+    func undoWrite() {
+        guard let u = undo else { return }
+        host?.playClick()
+        undoTask?.cancel()
+        undo = nil
+        if replace(u.replacement, with: u.original) { lastFixed = u.original.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// Tap on the Fix chip, or the fix shortcut.
+    func fix() {
+        let d = draft
+        guard !d.text.isEmpty else { return }
+        host?.playClick()
+        suggestTask?.cancel()
+        writeTask?.cancel()
+        bar = .working("Fixing\u{2026}")
+        writeTask = Task { [weak self] in
+            do {
+                guard let res = try await self?.api().fix(d.text), let self, !Task.isCancelled else { return }
+                if res.text == d.text {
+                    self.lastFixed = d.text
+                    self.fixable = false
+                    self.bar = .done("Looks good \u{2713}")
+                } else {
+                    self.apply(WritePreview(kind: "fix", title: "Fix", original: d.original, text: res.text), label: "Fixed \u{2713}")
+                }
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.bar = .error("Could not fix that. Try again.")
+            }
+        }
+    }
+
+    func toggleWrite() {
+        host?.playClick()
+        notesOpen = false
+        writeTask?.cancel()
+        writePanel = .menu
+        writeOpen.toggle()
+    }
+
+    var canWrite: Bool { !draft.text.isEmpty }
+
+    func refine(_ tone: RefineTone) {
+        let d = draft
+        guard !d.text.isEmpty else { return }
+        runPanel("Writing\u{2026}") { api in
+            let res = try await api.refine(d.text, tone: tone.rawValue)
+            return .preview(WritePreview(kind: "refine", title: tone.title, original: d.original, text: res.text))
+        }
+    }
+
+    /// Tap on Tone check: is the draft blunt? If so, show a calm version.
+    func checkTone() {
+        let d = draft
+        guard !d.text.isEmpty else { return }
+        runPanel("Checking the tone\u{2026}") { api in
+            let res = try await api.toneCheck(draft: d.text, client: nil)
+            guard res.tone != "ok", let calm = res.calm else { return .message("The tone is fine \u{2713}") }
+            return .preview(WritePreview(kind: "tone", title: "Calmer version", original: d.original, text: calm))
+        }
+    }
+
+    private func runPanel(_ label: String, _ work: @escaping (APIClient) async throws -> WritePanel) {
+        host?.playClick()
+        writeTask?.cancel()
+        writePanel = .busy(label)
+        writeTask = Task { [weak self] in
+            do {
+                guard let api = self?.api() else { return }
+                let next = try await work(api)
+                guard let self, !Task.isCancelled else { return }
+                self.writePanel = next
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.writePanel = .message("That did not work. Try again.")
+            }
+        }
+    }
+
+    func backToWriteMenu() {
+        host?.playClick()
+        writeTask?.cancel()
+        writePanel = .menu
+    }
+
+    /// Tap on the preview: it replaces the text before the cursor.
+    func usePreview() {
+        guard case .preview(let p) = writePanel else { return }
+        host?.playClick()
+        writeOpen = false
+        writePanel = .menu
+        if calmOffer == p { calmOffer = nil }
+        apply(p, label: "Replaced \u{2713}")
+    }
+
+    /// The owner tapped "Use copied message". If the client sounds upset, offer a calm reply.
+    private func checkCopiedTone(_ copied: String) {
+        let d = draft
+        calmOffer = nil
+        writeTask?.cancel()
+        writeTask = Task { [weak self] in
+            guard let res = try? await self?.api().toneCheck(draft: d.text, client: copied), let self, !Task.isCancelled,
+                  res.tone != "ok", let calm = res.calm else { return }
+            self.calmOffer = WritePreview(kind: "tone", title: "Calm reply", original: d.original, text: calm)
+        }
+    }
+
+    func openCalmOffer() {
+        guard let p = calmOffer else { return }
+        host?.playClick()
+        notesOpen = false
+        writePanel = .preview(p)
+        writeOpen = true
+    }
+
+    /// A clean slate: between intro scenes, and when the keyboard goes away.
+    func resetWriting() {
+        writeTask?.cancel()
+        undoTask?.cancel()
+        writeOpen = false
+        writePanel = .menu
+        undo = nil
+        calmOffer = nil
+        lastWrite = nil
+        lastShortcut = nil
+        lastFixed = ""
+    }
+
+    // MARK: shortcuts
+
+    func reloadShortcuts() {
+        notes = SharedStore.notes
+        actions = SharedStore.actionShortcuts
+    }
+
+    /// The intro's shortcut scene types ";prices". This makes sure the demo price note answers to it.
+    func addDemoShortcut() {
+        let demo = Note.demo[0]
+        var all = SharedStore.notes
+        if !all.contains(where: { $0.trigger == demo.trigger }) {
+            if let i = all.firstIndex(where: { $0.text == demo.text }) { all[i].trigger = demo.trigger } else { all.insert(demo, at: 0) }
+            SharedStore.notes = all
+        }
+        reloadShortcuts()
+    }
+
+    /// Runs on space and return. If the last word is a trigger, the shortcut replaces it and the key is used up.
+    private func expandShortcut() -> Bool {
+        guard hasFullAccess, let host else { return false }
+        let before = host.contextBeforeInput ?? ""
+        let words = before.split(omittingEmptySubsequences: false, whereSeparator: \.isWhitespace)
+        guard let last = words.last, last.count >= 2 else { return false }
+        let key = last.lowercased()
+        func remove(_ count: Int) { for _ in 0..<count { host.deleteBackward() } }
+        func finish() {
+            lastShortcut = key
+            lastSent = typed
+            updateAutoShift()
+            updateFixable()
+        }
+
+        if let note = notes.first(where: { $0.trigger == key }) {
+            remove(last.count)
+            host.insert(note.text)
+            finish()
+            return true
+        }
+        let on = actions.filter(\.enabled)
+        if let a = on.first(where: { $0.trigger == key }) {
+            switch a.action {
+            case .pay: return false
+            case .late:
+                remove(last.count)
+                finish()
+                showLate()
+            case .fix:
+                remove(last.count + (words.count > 1 && before.dropLast(last.count).last == " " ? 1 : 0))
+                finish()
+                fix()
+            }
+            return true
+        }
+        if words.count >= 2, let pay = on.first(where: { $0.action == .pay }), words[words.count - 2].lowercased() == pay.trigger,
+           before.hasSuffix(" " + last), let amount = Shortcuts.amount(String(last)) {
+            remove(last.count + 1 + pay.trigger.count)
+            finish()
+            offerPayLink(amount.value, currency: amount.currency)
+            return true
+        }
+        return false
+    }
+
+    /// The pay shortcut only offers the chip. Money moves on the owner's tap, through the same path as a suggested chip.
+    private func offerPayLink(_ amount: String, currency: String?) {
+        guard paired else { return }
+        suggestTask?.cancel()
+        var payload: [String: JSONValue] = ["amount": .string(amount), "item": .string("Payment")]
+        if let currency { payload["currency"] = .string(currency) }
+        bar = .chips([Chip(kind: "paylink", label: "Pay link", payload: payload, needs_confirm: false)], fromCopied: false)
+    }
+
+    private func showLate() {
+        guard paired else { return }
+        suggestTask?.cancel()
+        bar = .working("Checking who owes you\u{2026}")
+        suggestTask = Task { [weak self] in
+            do {
+                guard let payments = try await self?.api().payments(), let self, !Task.isCancelled else { return }
+                self.bar = .done(Self.lateLine(payments))
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.bar = .error("Could not check. Try again.")
+            }
+        }
+    }
+
+    /// "Ana $90 · 2d late, Sam $45 +1 more"
+    static func lateLine(_ payments: [Payment]) -> String {
+        let unpaid = payments.filter { $0.kind == "invoice" && $0.state == "unpaid" }.sorted { $0.days_overdue > $1.days_overdue }
+        guard !unpaid.isEmpty else { return "Nobody owes you \u{2713}" }
+        let shown = unpaid.prefix(2).map { p in
+            "\(p.client_name ?? "Client") \(formatMoney(p.amount, p.currency))" + (p.days_overdue > 0 ? " \u{00B7} \(p.days_overdue)d late" : "")
+        }
+        return shown.joined(separator: ", ") + (unpaid.count > 2 ? " +\(unpaid.count - 2) more" : "")
     }
 
     // MARK: actions

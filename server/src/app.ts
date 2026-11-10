@@ -4,7 +4,7 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { config } from './config.ts';
+import { config, TONES } from './config.ts';
 import { randomToken, sha256, type Cipher } from './crypto.ts';
 import type { CatalogItem, Db, InvoiceRow, OrderRow } from './db.ts';
 import type { Ai, Extraction } from './ai.ts';
@@ -94,6 +94,13 @@ const SuggestBody = z.object({
   text: z.string().trim().max(config.maxTextChars),
   context: z.string().transform((v) => clean(v).slice(0, config.maxContextChars)).optional(),
 }).strict().refine((b) => b.text || b.context, { message: 'text or context is required' });
+// Writing help: one paragraph, cleaned and capped. The text is never stored or logged.
+const WriteText = CleanText(config.maxWriteChars);
+const FixBody = z.object({ text: WriteText }).strict();
+const RefineBody = z.object({ text: WriteText, tone: z.enum(TONES) }).strict();
+const OptionalWriteText = z.string().transform(clean).pipe(z.string().max(config.maxWriteChars)).optional();
+const ToneBody = z.object({ text: OptionalWriteText, context: OptionalWriteText }).strict()
+  .refine((b) => b.text || b.context, { message: 'text or context is required' });
 const InvoiceBody = z.object({
   amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName, client_email: ClientEmail, confirm_recipient: ClientEmail,
 }).strict();
@@ -201,6 +208,7 @@ export function createApp(deps: Deps) {
   app.use('/v1/suggest', rateLimiter('suggest', byUser));
   app.use('/v1/reply', rateLimiter('suggest', byUser));
   app.use('/v1/actions/*', rateLimiter('actions', byUser));
+  app.use('/v1/write/*', rateLimiter('write', byUser));
   app.use('/v1/disputes/:id/message', rateLimiter('actions', byUser));
   app.use('/v1/*', rateLimiter('other', byUser));
 
@@ -509,6 +517,41 @@ export function createApp(deps: Deps) {
     const ms = Math.round(performance.now() - t);
     log('reply', { user_id: userId, ms });
     return c.json({ reply, ms });
+  });
+
+  // ---- writing help: runs only from a tap in the keyboard. Only sizes and timings are logged, never the text.
+  app.use('/v1/write/*', async (c, next) => {
+    if (c.req.header('x-user-action') !== 'tap') return c.json({ error: 'writing help runs only from an explicit user tap' }, 428);
+    await next();
+  });
+  const writing = async <T extends object>(c: Context<Env>, kind: string, chars: number, run: () => Promise<T>) => {
+    const t = performance.now();
+    try {
+      const out = await run();
+      const ms = Math.round(performance.now() - t);
+      log('write', { user_id: c.get('userId'), kind, chars, ms, ok: true });
+      return c.json({ ...out, ms });
+    } catch (e) {
+      // A model error can quote the text, so only its type is logged.
+      log('write', { user_id: c.get('userId'), kind, chars, ms: Math.round(performance.now() - t), ok: false, err: (e as Error).name });
+      return c.json({ error: 'writing help is not available right now' }, 502);
+    }
+  };
+  app.post('/v1/write/fix', async (c) => {
+    const { text } = await body(c, FixBody);
+    return writing(c, 'fix', text.length, async () => {
+      const fixed = await ai.fix(text);
+      return { text: fixed, changed: fixed !== text };
+    });
+  });
+  app.post('/v1/write/refine', async (c) => {
+    const { text, tone } = await body(c, RefineBody);
+    return writing(c, `refine_${tone}`, text.length, async () => ({ text: await ai.refine(text, tone) }));
+  });
+  app.post('/v1/write/tone', async (c) => {
+    const b = await body(c, ToneBody);
+    const draft = b.text ?? '', client = b.context ?? '';
+    return writing(c, 'tone', draft.length + client.length, () => ai.toneCheck(draft, client));
   });
 
   // ---- profile and catalog
