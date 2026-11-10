@@ -78,7 +78,7 @@ final class FlowTests: XCTestCase {
         let sentence = "thanks! that'll be $45 for the haircut, sam@example.com"
         let messages = XCUIApplication(bundleIdentifier: "com.apple.MobileSMS")
         messages.launch()
-        let convo = messages.cells.firstMatch
+        let convo = messages.cells.element(boundBy: Int(env["CONVO_INDEX"] ?? "0") ?? 0)
         XCTAssertTrue(convo.waitForExistence(timeout: 5))
         convo.tap()
         let field = messages.textFields["messageBodyField"]
@@ -120,6 +120,7 @@ final class FlowTests: XCTestCase {
         let value = field.value as? String ?? ""
         print("FIELD_VALUE", value)
         XCTAssertTrue(value.contains("paypal.com"), value)
+        XCTAssertTrue(value.hasPrefix(sentence + "\nHere's your invoice for "), value)
     }
 
     /// No model call: clears the draft, shows our keyboard idle, holds 10 s for a memory reading.
@@ -140,6 +141,53 @@ final class FlowTests: XCTestCase {
         if !ours.exists { element(messages, "label == %@", "Next keyboard").tap() }
         XCTAssertTrue(ours.waitForExistence(timeout: 5))
         shot("07-keyboard-v2-theme")
+        Thread.sleep(forTimeInterval: 10)
+    }
+
+    /// Copy a client's message, open the keyboard: one suggest call with the copy as context, then tap the invoice chip.
+    func test5CopiedMessage() {
+        UIPasteboard.general.string = "how much do I owe you?"
+        let messages = XCUIApplication(bundleIdentifier: "com.apple.MobileSMS")
+        messages.launch()
+        let convo = messages.cells.firstMatch
+        XCTAssertTrue(convo.waitForExistence(timeout: 5))
+        convo.tap()
+        let field = messages.textFields["messageBodyField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        // iOS asks before a keyboard reads text another app copied. Answer it before touching Messages again,
+        // because Messages' accessibility tree waits on the keyboard while the prompt is up.
+        let allow = springboard.buttons["Allow Paste"]
+        if allow.waitForExistence(timeout: 6) { allow.tap() }
+        let ours = element(messages, "identifier == %@", "muninn.more")
+        XCTAssertTrue(ours.waitForExistence(timeout: 5))
+
+        let chip = element(messages, "identifier == %@", "chip.invoice")
+        XCTAssertTrue(chip.waitForExistence(timeout: 15), messages.debugDescription)
+        XCTAssertTrue(element(messages, "label CONTAINS %@", "from copied message").exists, messages.debugDescription)
+        shot("09-copied-message-chip")
+        chip.tap()
+        XCTAssertTrue(element(messages, "identifier == %@", "chip.done").waitForExistence(timeout: 30), messages.debugDescription)
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("10-invoice-line-inserted")
+        let value = field.value as? String ?? ""
+        print("FIELD_VALUE", value)
+        XCTAssertTrue(value.hasPrefix("Here's your invoice for "), value)
+        XCTAssertTrue(value.contains("paypal.com"), value)
+    }
+
+    /// No model call: empties the pasteboard, shows our keyboard on the empty search field, holds 10 s for a memory reading.
+    func test6MemoryIdle() {
+        UIPasteboard.general.items = []
+        let messages = XCUIApplication(bundleIdentifier: "com.apple.MobileSMS")
+        messages.launch()
+        let search = messages.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        let ours = element(messages, "identifier == %@", "muninn.more")
+        if !ours.waitForExistence(timeout: 3) { element(messages, "label == %@", "Next keyboard").tap() }
+        XCTAssertTrue(ours.waitForExistence(timeout: 5))
+        shot("12-memory-idle")
         Thread.sleep(forTimeInterval: 10)
     }
 }

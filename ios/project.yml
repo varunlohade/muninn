@@ -62,7 +62,6 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         AppName: $(PRODUCT_DISPLAY_NAME)
         KeyboardName: $(KEYBOARD_DISPLAY_NAME)
-        UIAppFonts: [Geist-Regular.ttf, Geist-Medium.ttf, Geist-SemiBold.ttf, GeistMono-Medium.ttf]
         AppGroupID: $(APP_GROUP_ID)
         AppIdentifierPrefix: $(AppIdentifierPrefix)
         NSAppTransportSecurity:

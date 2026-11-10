@@ -40,9 +40,9 @@ struct SuggestionBar: View {
             switch model.bar {
             case .idle:
                 EmptyView()
-            case .chips(let chips):
+            case .chips(let chips, let fromCopied):
                 ForEach(chips) { chip in
-                    ChipButton(label: chip.label, prominent: chip.kind == "invoice") { model.tapChip(chip) }
+                    ChipButton(label: chip.label, hint: fromCopied ? "from copied message" : nil, prominent: chip.kind == "invoice") { model.tapChip(chip) }
                         .accessibilityIdentifier("chip.\(chip.kind)")
                         .transition(.opacity.combined(with: .offset(y: 5)).combined(with: .scale(scale: 0.96)))
                 }
@@ -63,15 +63,22 @@ struct SuggestionBar: View {
 
 struct ChipButton: View {
     let label: String
+    var hint: String? = nil
     let prominent: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Text(label)
-                .font(Theme.Font.chip)
-                .monospacedDigit()
-                .foregroundStyle(Theme.Color.text1)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(label)
+                    .font(Theme.KeyboardFont.chip)
+                    .foregroundStyle(Theme.Color.text1)
+                if let hint {
+                    Text(hint)
+                        .font(Theme.KeyboardFont.hint)
+                        .foregroundStyle(Theme.Color.text2)
+                }
+            }
                 .lineLimit(1)
                 .padding(.horizontal, 14)
                 .frame(height: Theme.Metric.chipHeight - 6)
@@ -87,7 +94,7 @@ struct InfoChip: View {
 
     var body: some View {
         Text(text)
-            .font(Theme.Font.secondary)
+            .font(Theme.KeyboardFont.secondary)
             .foregroundStyle(color)
             .lineLimit(1)
             .padding(.horizontal, 12)

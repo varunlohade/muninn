@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import os
 
 /// What the keyboard needs from its host. The extension maps it to textDocumentProxy.
@@ -15,7 +16,7 @@ protocol TextHost: AnyObject {
 
 enum BarState: Equatable {
     case idle
-    case chips([Chip])
+    case chips([Chip], fromCopied: Bool)
     case working(String)
     case confirm(Chip, recipient: String)
     case done(String)
@@ -68,18 +69,37 @@ final class KeyboardModel: ObservableObject {
         guard text != lastSent else { return }
         suggestTask?.cancel()
         guard !text.isEmpty else { lastSent = ""; bar = .idle; return }
+        requestSuggest(text: text, context: nil, debounce: true)
+    }
+
+    /// When the keyboard appears: if the owner copied new text (e.g. a client's message), send it once as context.
+    /// The pasteboard is never read without Full Access, and each changeCount is used at most once.
+    func keyboardAppeared() {
+        refreshAccess()
+        guard hasFullAccess, paired else { return }
+        let pasteboard = UIPasteboard.general
+        guard pasteboard.changeCount != SharedStore.lastPasteboardChange else { return }
+        SharedStore.lastPasteboardChange = pasteboard.changeCount
+        guard pasteboard.hasStrings,
+              let copied = pasteboard.string?.trimmingCharacters(in: .whitespacesAndNewlines), !copied.isEmpty else { return }
+        let text = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        suggestTask?.cancel()
+        requestSuggest(text: text, context: String(copied.prefix(1000)), debounce: false)
+    }
+
+    private func requestSuggest(text: String, context: String?, debounce: Bool) {
         let typedAt = ContinuousClock.now
+        lastSent = text
         suggestTask = Task { [weak self] in
-            try? await Task.sleep(for: AppConfig.suggestDebounce)
+            if debounce { try? await Task.sleep(for: AppConfig.suggestDebounce) }
             guard let self, !Task.isCancelled else { return }
-            self.lastSent = text
             do {
-                let res = try await self.api().suggest(text)
+                let res = try await self.api().suggest(text, context: context)
                 guard !Task.isCancelled else { return }
                 let ms = Int((ContinuousClock.now - typedAt) / .milliseconds(1))
                 self.lastLatencyMs = ms
-                self.log.notice("MUNINN_TIMING keystroke_to_chip_ms=\(ms, privacy: .public) chips=\(res.chips.count, privacy: .public) server_ms=\(res.timings?["total_ms"] ?? -1, privacy: .public)")
-                self.bar = res.chips.isEmpty ? .idle : .chips(res.chips)
+                self.log.notice("MUNINN_TIMING keystroke_to_chip_ms=\(ms, privacy: .public) chips=\(res.chips.count, privacy: .public) server_ms=\(res.timings?["total_ms"] ?? -1, privacy: .public) copied=\(context != nil, privacy: .public)")
+                self.bar = res.chips.isEmpty ? .idle : .chips(res.chips, fromCopied: context != nil)
             } catch is CancellationError {
             } catch let e as URLError where e.code == .cancelled {
             } catch {
@@ -109,21 +129,29 @@ final class KeyboardModel: ObservableObject {
         bar = .working(chip.kind == "invoice" ? "Creating invoice…" : "Creating link…")
         Task {
             do {
-                let link: String?
+                let insertion: String
+                let separator: String
                 switch chip.kind {
                 case "invoice":
                     var payload = chip.payload
                     if let confirmed { payload["confirm_recipient"] = .string(confirmed) }
-                    link = try await api().invoice(payload).pay_link
+                    let res = try await api().invoice(payload)
+                    guard let link = res.pay_link else { bar = .error("No link came back"); return }
+                    // Item comes from the server-built chip, amount from the server's reply.
+                    let item = if case .string(let v)? = chip.payload["item"] { v } else { "your order" }
+                    insertion = "Here's your invoice for \(item) (\(formatMoney(res.amount, res.currency))): \(link)"
+                    separator = "\n"
                 case "paylink":
-                    link = try await api().payLink(chip.payload).approve_link
+                    guard let link = try await api().payLink(chip.payload).approve_link else { bar = .error("No link came back"); return }
+                    insertion = link
+                    separator = " "
                 default:
                     bar = .done("Open \(AppConfig.displayName) for this one")
                     return
                 }
-                guard let link else { bar = .error("No link came back"); return }
                 let before = host?.contextBeforeInput ?? ""
-                host?.insert((before.isEmpty || before.hasSuffix(" ") || before.hasSuffix("\n") ? "" : " ") + link)
+                let needsGap = !(before.last?.isWhitespace ?? true)
+                host?.insert((needsGap ? separator : "") + insertion)
                 lastSent = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 bar = .done(chip.kind == "invoice" ? "Invoice sent · link added" : "Link added")
             } catch APIError.needsConfirm(let recipient) {

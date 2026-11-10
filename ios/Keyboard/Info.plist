@@ -51,12 +51,5 @@
 		<key>NSExtensionPrincipalClass</key>
 		<string>$(PRODUCT_MODULE_NAME).KeyboardViewController</string>
 	</dict>
-	<key>UIAppFonts</key>
-	<array>
-		<string>Geist-Regular.ttf</string>
-		<string>Geist-Medium.ttf</string>
-		<string>Geist-SemiBold.ttf</string>
-		<string>GeistMono-Medium.ttf</string>
-	</array>
 </dict>
 </plist>

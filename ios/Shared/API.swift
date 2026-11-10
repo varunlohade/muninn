@@ -41,7 +41,7 @@ struct SuggestResponse: Decodable {
     let timings: [String: Int]?
 }
 
-struct InvoiceResponse: Decodable { let id: String; let status: String; let pay_link: String? }
+struct InvoiceResponse: Decodable { let id: String; let status: String; let pay_link: String?; let amount: String; let currency: String }
 struct PayLinkResponse: Decodable { let id: String; let status: String; let approve_link: String? }
 struct NeedsConfirm: Decodable { let needs_confirm: Bool; let recipient: String }
 
@@ -65,6 +65,13 @@ struct Payment: Decodable, Identifiable {
 }
 
 struct PaymentsResponse: Decodable { let payments: [Payment] }
+
+/// Same format as the server's formatMoney: "$45", "$45.50", "€12".
+func formatMoney(_ amount: String, _ currency: String) -> String {
+    let symbols = ["USD": "$", "CAD": "CA$", "AUD": "A$", "EUR": "€", "GBP": "£"]
+    let value = amount.hasSuffix(".00") ? String(amount.dropLast(3)) : amount
+    return (symbols[currency] ?? currency + " ") + value
+}
 
 enum APIError: Error, LocalizedError {
     case notPaired
@@ -116,8 +123,10 @@ struct APIClient {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    func suggest(_ text: String) async throws -> SuggestResponse {
-        try await send(request("POST", "/v1/suggest", body: ["text": text]), as: SuggestResponse.self)
+    func suggest(_ text: String, context: String? = nil) async throws -> SuggestResponse {
+        var body = ["text": text]
+        if let context { body["context"] = context }
+        return try await send(request("POST", "/v1/suggest", body: body), as: SuggestResponse.self)
     }
 
     func invoice(_ payload: [String: JSONValue]) async throws -> InvoiceResponse {

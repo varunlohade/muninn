@@ -44,6 +44,13 @@ enum Theme {
         static let keyFn = SwiftUI.Font.system(size: 15)
     }
 
+    /// The keyboard extension ships no custom fonts, to stay light on memory.
+    enum KeyboardFont {
+        static let chip = SwiftUI.Font.system(size: 15, weight: .semibold).monospacedDigit()
+        static let hint = SwiftUI.Font.system(size: 10, weight: .medium)
+        static let secondary = SwiftUI.Font.system(size: 13).monospacedDigit()
+    }
+
     enum Tracking {
         static let wordmark: CGFloat = -0.6
         static let numeral: CGFloat = -2.6

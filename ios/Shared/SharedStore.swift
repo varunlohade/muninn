@@ -7,12 +7,19 @@ enum SharedStore {
     private static let service = "com.orseliyas.muninn.device"
     private static let account = "device_token"
     private static let serverKey = "server_url"
+    private static let pasteboardKey = "pasteboard_change_count"
 
     private static var defaults: UserDefaults? { UserDefaults(suiteName: AppConfig.appGroupID) }
 
     static var serverURL: String {
         get { defaults?.string(forKey: serverKey) ?? AppConfig.defaultServerURL }
         set { defaults?.set(newValue, forKey: serverKey) }
+    }
+
+    /// The last pasteboard changeCount the keyboard used, so one copy is sent at most once.
+    static var lastPasteboardChange: Int {
+        get { defaults?.integer(forKey: pasteboardKey) ?? 0 }
+        set { defaults?.set(newValue, forKey: pasteboardKey) }
     }
 
     private static func baseQuery() -> [String: Any] {

@@ -22,7 +22,7 @@ struct KeyboardLabView: View {
         }
         .background(Theme.Color.bg)
         .navigationTitle("Keyboard Lab")
-        .onAppear { lab.model.refreshAccess() }
+        .onAppear { lab.model.keyboardAppeared() }
     }
 }
 
