@@ -5,6 +5,7 @@
 - Integration config (one row per user and provider).
 - We do not store typed message text. `/v1/suggest` and `/v1/reply` read it, send it to the models, and drop it.
 - Device tokens: we store only a SHA-256 hash.
+- Apple user ids (`sub`): we store only a keyed hash, `HMAC-SHA256(HKDF(DATA_ENCRYPTION_KEY, info = "pro-keyboard/index/v1"), sub)`. We ask Apple for no name and no email.
 
 ## How
 - AES-256-GCM, a random 12-byte IV per record, a 16-byte auth tag. Format: `v1:base64(iv | tag | ciphertext)`.
@@ -17,6 +18,12 @@
 - No PayPal secret and no encryption key goes to any model. The models get only the message text and the owner's catalog.
 - `/v1/brief` sends the model summary numbers and the first name of the most late client, nothing else. The server rejects any number in the reply that is not in those facts and falls back to a template.
 - Logs redact keys that look like tokens, secrets, names, emails or text.
+
+## Sign in with Apple
+- `POST /v1/auth/apple` takes the identity token and the raw nonce. It is the only `/v1` route with no device token.
+- The server checks the RS256 signature against Apple's keys (`https://appleid.apple.com/auth/keys`, cached for a day), then `iss`, `aud` (`APPLE_BUNDLE_ID`, default `com.orseliyas.muninn`), `exp`, and that the token's `nonce` is the SHA-256 of the raw nonce.
+- Every failure returns the same `401 {"error":"unauthorized"}`. The reason goes only to the server log. The token never goes to the log.
+- A good token finds or creates the user and returns a new device token. The limit is 10 calls a minute per client IP.
 
 ## Per-user data
 - A device token maps to one `user_id`. One user can have several devices.

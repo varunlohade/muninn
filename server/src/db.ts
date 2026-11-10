@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto';
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
-CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, apple_sub_hash TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS users_apple ON users(apple_sub_hash) WHERE apple_sub_hash IS NOT NULL;
 CREATE TABLE IF NOT EXISTS devices (
   token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), label TEXT, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS profiles (
@@ -74,6 +75,8 @@ export function openDb(path: string) {
   if (invCols.length && !invCols.some((c) => c.name === 'source')) {
     db.exec("ALTER TABLE invoices ADD COLUMN source TEXT NOT NULL DEFAULT 'app'; ALTER TABLE invoices ADD COLUMN seed_key TEXT;");
   }
+  const userCols = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
+  if (userCols.length && !userCols.some((c) => c.name === 'apple_sub_hash')) db.exec('ALTER TABLE users ADD COLUMN apple_sub_hash TEXT');
   db.exec(SCHEMA);
   const now = () => Date.now();
   const q = (sql: string) => db.prepare(sql);
@@ -85,6 +88,13 @@ export function openDb(path: string) {
       const id = randomUUID();
       q('INSERT INTO users (id, created_at) VALUES (?, ?)').run(id, now());
       return id;
+    },
+    // Atomic find-or-create, so two sign-ins at once for one Apple account end with one user.
+    userForAppleSub(subHash: string): { userId: string; created: boolean } {
+      const id = randomUUID();
+      const created = q('INSERT OR IGNORE INTO users (id, created_at, apple_sub_hash) VALUES (?, ?, ?)').run(id, now(), subHash).changes > 0;
+      if (created) return { userId: id, created };
+      return { userId: (q('SELECT id FROM users WHERE apple_sub_hash = ?').get(subHash) as { id: string }).id, created };
     },
     addDevice(userId: string, tokenHash: string, label: string | null) {
       q('INSERT INTO devices (token_hash, user_id, label, created_at) VALUES (?, ?, ?, ?)').run(tokenHash, userId, label, now());

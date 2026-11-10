@@ -1,10 +1,12 @@
-import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from 'node:crypto';
 
 const VERSION = 'v1';
 
 export type Cipher = {
   encrypt(userId: string, plaintext: string): string;
   decrypt(userId: string, blob: string): string;
+  /** Keyed hash for lookups (e.g. an Apple user id). Without the master key, nobody can test a guess against the DB. */
+  lookupHash(scope: string, value: string): string;
 };
 
 export function parseMasterKey(hex: string | undefined): Buffer {
@@ -22,7 +24,11 @@ export function createCipher(masterKey: Buffer): Cipher {
     }
     return k;
   };
+  const indexKey = Buffer.from(hkdfSync('sha256', masterKey, Buffer.alloc(0), 'pro-keyboard/index/v1', 32));
   return {
+    lookupHash(scope, value) {
+      return createHmac('sha256', indexKey).update(`${scope}:${value}`).digest('hex');
+    },
     encrypt(userId, plaintext) {
       const iv = randomBytes(12);
       const c = createCipheriv('aes-256-gcm', keyFor(userId), iv);

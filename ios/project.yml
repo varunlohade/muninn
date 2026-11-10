@@ -52,6 +52,7 @@ targets:
     entitlements:
       path: App/Muninn.entitlements
       properties:
+        com.apple.developer.applesignin: [Default]
         com.apple.security.application-groups: [$(APP_GROUP_ID)]
         keychain-access-groups: [$(AppIdentifierPrefix)com.orseliyas.muninn.shared]
     settings:

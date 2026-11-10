@@ -37,15 +37,81 @@ final class FlowTests: XCTestCase {
         XCTFail("none of \(labels) found\n\(app.debugDescription.suffix(6000))")
     }
 
+    /// The hidden developer path: hold the mark on the first screen, then pair with a device token.
+    private func devPair(_ app: XCUIApplication, token: String) {
+        element(app, "identifier == %@", "onboarding.mark").press(forDuration: 1.3)
+        let field = app.secureTextFields["token"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "developer pairing sheet did not open")
+        if env["USE_DEMO_SERVER"] == "1" { element(app, "identifier == %@", "server.demo").tap() }
+        field.tap()
+        field.typeText(token)
+        app.buttons["Pair"].tap()
+    }
+
+    /// Leaves the steps after sign-in without doing them.
+    private func skipIntro(_ app: XCUIApplication) {
+        for id in ["onboarding.later", "onboarding.skip"] {
+            let b = element(app, "identifier == %@", id)
+            if b.waitForExistence(timeout: 5) { b.tap() }
+        }
+    }
+
+    /// Fresh keychain: the whole first run. Apple button, no token field, keyboard step, try-it scene, Home, relaunch.
+    /// With TEST_RUNNER_LIVE=1 the try-it scene runs for real: example, chip, sandbox pay link.
+    func test0Onboarding() throws {
+        let token = try XCTUnwrap(env["DEVICE_TOKEN"])
+        let app = XCUIApplication()
+        app.launch()
+        let mark = element(app, "identifier == %@", "onboarding.mark")
+        try XCTSkipUnless(mark.waitForExistence(timeout: 5), "already signed in; reset the simulator keychain to run onboarding")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Continue with Apple")).firstMatch.exists)
+        XCTAssertFalse(app.secureTextFields["token"].exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "npm run")).firstMatch.exists)
+        shot("20-onboarding-apple")
+
+        devPair(app, token: token)
+        // The keyboard step shows only while the keyboard is off in Settings.
+        if element(app, "identifier == %@", "onboarding.step.2").waitForExistence(timeout: 6) {
+            Thread.sleep(forTimeInterval: 0.6)
+            shot("21-onboarding-keyboard")
+            element(app, "identifier == %@", "onboarding.later").tap()
+        }
+
+        XCTAssertTrue(element(app, "identifier == %@", "onboarding.step.3").waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 0.6)
+        shot("22-onboarding-try")
+        if env["LIVE"] == "1" {
+            element(app, "identifier == %@", "onboarding.example").tap()
+            let anyChip = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "chip.")).firstMatch
+            XCTAssertTrue(anyChip.waitForExistence(timeout: 15), "no chip for the example")
+            shot("23-onboarding-chip")
+            let payLink = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "chip.", "Pay link")).firstMatch
+            (payLink.exists ? payLink : anyChip).tap()
+            let link = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "onboarding.message", "paypal.com")).firstMatch
+            XCTAssertTrue(link.waitForExistence(timeout: 20), "no pay link in the message")
+            Thread.sleep(forTimeInterval: 0.5)
+            shot("24-onboarding-link")
+        } else {
+            element(app, "identifier == %@", "onboarding.skip").tap()
+        }
+        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15))
+        _ = element(app, "identifier == %@", "home.brief").waitForExistence(timeout: 15)
+        Thread.sleep(forTimeInterval: 1)
+        shot("25-home")
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 10))
+        XCTAssertFalse(mark.exists, "onboarding showed again after sign-in")
+    }
+
     func test1Pair() throws {
         let token = try XCTUnwrap(env["DEVICE_TOKEN"])
         let app = XCUIApplication()
         app.launch()
-        let field = app.secureTextFields["token"]
-        if field.waitForExistence(timeout: 5) {
-            field.tap()
-            field.typeText(token)
-            app.buttons["Pair"].tap()
+        if element(app, "identifier == %@", "onboarding.mark").waitForExistence(timeout: 5) {
+            devPair(app, token: token)
+            skipIntro(app)
         }
         XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 10))
         shot("02-home-paired")
@@ -204,22 +270,19 @@ final class FlowTests: XCTestCase {
 
     // MARK: v3 proof
 
-    /// Fresh keychain: onboarding, pair with the demo token, Home, Integrations.
+    /// Fresh keychain: onboarding, pair with the demo token (developer path), Home, Integrations.
     func test7Screens() throws {
         let token = try XCTUnwrap(env["DEVICE_TOKEN"])
         let app = XCUIApplication()
         app.launch()
-        let field = app.secureTextFields["token"]
-        try XCTSkipUnless(field.waitForExistence(timeout: 5), "already paired; reset the simulator keychain to run onboarding")
-        if env["USE_DEMO_SERVER"] == "1" { element(app, "identifier == %@", "server.demo").tap() }
+        try XCTSkipUnless(element(app, "identifier == %@", "onboarding.mark").waitForExistence(timeout: 5), "already paired; reset the simulator keychain to run onboarding")
         shot("13-onboarding")
-        app.swipeUp()
-        Thread.sleep(forTimeInterval: 0.5)
-        shot("14-onboarding-steps")
-        app.swipeDown()
-        field.tap()
-        field.typeText(token)
-        app.buttons["Pair"].tap()
+        devPair(app, token: token)
+        if element(app, "identifier == %@", "onboarding.step.2").waitForExistence(timeout: 6) {
+            Thread.sleep(forTimeInterval: 0.6)
+            shot("14-onboarding-steps")
+        }
+        skipIntro(app)
         XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15))
         for a in [app, springboard] where a.buttons["Not Now"].waitForExistence(timeout: 2) { a.buttons["Not Now"].tap() }
         _ = element(app, "identifier == %@", "home.brief").waitForExistence(timeout: 15)

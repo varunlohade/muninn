@@ -133,6 +133,9 @@ enum Theme {
         static let ravenPath = Animation.timingCurve(0.77, 0, 0.175, 1, duration: 0.6)
         static let stamp = Animation.spring(response: 0.42, dampingFraction: 0.66)
         static let crossfade = Animation.easeOut(duration: 0.2)
+        static let onboardingStep = Animation.spring(response: 0.42, dampingFraction: 0.82)
+        static let onboardingCheckHold: Duration = .milliseconds(520)
+        static let onboardingLinkHold: Duration = .milliseconds(1600)
     }
 }
 

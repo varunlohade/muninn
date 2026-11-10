@@ -92,6 +92,7 @@ struct Payment: Decodable, Identifiable, Hashable {
 }
 
 struct PaymentsResponse: Decodable { let payments: [Payment] }
+struct AppleAuthResponse: Decodable { let device_token: String }
 
 /// Same format as the server's formatMoney: "$45", "$45.50", "€12".
 func formatMoney(_ amount: String, _ currency: String) -> String {
@@ -121,6 +122,19 @@ struct APIClient {
 
     static func shared() -> APIClient {
         APIClient(baseURL: SharedStore.serverURL, token: SharedStore.deviceToken)
+    }
+
+    /// Sign in with Apple: trades the identity token and the raw nonce for a device token. The only call with no token.
+    static func appleSignIn(baseURL: String, identityToken: String, nonce: String) async throws -> String {
+        guard let url = URL(string: baseURL + "/v1/auth/apple") else { throw APIError.http(0, "bad server URL") }
+        var r = URLRequest(url: url, timeoutInterval: 20)
+        r.httpMethod = "POST"
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.httpBody = try JSONEncoder().encode(["identity_token": identityToken, "nonce": nonce])
+        let (data, resp) = try await URLSession.shared.data(for: r)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else { throw APIError.http(code, "") }
+        return try JSONDecoder().decode(AppleAuthResponse.self, from: data).device_token
     }
 
     private func request(_ method: String, _ path: String, body: Encodable? = nil, tap: Bool = false) throws -> URLRequest {

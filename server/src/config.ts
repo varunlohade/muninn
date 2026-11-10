@@ -14,6 +14,16 @@ export const config = {
   maxTextChars: 2000,
   maxContextChars: 1000,
 
+  apple: {
+    // The app bundle id. Apple puts it in the identity token as aud.
+    audience: env.APPLE_BUNDLE_ID ?? 'com.orseliyas.muninn',
+    issuer: 'https://appleid.apple.com',
+    jwksUrl: 'https://appleid.apple.com/auth/keys',
+    jwksTtlMs: 24 * 60 * 60 * 1000,
+    jwksMinRefetchMs: 60_000,
+    timeoutMs: 5000,
+  },
+
   paypal: {
     sandbox: env.PAYPAL_ENV !== 'live',
     baseUrl: env.PAYPAL_ENV === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com',
@@ -48,6 +58,7 @@ export const config = {
     suggest: { limit: 60, windowMs: 60_000 },
     actions: { limit: 20, windowMs: 60_000 },
     other: { limit: 120, windowMs: 60_000 },
+    auth: { limit: 10, windowMs: 60_000 },
     webhook: { limit: 120, windowMs: 60_000 },
     webhookVerified: { limit: 600, windowMs: 60_000 },
   },

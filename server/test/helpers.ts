@@ -1,6 +1,7 @@
 process.env.LOG_SILENT = '1';
 import { randomBytes } from 'node:crypto';
 import { createApp } from '../src/app.ts';
+import type { AppleVerifier } from '../src/apple.ts';
 import type { Ai, Classification, Extraction } from '../src/ai.ts';
 import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
@@ -8,7 +9,7 @@ import type { PayPal, PayPalDispute, PayPalDisputeDetail, PayPalTxn } from '../s
 
 export const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
-export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; now?: () => number } = {}) {
+export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void } = {}) {
   const db = openDb(':memory:');
   const cipher = createCipher(randomBytes(32));
   const calls: { fn: string; args: unknown[] }[] = [];
@@ -67,7 +68,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       return opts.brief ?? facts.split('\n').slice(0, 2).join('\n');
     },
   };
-  const app = createApp({ db, cipher, ai, paypal: { forUser, platform: () => pp }, now: opts.now });
+  const app = createApp({ db, cipher, ai, paypal: { forUser, platform: () => pp }, now: opts.now, apple: opts.apple, onNewUser: opts.onNewUser });
   const device = () => {
     const userId = db.createUser();
     const token = randomToken('pkd');

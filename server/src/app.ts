@@ -15,8 +15,14 @@ import { clean } from './text.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { RANGES, createBusiness } from './business.ts';
+import { createAppleVerifier, type AppleVerifier } from './apple.ts';
 
-export type Deps = { db: Db; cipher: Cipher; ai: Ai; paypal: PayPalProvider; now?: () => number };
+export type Deps = {
+  db: Db; cipher: Cipher; ai: Ai; paypal: PayPalProvider; now?: () => number;
+  apple?: AppleVerifier;
+  /** Runs once for each user that Sign in with Apple creates. The demo server seeds the demo business here. */
+  onNewUser?: (userId: string) => void;
+};
 type Env = { Variables: { userId: string; idemSkip?: boolean } };
 type Chip = { kind: string; label: string; payload: Record<string, unknown>; needs_confirm: boolean };
 
@@ -102,6 +108,7 @@ const ProfileBody = z.object({
 }).strict();
 const ItemBody = z.object({ name: Item, price: Amount, currency: Currency.default('USD') }).strict();
 const DisputeId = z.string().regex(/^PP-[A-Z0-9-]{3,40}$/);
+const AppleAuthBody = z.object({ identity_token: z.string().min(20).max(4096), nonce: z.string().min(16).max(128) }).strict();
 const DisputeMessageBody = z.object({ message: CleanText(2000) }).strict();
 
 export function createApp(deps: Deps) {
@@ -162,7 +169,27 @@ export function createApp(deps: Deps) {
 
   app.get('/health', (c) => c.json({ ok: true }));
 
-  // ---- auth: every /v1 route resolves the user from the device token, never from the body
+  // ---- Sign in with Apple: the one /v1 route with no device token. It sits before the token check on purpose.
+  // Every failure is a plain 401, so a caller learns nothing about which check failed.
+  const verifyApple = deps.apple ?? createAppleVerifier({ now });
+  app.post('/v1/auth/apple', rateLimiter('auth', clientIp), async (c) => {
+    let sub: string;
+    try {
+      const b = AppleAuthBody.parse(await c.req.json());
+      sub = (await verifyApple(b.identity_token, b.nonce)).sub;
+    } catch (e) {
+      log('apple_auth_rejected', { reason: e instanceof z.ZodError ? 'bad body' : (e as Error).message });
+      return c.json({ error: 'unauthorized' }, 401);
+    }
+    const { userId, created } = db.userForAppleSub(cipher.lookupHash('apple-sub', sub));
+    const token = randomToken('pkd');
+    db.addDevice(userId, sha256(token), 'apple');
+    if (created) deps.onNewUser?.(userId);
+    log('apple_auth', { user_id: userId, created });
+    return c.json({ device_token: token });
+  });
+
+  // ---- auth: every other /v1 route resolves the user from the device token, never from the body
   app.use('/v1/*', async (c, next) => {
     const m = /^Bearer (pkd_[A-Za-z0-9_-]{20,100})$/.exec(c.req.header('authorization') ?? '');
     const userId = m ? db.userForTokenHash(sha256(m[1])) : undefined;

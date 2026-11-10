@@ -110,10 +110,12 @@ struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 header
-                summaryCard
+                // The AI's work comes first: the brief, then who to bill today.
                 if !model.brief.isEmpty { briefCard }
                 if !calendar.today.isEmpty { todaySection }
+                summaryCard
                 keyboardCard
+                if calendar.status == .notDetermined { calendarCard }
                 if let n = model.summary?.open_disputes, n > 0 { disputesRow(n) }
                 if let error = model.error {
                     Text(error).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Metric.margin)
@@ -256,6 +258,23 @@ struct HomeView: View {
             }
         }
         .buttonStyle(.plain)
+        .padding(.horizontal, Theme.Metric.cardInset)
+    }
+
+    /// Optional, and never a blocking step. It goes away once the owner answers the system prompt.
+    private var calendarCard: some View {
+        Card(padding: 14) {
+            HStack(spacing: 14) {
+                IconCircle(systemImage: "calendar")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Connect Calendar").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                    Text("See who to bill today").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                }
+                Spacer()
+                AskChip(title: "Connect", detail: nil) { Task { await calendar.connect() } }
+                    .accessibilityIdentifier("home.calendar.connect")
+            }
+        }
         .padding(.horizontal, Theme.Metric.cardInset)
     }
 
