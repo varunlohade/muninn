@@ -30,8 +30,9 @@ CREATE TABLE IF NOT EXISTS refunds (
   amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, capture_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
   expires_at INTEGER NOT NULL, status TEXT NOT NULL, paypal_refund_id TEXT, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS idempotency (
-  user_id TEXT NOT NULL REFERENCES users(id), key TEXT NOT NULL, route TEXT NOT NULL, response TEXT NOT NULL,
-  created_at INTEGER NOT NULL, PRIMARY KEY (user_id, key));
+  user_id TEXT NOT NULL REFERENCES users(id), key TEXT NOT NULL, route TEXT NOT NULL, body_hash TEXT NOT NULL,
+  status TEXT NOT NULL, response TEXT, created_at INTEGER NOT NULL, PRIMARY KEY (user_id, key));
+CREATE INDEX IF NOT EXISTS refunds_target ON refunds(user_id, target_id, status);
 CREATE INDEX IF NOT EXISTS invoices_user ON invoices(user_id, created_at);
 CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id, created_at);
 CREATE INDEX IF NOT EXISTS catalog_user ON catalog_items(user_id);
@@ -54,10 +55,14 @@ export type RefundRow = {
 };
 
 export type Db = ReturnType<typeof openDb>;
+export type IdemRow = { route: string; body_hash: string; status: 'pending' | 'done'; response: string | null };
+export type ClaimResult = { ok: RefundRow } | { error: 'not_found' | 'busy' | 'closed' | 'exceeds' };
 
 export function openDb(path: string) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
+  const idemCols = db.prepare('PRAGMA table_info(idempotency)').all() as { name: string }[];
+  if (idemCols.length && !idemCols.some((c) => c.name === 'body_hash')) db.exec('DROP TABLE idempotency');
   db.exec(SCHEMA);
   const now = () => Date.now();
   const q = (sql: string) => db.prepare(sql);
@@ -152,21 +157,58 @@ export function openDb(path: string) {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(r.id, r.user_id, r.target_kind, r.target_id, r.amount_cents, r.currency, r.capture_id, r.token_hash, r.expires_at, r.status, now());
     },
-    claimRefund(userId: string, tokenHash: string, at: number): RefundRow | undefined {
-      return q(`UPDATE refunds SET status = 'running' WHERE token_hash = ? AND user_id = ? AND status = 'pending' AND expires_at > ?
-                RETURNING *`).get(tokenHash, userId, at) as RefundRow | undefined;
+    refundState(userId: string, targetId: string): { doneCents: number; running: number } {
+      const r = q(`SELECT COALESCE(SUM(CASE WHEN status = 'done' THEN amount_cents END), 0) AS done_cents,
+                          COUNT(CASE WHEN status = 'running' THEN 1 END) AS running
+                   FROM refunds WHERE user_id = ? AND target_id = ?`).get(userId, targetId) as { done_cents: number; running: number };
+      return { doneCents: r.done_cents, running: r.running };
+    },
+    // Atomic: one refund per target runs at a time, the amount is re-checked against what is left,
+    // and claiming one token voids every other open token on the same target.
+    claimRefund(userId: string, tokenHash: string, at: number): ClaimResult {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const result = ((): ClaimResult => {
+          const r = q(`SELECT * FROM refunds WHERE token_hash = ? AND user_id = ? AND status = 'pending' AND expires_at > ?`)
+            .get(tokenHash, userId, at) as RefundRow | undefined;
+          if (!r) return { error: 'not_found' };
+          const table = r.target_kind === 'invoice' ? 'invoices' : 'orders';
+          const target = q(`SELECT status, amount_cents FROM ${table} WHERE id = ? AND user_id = ?`).get(r.target_id, userId) as
+            { status: string; amount_cents: number } | undefined;
+          const state = this.refundState(userId, r.target_id);
+          if (state.running > 0) return { error: 'busy' };
+          const voidIt = (reason: ClaimResult) => {
+            q(`UPDATE refunds SET status = 'void' WHERE id = ?`).run(r.id);
+            return reason;
+          };
+          if (!target || target.status === 'REFUNDED') return voidIt({ error: 'closed' });
+          if (state.doneCents + r.amount_cents > target.amount_cents) return voidIt({ error: 'exceeds' });
+          q(`UPDATE refunds SET status = 'running' WHERE id = ?`).run(r.id);
+          q(`UPDATE refunds SET status = 'void' WHERE user_id = ? AND target_id = ? AND status = 'pending'`).run(userId, r.target_id);
+          return { ok: { ...r, status: 'running' } };
+        })();
+        db.exec('COMMIT');
+        return result;
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
     },
     finishRefund(userId: string, id: string, status: string, paypalRefundId: string | null) {
       q('UPDATE refunds SET status = ?, paypal_refund_id = ? WHERE id = ? AND user_id = ?').run(status, paypalRefundId, id, userId);
     },
 
-    getIdem(userId: string, key: string): { route: string; response: string } | undefined {
-      return q('SELECT route, response FROM idempotency WHERE user_id = ? AND key = ?').get(userId, key) as
-        { route: string; response: string } | undefined;
+    reserveIdem(userId: string, key: string, route: string, bodyHash: string): IdemRow | null {
+      const ins = q(`INSERT OR IGNORE INTO idempotency (user_id, key, route, body_hash, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)`)
+        .run(userId, key, route, bodyHash, now());
+      if (ins.changes > 0) return null;
+      return q('SELECT route, body_hash, status, response FROM idempotency WHERE user_id = ? AND key = ?').get(userId, key) as unknown as IdemRow;
     },
-    putIdem(userId: string, key: string, route: string, response: string) {
-      q('INSERT OR IGNORE INTO idempotency (user_id, key, route, response, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(userId, key, route, response, now());
+    completeIdem(userId: string, key: string, response: string) {
+      q(`UPDATE idempotency SET status = 'done', response = ? WHERE user_id = ? AND key = ?`).run(response, userId, key);
+    },
+    releaseIdem(userId: string, key: string) {
+      q(`DELETE FROM idempotency WHERE user_id = ? AND key = ? AND status = 'pending'`).run(userId, key);
     },
 
     paidSince(userId: string, since: number): { currency: string; cents: number }[] {

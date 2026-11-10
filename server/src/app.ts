@@ -11,10 +11,12 @@ import type { Ai, Extraction } from './ai.ts';
 import { PayPalError, type PayPalProvider } from './paypal.ts';
 import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './money.ts';
 import { log } from './log.ts';
+import { clean } from './text.ts';
+import { getConnInfo } from '@hono/node-server/conninfo';
 
 export type Deps = { db: Db; cipher: Cipher; ai: Ai; paypal: PayPalProvider; now?: () => number };
-type Env = { Variables: { userId: string } };
-type Chip = { kind: string; label: string; payload: Record<string, unknown> };
+type Env = { Variables: { userId: string; idemSkip?: boolean } };
+type Chip = { kind: string; label: string; payload: Record<string, unknown>; needs_confirm: boolean };
 
 const DAY = 86_400_000;
 const DEFAULT_PROFILE = { business_name: 'my shop', tone: 'friendly and short', currency: 'USD' };
@@ -27,11 +29,9 @@ class HttpError extends Error {
   }
 }
 
-function rateLimiter(bucket: keyof typeof config.rateLimit, keyOf: (c: Context<Env>) => string): MiddlewareHandler<Env> {
-  const { limit, windowMs } = config.rateLimit[bucket];
+function createLimiter({ limit, windowMs }: { limit: number; windowMs: number }) {
   const hits = new Map<string, { n: number; reset: number }>();
-  return async (c, next) => {
-    const key = keyOf(c);
+  const entry = (key: string) => {
     const now = Date.now();
     let h = hits.get(key);
     if (!h || h.reset <= now) {
@@ -39,17 +39,43 @@ function rateLimiter(bucket: keyof typeof config.rateLimit, keyOf: (c: Context<E
       h = { n: 0, reset: now + windowMs };
       hits.set(key, h);
     }
-    if (++h.n > limit) {
-      c.header('Retry-After', String(Math.ceil((h.reset - now) / 1000)));
+    return h;
+  };
+  return {
+    over: (key: string) => entry(key).n >= limit,
+    hit: (key: string) => ++entry(key).n > limit,
+    retryAfter: (key: string) => String(Math.max(1, Math.ceil((entry(key).reset - Date.now()) / 1000))),
+  };
+}
+
+function rateLimiter(bucket: keyof typeof config.rateLimit, keyOf: (c: Context<Env>) => string): MiddlewareHandler<Env> {
+  const limiter = createLimiter(config.rateLimit[bucket]);
+  return async (c, next) => {
+    const key = keyOf(c);
+    if (limiter.hit(key)) {
+      c.header('Retry-After', limiter.retryAfter(key));
       return c.json({ error: 'rate limited' }, 429);
     }
     await next();
   };
 }
 
-const ClientName = z.string().trim().min(1).max(100).nullish();
+function clientIp(c: Context<Env>): string {
+  if (config.trustProxy) {
+    const hops = (c.req.header('x-forwarded-for') ?? '').split(',').map((h) => h.trim()).filter(Boolean);
+    if (hops.length) return hops[hops.length - 1];
+  }
+  try {
+    return getConnInfo(c).remote.address ?? 'direct';
+  } catch {
+    return 'direct';
+  }
+}
+
+const CleanText = (max: number) => z.string().transform(clean).pipe(z.string().min(1).max(max));
+const ClientName = CleanText(100).nullish();
 const ClientEmail = z.string().trim().toLowerCase().email().max(254).nullish();
-const Item = z.string().trim().min(1).max(120);
+const Item = CleanText(120);
 const TextBody = z.object({ text: z.string().trim().min(1).max(config.maxTextChars) }).strict();
 const InvoiceBody = z.object({ amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName, client_email: ClientEmail }).strict();
 const PayLinkBody = z.object({ amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName }).strict();
@@ -59,7 +85,7 @@ const RefundBody = z.union([
   z.object({ id: z.string().min(1).max(64), amount: Amount.optional() }).strict(),
 ]);
 const ProfileBody = z.object({
-  business_name: z.string().trim().min(1).max(80), tone: z.string().trim().min(1).max(200), currency: Currency.default('USD'),
+  business_name: CleanText(80), tone: CleanText(200), currency: Currency.default('USD'),
 }).strict();
 const ItemBody = z.object({ name: Item, price: Amount, currency: Currency.default('USD') }).strict();
 
@@ -129,13 +155,23 @@ export function createApp(deps: Deps) {
     const key = c.req.header('idempotency-key') ?? '';
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(key)) return c.json({ error: 'Idempotency-Key header required (8-64 chars)' }, 400);
     const userId = c.get('userId');
-    const prior = db.getIdem(userId, key);
+    const raw = await c.req.text();
+    const prior = db.reserveIdem(userId, key, c.req.path, sha256(raw));
     if (prior) {
-      if (prior.route !== c.req.path) return c.json({ error: 'Idempotency-Key reused on another action' }, 409);
+      if (prior.route !== c.req.path || prior.body_hash !== sha256(raw)) return c.json({ error: 'Idempotency-Key reused with a different request' }, 409);
+      if (prior.status !== 'done' || !prior.response) return c.json({ error: 'request with this Idempotency-Key is in progress' }, 409);
       return c.json(JSON.parse(prior.response), 200);
     }
-    await next();
-    if (c.res.status === 200) db.putIdem(userId, key, c.req.path, await c.res.clone().text());
+    let stored = false;
+    try {
+      await next();
+      if (c.res.status === 200 && !c.get('idemSkip')) {
+        db.completeIdem(userId, key, await c.res.clone().text());
+        stored = true;
+      }
+    } finally {
+      if (!stored) db.releaseIdem(userId, key);
+    }
   });
   const idemKey = (c: Context<Env>) => requestIdFor(c.get('userId'), c.req.header('idempotency-key')!);
 
@@ -180,7 +216,17 @@ export function createApp(deps: Deps) {
     return done(chips, cls.intent, cls.confidence);
   });
 
-  function buildChips(userId: string, intent: string, ext: Extraction | null, text: string, items: CatalogItem[], defaultCurrency: string): Chip[] {
+  const chip = (kind: string, label: string, payload: Record<string, unknown>, needsConfirm = false): Chip =>
+    ({ kind, label: clean(label), payload, needs_confirm: needsConfirm });
+  const cleanOrNull = (v: string | null | undefined, max: number) => (v ? clean(v).slice(0, max) || null : null);
+
+  function knownEmail(userId: string, email: string, text: string): boolean {
+    if (text.toLowerCase().includes(email)) return true;
+    return db.listInvoices(userId, 200).some((r) => dec(userId, r.client_email_enc) === email);
+  }
+
+  function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, items: CatalogItem[], defaultCurrency: string): Chip[] {
+    const ext = rawExt && { ...rawExt, item: cleanOrNull(rawExt.item, 120), client_name: cleanOrNull(rawExt.client_name, 100) };
     const lower = text.toLowerCase();
     const match = items.find((i) => lower.includes(i.name.toLowerCase()) || (ext?.item && ext.item.toLowerCase().includes(i.name.toLowerCase())));
     const currency = (config.money.currencies as readonly string[]).includes(ext?.currency ?? '') ? ext!.currency! : match?.currency ?? defaultCurrency;
@@ -191,13 +237,16 @@ export function createApp(deps: Deps) {
       const item = ext?.item ? ext.item.charAt(0).toUpperCase() + ext.item.slice(1) : match?.name ?? 'Payment';
       const money = formatMoney(cents, currency);
       const base = { amount: centsToValue(cents), currency, item, client_name: ext?.client_name ?? null };
-      const invoice: Chip = { kind: 'invoice', label: `Invoice ${money} · ${item}`, payload: { ...base, client_email: ext?.client_email ?? null } };
-      const link: Chip = { kind: 'paylink', label: `Pay link ${money} · ${item}`, payload: base };
+      const email = ext?.client_email ?? null;
+      const recipient = email ?? ext?.client_name ?? null;
+      const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`, { ...base, client_email: email },
+        email ? !knownEmail(userId, email, text) : false);
+      const link = chip('paylink', `Pay link ${money} · ${item}`, base);
       return intent === 'create_invoice' ? [invoice, link] : [link, invoice];
     }
     if (intent === 'payment_status') {
       const unpaid = db.unpaidCount(userId);
-      return [{ kind: 'payments', label: `Who paid? · ${unpaid} unpaid`, payload: {} }];
+      return [chip('payments', `Who paid? · ${unpaid} unpaid`, {})];
     }
     if (intent === 'send_reminder') {
       const want = ext?.client_name?.toLowerCase();
@@ -205,20 +254,21 @@ export function createApp(deps: Deps) {
       const hit = unpaid.find((r) => !want || (dec(userId, r.client_name_enc) ?? '').toLowerCase().includes(want)) ?? null;
       if (!hit) return [];
       const name = dec(userId, hit.client_name_enc) ?? hit.item;
-      return [{ kind: 'remind', label: `Remind ${name} · ${formatMoney(hit.amount_cents, hit.currency)}`, payload: { invoice_id: hit.id } }];
+      return [chip('remind', `Remind ${name} · ${formatMoney(hit.amount_cents, hit.currency)}`, { invoice_id: hit.id })];
     }
     if (intent === 'refund') {
       const want = ext?.client_name?.toLowerCase();
       const cents = ext?.amount != null ? amountToCents(ext.amount) : null;
-      const paid = [...db.listInvoices(userId), ...db.listOrders(userId)].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED');
-      const hit = paid.find((r) => (!want || (dec(userId, r.client_name_enc) ?? '').toLowerCase().includes(want)) && (cents === null || cents <= r.amount_cents));
+      const left = (r: InvoiceRow | OrderRow) => r.amount_cents - db.refundState(userId, r.id).doneCents;
+      const paid = [...db.listInvoices(userId), ...db.listOrders(userId)].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED' && left(r) > 0);
+      const hit = paid.find((r) => (!want || (dec(userId, r.client_name_enc) ?? '').toLowerCase().includes(want)) && (cents === null || cents <= left(r)));
       if (!hit) return [];
-      const refundCents = cents ?? hit.amount_cents;
+      const refundCents = cents ?? left(hit);
       const who = dec(userId, hit.client_name_enc) ?? hit.item;
-      return [{ kind: 'refund', label: `Refund ${formatMoney(refundCents, hit.currency)} · ${who}`, payload: { id: hit.id, amount: centsToValue(refundCents) } }];
+      return [chip('refund', `Refund ${formatMoney(refundCents, hit.currency)} · ${who}`, { id: hit.id, amount: centsToValue(refundCents) })];
     }
     if (intent === 'catalog_reply') {
-      return items.length ? [{ kind: 'reply', label: 'Reply with prices', payload: {} }] : [];
+      return items.length ? [chip('reply', 'Reply with prices', {})] : [];
     }
     return [];
   }
@@ -276,28 +326,38 @@ export function createApp(deps: Deps) {
     const userId = c.get('userId');
     const b = await body(c, RefundBody);
     if ('confirm_token' in b) {
-      const r = db.claimRefund(userId, sha256(b.confirm_token), now());
-      if (!r) throw new HttpError(404, 'confirm token not found, used or expired');
+      const claim = db.claimRefund(userId, sha256(b.confirm_token), now());
+      if ('error' in claim) {
+        if (claim.error === 'busy') throw new HttpError(409, 'another refund on this payment is running');
+        throw new HttpError(404, 'confirm token not found, used or expired');
+      }
+      const r = claim.ok;
       try {
         const out = await paypal.forUser(userId).refundCapture(r.capture_id, centsToValue(r.amount_cents), r.currency, r.id);
         db.finishRefund(userId, r.id, 'done', out.id);
-        if (r.target_kind === 'invoice') db.setInvoiceStatus(userId, r.target_id, 'REFUNDED', null, null);
-        else db.setOrderStatus(userId, r.target_id, 'REFUNDED', null, null);
-        log('refund_done', { user_id: userId, target_id: r.target_id, refund_id: out.id });
+        const target = r.target_kind === 'invoice' ? db.getInvoice(userId, r.target_id) : db.getOrder(userId, r.target_id);
+        const status = db.refundState(userId, r.target_id).doneCents >= (target?.amount_cents ?? 0) ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+        if (r.target_kind === 'invoice') db.setInvoiceStatus(userId, r.target_id, status, null, null);
+        else db.setOrderStatus(userId, r.target_id, status, null, null);
+        log('refund_done', { user_id: userId, target_id: r.target_id, refund_id: out.id, status });
         return c.json({ ok: true, refund_id: out.id, status: out.status, amount: centsToValue(r.amount_cents), currency: r.currency });
       } catch (e) {
         db.finishRefund(userId, r.id, 'failed', null);
         throw e;
       }
     }
+    c.set('idemSkip', true);
     const inv = db.getInvoice(userId, b.id);
     const target: InvoiceRow | OrderRow | undefined = inv ?? db.getOrder(userId, b.id);
     const kind = inv ? 'invoice' : 'order';
     if (!target) throw new HttpError(404, 'payment not found');
     if (!target.paid_at || !target.capture_id) throw new HttpError(409, 'payment is not captured yet, nothing to refund');
     if (target.status === 'REFUNDED') throw new HttpError(409, 'payment is already refunded');
-    const cents = b.amount ?? target.amount_cents;
-    if (cents > target.amount_cents) throw new HttpError(400, 'refund is larger than the payment');
+    const state = db.refundState(userId, target.id);
+    if (state.running > 0) throw new HttpError(409, 'another refund on this payment is running');
+    const left = target.amount_cents - state.doneCents;
+    const cents = b.amount ?? left;
+    if (cents > left) throw new HttpError(400, `refund is larger than what is left (${centsToValue(left)})`);
     const token = randomToken('rf');
     db.insertRefund({
       id: randomUUID(), user_id: userId, target_kind: kind, target_id: target.id, amount_cents: cents, currency: target.currency,
@@ -309,7 +369,7 @@ export function createApp(deps: Deps) {
 
   // ---- read views
   const invoiceState = (s: string) => (['PAID', 'MARKED_AS_PAID'].includes(s) ? 'paid' : ['REFUNDED', 'PARTIALLY_REFUNDED', 'MARKED_AS_REFUNDED'].includes(s) ? 'refunded' : s === 'CANCELLED' ? 'cancelled' : 'unpaid');
-  const orderState = (s: string) => (s === 'COMPLETED' ? 'paid' : s === 'REFUNDED' ? 'refunded' : 'unpaid');
+  const orderState = (s: string) => (s === 'COMPLETED' ? 'paid' : ['REFUNDED', 'PARTIALLY_REFUNDED'].includes(s) ? 'refunded' : 'unpaid');
 
   app.get('/v1/payments', async (c) => {
     const userId = c.get('userId');
@@ -386,12 +446,21 @@ export function createApp(deps: Deps) {
   });
 
   // ---- PayPal webhooks: verify with PayPal, then map ids to owners through our own tables
-  app.use('/webhooks/*', rateLimiter('webhook', (c) => c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? 'direct'));
+  // Failed verifications count per client IP; verified events have their own global budget,
+  // so spoofed traffic cannot use up the budget that real PayPal events need.
+  const webhookFailures = createLimiter(config.rateLimit.webhook);
+  const webhookVerified = createLimiter(config.rateLimit.webhookVerified);
   app.post('/webhooks/paypal', async (c) => {
+    const ip = clientIp(c);
+    if (webhookFailures.over(ip)) {
+      c.header('Retry-After', webhookFailures.retryAfter(ip));
+      return c.json({ error: 'rate limited' }, 429);
+    }
     let event: any;
     try {
       event = await c.req.json();
     } catch {
+      webhookFailures.hit(ip);
       return c.json({ error: 'bad json' }, 400);
     }
     const h = Object.fromEntries(['paypal-auth-algo', 'paypal-cert-url', 'paypal-transmission-id', 'paypal-transmission-sig', 'paypal-transmission-time']
@@ -403,9 +472,11 @@ export function createApp(deps: Deps) {
       log('webhook_verify_error', { err: (e as Error).message });
     }
     if (!ok) {
+      webhookFailures.hit(ip);
       log('webhook_rejected', { event_type: event?.event_type });
       return c.json({ error: 'signature verification failed' }, 401);
     }
+    if (webhookVerified.hit('all')) return c.json({ error: 'rate limited' }, 429);
     const type = String(event?.event_type ?? '');
     const res = event?.resource ?? {};
     let handled = false;

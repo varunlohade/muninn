@@ -27,7 +27,12 @@
 - Actions run only with `X-User-Action: tap` and an `Idempotency-Key`. `/v1/suggest` never runs them.
 - The server checks amounts: more than 0, at most 10000, at most 2 decimals, allowed currencies only.
 - A refund takes two calls. The first call returns a one-time confirm token that expires in 2 minutes.
+- The confirm step runs in one SQLite transaction. Only one refund per payment runs at a time. The server checks the amount again against what is left. Claiming one token voids every other open token for that payment.
+- We do not cache the first refund step, so no confirm token or summary sits in the idempotency table.
+- We reserve an idempotency key before the PayPal call and store a hash of the body. A key in progress returns 409, and so does a reused key with a different body.
 - PayPal calls carry a `PayPal-Request-Id` made from the user and the idempotency key.
+- We strip control, newline and bidi characters from item names, client names and chip labels, before display and before PayPal.
+- The invoice chip label shows the recipient. If the email is not in the typed text and not a known client, the chip gets `needs_confirm: true`.
 
 ## Threat model
 1. **Stolen DB file.** Names and emails are ciphertext. Without the env key, an attacker gets amounts and item names only.
@@ -40,3 +45,5 @@
 - The rate limiter lives in memory, so it resets on restart and does not span instances.
 - There is no key rotation yet. The `v1:` prefix leaves room for it.
 - CORS allows no origins by default. Set `CORS_ORIGINS` for a web client.
+- The server trusts `X-Forwarded-For` only with `TRUST_PROXY=1`, and then only the right-most hop. Failed webhook checks count per IP. Verified events have their own budget.
+- `npm audit` still lists 12 issues. All of them come in through `@paypal/agent-toolkit` (langchain, ai-sdk, mathjs, uuid, its own zod 3). The only fix npm offers is a downgrade to toolkit 1.3.5.

@@ -34,7 +34,8 @@ export function createCipher(masterKey: Buffer): Cipher {
       const [v, b64] = blob.split(':');
       if (v !== VERSION || !b64) throw new Error('bad ciphertext format');
       const raw = Buffer.from(b64, 'base64');
-      const d = createDecipheriv('aes-256-gcm', keyFor(userId), raw.subarray(0, 12));
+      if (raw.length < 28) throw new Error('bad ciphertext length');
+      const d = createDecipheriv('aes-256-gcm', keyFor(userId), raw.subarray(0, 12), { authTagLength: 16 });
       d.setAAD(Buffer.from(userId, 'utf8'));
       d.setAuthTag(raw.subarray(12, 28));
       return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString('utf8');

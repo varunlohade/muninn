@@ -1,70 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-process.env.LOG_SILENT = '1';
-import { createApp } from '../src/app.ts';
-import { ExtractionSchema, parseModelJson, type Ai, type Classification, type Extraction } from '../src/ai.ts';
-import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
-import { openDb } from '../src/db.ts';
-import type { PayPal } from '../src/paypal.ts';
-
-const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
-
-function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; verify?: boolean; delayMs?: number } = {}) {
-  const db = openDb(':memory:');
-  const cipher = createCipher(randomBytes(32));
-  const calls: { fn: string; args: unknown[] }[] = [];
-  let n = 0;
-  const pp: PayPal = {
-    async createAndSendInvoice(...args) {
-      calls.push({ fn: 'invoice', args });
-      return { id: `INV2-TEST-${++n}`, status: 'SENT', payLink: `https://paypal.test/inv/${n}` };
-    },
-    async createOrder(...args) {
-      calls.push({ fn: 'order', args });
-      return { id: `ORDER${++n}`, status: 'CREATED', approveLink: `https://paypal.test/approve/${n}` };
-    },
-    async getInvoice() { return { status: 'SENT', captureId: null }; },
-    async remind(...args) { calls.push({ fn: 'remind', args }); },
-    async captureOrder() { return { status: 'COMPLETED', captureId: 'CAP1' }; },
-    async refundCapture(...args) { calls.push({ fn: 'refund', args }); return { id: 'REF1', status: 'COMPLETED' }; },
-    async verifyWebhook() { return opts.verify ?? true; },
-    async warmUp() {},
-  };
-  const ai: Ai = {
-    async classify() { await sleep(opts.delayMs); return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
-    async extract() { await sleep(opts.delayMs); return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...opts.ext }; },
-    async reply() { return 'Haircut is $45. Want a slot tomorrow?'; },
-  };
-  const app = createApp({ db, cipher, ai, paypal: { forUser: () => pp, platform: () => pp } });
-  const device = () => {
-    const userId = db.createUser();
-    const token = randomToken('pkd');
-    db.addDevice(userId, sha256(token), 'test');
-    return { userId, token };
-  };
-  let k = 0;
-  const call = (token: string | null, method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
-    app.request(path, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(path.startsWith('/v1/actions') ? { 'X-User-Action': 'tap', 'Idempotency-Key': `key-${Date.now()}-${++k}` } : {}),
-        ...headers,
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  return { db, cipher, app, calls, device, call };
-}
-
-const webhookHeaders = {
-  'paypal-auth-algo': 'SHA256withRSA', 'paypal-cert-url': 'https://api.sandbox.paypal.com/cert', 'paypal-transmission-id': 't1',
-  'paypal-transmission-sig': 'sig', 'paypal-transmission-time': new Date().toISOString(),
-};
-const paidEvent = (id: string) => ({
-  event_type: 'INVOICING.INVOICE.PAID', resource: { invoice: { id, payments: { transactions: [{ payment_id: 'CAPX' }] } } },
-});
+import { ExtractionSchema, parseModelJson } from '../src/ai.ts';
+import { createCipher, randomToken } from '../src/crypto.ts';
+import { paidEvent, setup, webhookHeaders } from './helpers.ts';
 
 test('crypto: round trip, random IV, tamper detection, cross-user swap fails', () => {
   const c = createCipher(randomBytes(32));
@@ -115,7 +54,8 @@ test('suggest: invoice chip from text, no auto-run, low confidence gives no chip
   const { token } = s.device();
   const r = await (await s.call(token, 'POST', '/v1/suggest', { text: "thanks! that'll be $45 for the haircut, sam@example.com" })).json();
   assert.equal(r.chips[0].kind, 'invoice');
-  assert.equal(r.chips[0].label, 'Invoice $45 · Haircut');
+  assert.equal(r.chips[0].label, 'Invoice $45 · Haircut → sam@example.com');
+  assert.equal(r.chips[0].needs_confirm, false);
   assert.deepEqual(r.chips[0].payload, { amount: '45.00', currency: 'USD', item: 'Haircut', client_name: 'Sam', client_email: 'sam@example.com' });
   assert.ok(typeof r.timings.total_ms === 'number');
   assert.equal(s.calls.length, 0);

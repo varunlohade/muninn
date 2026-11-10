@@ -7,6 +7,7 @@ export const config = {
   port: Number(env.PORT ?? 8787),
   dbPath: env.DB_PATH ?? new URL('../data/pro-keyboard.db', import.meta.url).pathname,
   corsOrigins: (env.CORS_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  trustProxy: env.TRUST_PROXY === '1',
   bodyLimitBytes: 16 * 1024,
   maxTextChars: 2000,
 
@@ -44,5 +45,6 @@ export const config = {
     actions: { limit: 20, windowMs: 60_000 },
     other: { limit: 120, windowMs: 60_000 },
     webhook: { limit: 120, windowMs: 60_000 },
+    webhookVerified: { limit: 600, windowMs: 60_000 },
   },
 };
