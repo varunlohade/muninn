@@ -1,0 +1,32 @@
+{
+  "name": "pro-keyboard-server",
+  "version": "1.0.0",
+  "description": "Pro Keyboard backend: PayPal actions for an AI keyboard",
+  "scripts": {
+    "setup": "node scripts/ensure-key.ts",
+    "predev": "node scripts/ensure-key.ts",
+    "dev": "node --env-file=../.env --watch src/index.ts",
+    "start": "node --env-file-if-exists=../.env src/index.ts",
+    "device": "node --env-file=../.env scripts/create-device.ts",
+    "e2e": "node --env-file=../.env scripts/e2e.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "pree2e": "node scripts/ensure-key.ts"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "@paypal/agent-toolkit": "^1.11.0",
+    "hono": "^4.13.17",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  }
+}
