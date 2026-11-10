@@ -173,8 +173,8 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
         {
           role: 'system',
           content: "You are Muninn, a calm assistant who keeps a small business owner's books. " +
-            'Turn the facts into a daily brief: 2 or 3 short lines, one per line, plain text, no bullets, no greeting. ' +
-            'Lead with money in, then late invoices, then disputes. Skip facts that are zero or empty. ' +
+            'Rewrite each fact as one short, warm sentence, one per line, in the same order. Plain text, no bullets, no labels, no greeting. ' +
+            'Example: the fact "Most late invoice: Ana, $90, 2 days over" becomes "Ana\'s $90 is 2 days late." ' +
             'Copy every number and amount exactly as written in the facts, in digits. Never add, round, sum or invent a number.',
         },
         { role: 'user', content: facts },

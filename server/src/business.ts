@@ -165,6 +165,7 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
     for (const r of unpaid) addTo(unpaidAmount, r.currency, r.amount_cents);
     const late = unpaid.filter((r) => at > r.due_at).sort((a, b) => a.due_at - b.due_at);
     const top = late[0];
+    const next = unpaid.filter((r) => at <= r.due_at).sort((a, b) => a.due_at - b.due_at)[0];
 
     let open: PayPalDispute[] | null = null;
     try {
@@ -185,6 +186,10 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
       most_late: top ? {
         invoice_id: top.id, client_name: dec(userId, top.client_name_enc), days_over: Math.floor((at - top.due_at) / DAY),
         amount: centsToValue(top.amount_cents), currency: top.currency,
+      } : null,
+      next_due: next ? {
+        invoice_id: next.id, client_name: dec(userId, next.client_name_enc), amount: centsToValue(next.amount_cents), currency: next.currency,
+        due_date: new Date(next.due_at - 1).toISOString().slice(0, 10),
       } : null,
       open_disputes: open?.length ?? null,
       next_dispute_due: due ? { dispute_id: due.id, due_date: due.due_date } : null,
@@ -255,6 +260,7 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
     const sum = await summary(userId);
     const facts = briefFacts(sum, now());
     const fallback = briefTemplate(sum, now());
+    if (!facts.length) return { lines: fallback, source: 'template' as const, data_source: sum.source };
     try {
       const out = await ai.brief(facts.join('\n'));
       const lines = checkBrief(out, facts.join('\n'));
@@ -274,46 +280,44 @@ type Summary = Awaited<ReturnType<ReturnType<typeof createBusiness>['summary']>>
 const firstName = (n: string | null) => (n ? n.trim().split(/\s+/)[0] : null);
 function dueLabel(iso: string, at: number): string {
   const t = Date.parse(iso);
+  if (iso.slice(0, 10) === new Date(at).toISOString().slice(0, 10)) return 'today';
   if (t - at < 6 * DAY) return new Date(t).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
   return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
-export function briefFacts(s: Summary, at: number): string[] {
-  const f = [
-    `Earned today: ${money(s.earned_today) || 'nothing yet'}`,
-    `Earned this week: ${money(s.earned_this_week) || 'nothing yet'}`,
-  ];
-  if (Object.keys(s.fees_this_week).length) f.push(`PayPal fees this week: ${money(s.fees_this_week)}; net this week: ${money(s.net_this_week)}`);
-  f.push(`Unpaid invoices: ${s.unpaid_count}${s.unpaid_count ? `, worth ${money(s.unpaid_amount)}` : ''}`);
-  f.push(`Late invoices: ${s.late_count}`);
+const amt = (v: string, c: string) => formatMoney(Math.round(Number(v) * 100), c);
+
+// The three most useful facts, each only when it is not zero: money in today, the most late client, the next due invoice.
+// Open disputes fill a slot only when one of those is missing.
+function briefParts(s: Summary, at: number) {
+  const p: { fact: string; line: string }[] = [];
+  const today = money(s.earned_today);
+  if (today) p.push({ fact: `Earned today: ${today}`, line: `Brought back ${today} today.` });
   if (s.most_late) {
-    f.push(`Most late: ${firstName(s.most_late.client_name) ?? 'one client'}, ${s.most_late.days_over} days over, ${formatMoney(Math.round(Number(s.most_late.amount) * 100), s.most_late.currency)}`);
+    const who = firstName(s.most_late.client_name) ?? 'One client';
+    const m = amt(s.most_late.amount, s.most_late.currency);
+    const days = `${s.most_late.days_over} ${s.most_late.days_over === 1 ? 'day' : 'days'}`;
+    p.push({ fact: `Most late invoice: ${who}, ${m}, ${days} over`, line: `${who}'s ${m} is ${days} late.` });
   }
-  if (s.open_disputes !== null) f.push(`Open PayPal disputes: ${s.open_disputes}`);
-  if (s.next_dispute_due?.due_date) f.push(`Next dispute reply due: ${dueLabel(s.next_dispute_due.due_date, at)}`);
-  return f;
+  if (s.next_due) {
+    const who = firstName(s.next_due.client_name) ?? 'One client';
+    const m = amt(s.next_due.amount, s.next_due.currency);
+    const when = dueLabel(`${s.next_due.due_date}T12:00:00Z`, at);
+    p.push({ fact: `Next invoice due: ${who}, ${m}, due ${when}`, line: `${who}'s ${m} is due ${when}.` });
+  }
+  if (p.length < 3 && s.open_disputes) {
+    const due = s.next_dispute_due?.due_date ? `, next reply due ${dueLabel(s.next_dispute_due.due_date, at)}` : '';
+    const n = `${s.open_disputes} open PayPal ${s.open_disputes === 1 ? 'dispute' : 'disputes'}`;
+    p.push({ fact: `${n}${due}`, line: `${n}${due}.` });
+  }
+  return p.slice(0, 3);
 }
 
+export const briefFacts = (s: Summary, at: number) => briefParts(s, at).map((p) => p.fact);
+
 export function briefTemplate(s: Summary, at: number): string[] {
-  const lines: string[] = [];
-  const today = money(s.earned_today);
-  const week = money(s.earned_this_week);
-  lines.push(today ? `Brought back ${today} today, ${week} this week.` : week ? `Nothing in yet today. ${week} this week.` : 'Nothing in yet this week.');
-  if (s.unpaid_count) {
-    let l = `${s.unpaid_count} unpaid ${s.unpaid_count === 1 ? 'invoice' : 'invoices'}, ${money(s.unpaid_amount)} out.`;
-    if (s.late_count) {
-      const who = firstName(s.most_late?.client_name ?? null);
-      l += ` ${s.late_count} late${who && s.most_late ? `, ${who}'s is ${s.most_late.days_over} days over` : ''}.`;
-    }
-    lines.push(l);
-  } else {
-    lines.push('Every invoice is paid.');
-  }
-  if (s.open_disputes) {
-    const due = s.next_dispute_due?.due_date ? ` Next reply due ${dueLabel(s.next_dispute_due.due_date, at)}.` : '';
-    lines.push(`${s.open_disputes} open ${s.open_disputes === 1 ? 'dispute' : 'disputes'}.${due}`);
-  }
-  return lines;
+  const lines = briefParts(s, at).map((p) => p.line);
+  return lines.length ? lines : ['Quiet day so far. Nothing is late.'];
 }
 
 // Digit tokens and currency amounts only. Words like "no one" or "a few" are not counted.

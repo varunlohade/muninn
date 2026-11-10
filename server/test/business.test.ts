@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkBrief } from '../src/business.ts';
-import { DEMO_INVOICES, seedDemo } from '../src/seed.ts';
+import { DEMO_INVOICES, seedDemo, todaySpecs } from '../src/seed.ts';
 import type { PayPalDisputeDetail, PayPalTxn } from '../src/paypal.ts';
 import { paidEvent, setup, webhookHeaders } from './helpers.ts';
 
@@ -176,7 +176,8 @@ test('brief: model lines pass when every number is in the facts, else the templa
   assert.equal(r.source, 'ai');
   const facts = good.aiCalls.find((c) => c.fn === 'brief')!.args[0] as string;
   assert.match(facts, /\$1284/);
-  assert.match(facts, /Jordan, 4 days over/);
+  assert.equal(facts, 'Earned today: $1284\nMost late invoice: Jordan, $80, 4 days over\nNext invoice due: Sam, $40, due Nov 19');
+  assert.ok(!/: 0\b|disputes/.test(facts), 'zero facts are skipped');
   assert.ok(!/Ray|example\.com/.test(facts), 'only first names reach the model');
 
   for (const out of ['Brought back $1,300 today.', '3 invoices are late.', 'Brought back $1284 today. Jordan is 5 days over.']) {
@@ -186,19 +187,20 @@ test('brief: model lines pass when every number is in the facts, else the templa
     s.ppData.set(A.userId, { txns: [txn('TX1', T0 - 3600_000, '1284.00', '-45.10')] });
     const b = await (await s.call(A.token, 'GET', '/v1/brief')).json() as any;
     assert.equal(b.source, 'template', out);
-    assert.equal(b.lines[0], 'Brought back $1284 today, $1284 this week.');
+    assert.deepEqual(b.lines, ['Brought back $1284 today.']);
   }
   const err = setup({ brief: new Error('timeout') });
   const e = await (await err.call(err.device().token, 'GET', '/v1/brief')).json() as any;
-  assert.deepEqual([e.source, e.lines], ['template', ['Nothing in yet this week.', 'Every invoice is paid.']]);
+  assert.deepEqual([e.source, e.lines], ['template', ['Quiet day so far. Nothing is late.']]);
+  assert.equal(err.aiCalls.filter((c) => c.fn === 'brief').length, 0, 'no facts, no model call');
 });
 
 test('brief: cross-user, B facts carry none of A numbers or names', async () => {
   const s = await seededA();
   await get(s, s.A.token, '/v1/brief');
   const b = (await get(s, s.B.token, '/v1/brief')).json;
-  const factsB = s.aiCalls.filter((c) => c.fn === 'brief')[1].args[0] as string;
-  assert.ok(!/1284|Jordan|80/.test(factsB + b.lines.join(' ')));
+  assert.equal(s.aiCalls.filter((c) => c.fn === 'brief').length, 1, 'B has no facts, so only A reached the model');
+  assert.ok(!/1284|Jordan|80/.test(b.lines.join(' ')));
 });
 
 test('checkBrief: digits and number words must appear in the facts', () => {
@@ -258,4 +260,19 @@ test('seed: 12 real-shaped invoices, 6 recorded payments, re-run is a no-op; B s
   assert.deepEqual((await get(s, s.B.token, '/v1/clients')).json.clients, []);
   assert.equal((await get(s, s.B.token, '/v1/summary')).json.late_count, 0);
   assert.equal((await get(s, s.B.token, '/v1/payments')).json.payments.length, 0);
+});
+
+test('seed --refresh-today: two paid-today invoices per date, idempotent, new ones the next day', async () => {
+  const s = world();
+  const base = { db: s.db, cipher: s.cipher, paypal: s.mockPayPal, userId: s.A.userId };
+  await seedDemo({ ...base, now: T0 });
+  const today = (at: number) => seedDemo({ ...base, now: at, specs: todaySpecs(at) });
+  assert.deepEqual(await today(T0), { created: 2, recorded: 2, reused: 0 });
+  assert.deepEqual(await today(T0 + 3600_000), { created: 0, recorded: 0, reused: 2 });
+  const sum = (await get(s, s.A.token, '/v1/summary')).json;
+  assert.notDeepEqual(sum.earned_today, { USD: '165.00' });
+  s.clock.set(T0 + DAY);
+  assert.deepEqual(await today(T0 + DAY), { created: 2, recorded: 2, reused: 0 });
+  const brief = (await get(s, s.A.token, '/v1/brief')).json;
+  assert.match(brief.lines[0], /^Earned today: \$\d+/);
 });

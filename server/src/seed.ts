@@ -47,12 +47,26 @@ export const DEMO_INVOICES: Spec[] = [
   { key: 'leo-templates', client: 'leo', item: 'Social templates', issuedDaysAgo: 16, dueInDays: -6 },
 ];
 
+// --refresh-today: two walk-ins paid today, picked by date, so each demo day has fresh "earned today" numbers.
+const TODAY_POOL: Pick<Spec, 'client' | 'item' | 'method'>[] = [
+  { client: 'maya', item: 'Blowout', method: 'CASH' }, { client: 'ava', item: 'Haircut', method: 'CASH' },
+  { client: 'noor', item: 'Color', method: 'CASH' }, { client: 'sam', item: 'Haircut', method: 'CASH' },
+  { client: 'priya', item: 'Bridal trial', method: 'CASH' }, { client: 'jordan', item: 'Blowout', method: 'CASH' },
+  { client: 'leo', item: 'Haircut', method: 'CASH' },
+];
+export function todaySpecs(now: number): Spec[] {
+  const day = Math.floor(now / DAY);
+  return [0, 1].map((n) => ({
+    ...TODAY_POOL[(day * 2 + n) % TODAY_POOL.length], key: `today-${ymd(now)}-${n + 1}`, issuedDaysAgo: 0, dueInDays: 7, paidDaysAgo: 0,
+  }));
+}
+
 const ymd = (t: number) => new Date(t).toISOString().slice(0, 10);
 const startOfDay = (t: number) => Date.parse(`${ymd(t)}T00:00:00Z`);
 
 export type SeedResult = { created: number; recorded: number; reused: number };
 
-export async function seedDemo(o: { db: Db; cipher: Cipher; paypal: PayPal; userId: string; now: number }): Promise<SeedResult> {
+export async function seedDemo(o: { db: Db; cipher: Cipher; paypal: PayPal; userId: string; now: number; specs?: Spec[] }): Promise<SeedResult> {
   const { db, cipher, paypal, userId, now } = o;
   db.putProfile(userId, DEMO_PROFILE);
   const have = new Set(db.listItems(userId).map((i) => i.name));
@@ -60,7 +74,7 @@ export async function seedDemo(o: { db: Db; cipher: Cipher; paypal: PayPal; user
 
   const price = new Map(DEMO_CATALOG.map((i) => [i.name, i.price * 100]));
   const out: SeedResult = { created: 0, recorded: 0, reused: 0 };
-  for (const s of DEMO_INVOICES) {
+  for (const s of o.specs ?? DEMO_INVOICES) {
     const [name, email] = CLIENTS[s.client];
     const cents = price.get(s.item)!;
     const requestId = sha256(`${DEMO_REFERENCE}:${userId}:${s.key}`).slice(0, 36);
