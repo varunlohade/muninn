@@ -468,4 +468,62 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(element(messages, "label BEGINSWITH %@", "Next: ").exists, messages.debugDescription)
         shot("34-keyboard-appointments")
     }
+
+    /// Notes panel in our keyboard on the Messages search field: insert two notes, then "+" saves the field text.
+    /// No model call: inserted notes are not sent for suggestions.
+    func test17KeyboardNotes() {
+        UIPasteboard.general.items = []
+        let messages = XCUIApplication(bundleIdentifier: "com.apple.MobileSMS")
+        messages.launch()
+        let search = messages.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        let ours = element(messages, "identifier == %@", "muninn.more")
+        for _ in 0..<4 where !ours.waitForExistence(timeout: 2) { element(messages, "label == %@", "Next keyboard").tap() }
+        XCTAssertTrue(ours.exists, messages.debugDescription)
+        let toggle = element(messages, "identifier == %@", "notes.toggle")
+        let prices = element(messages, "label BEGINSWITH %@", "Prices: cut $45")
+        let policy = element(messages, "label BEGINSWITH %@", "Cancellation: 24h")
+        XCTAssertTrue(toggle.waitForExistence(timeout: 3), messages.debugDescription)
+        toggle.tap()
+        XCTAssertTrue(prices.waitForExistence(timeout: 3), messages.debugDescription)
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("35-keyboard-notes-panel")
+        prices.tap()
+        XCTAssertTrue(ours.waitForExistence(timeout: 3), "keys come back after a note is inserted")
+        XCTAssertEqual(search.value as? String, "Prices: cut $45, color $120, blowout $35")
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("36-keyboard-note-inserted")
+        toggle.tap()
+        policy.tap()
+        let both = "Prices: cut $45, color $120, blowout $35 Cancellation: 24h notice or 50% fee"
+        XCTAssertEqual(search.value as? String, both)
+        toggle.tap()
+        let add = element(messages, "identifier == %@", "notes.add")
+        if add.isEnabled { add.tap() }
+        XCTAssertEqual(element(messages, "identifier == %@", "note.0").label, both, "+ saves the text before the cursor")
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("37-keyboard-note-saved")
+        toggle.tap()
+    }
+
+    /// The app's Notes screen: the two demo notes, then delete the note test17 saved from the keyboard.
+    func test18NotesScreen() {
+        let app = XCUIApplication()
+        app.launch()
+        element(app, "identifier == %@", "nav.notes").tap()
+        XCTAssertTrue(element(app, "label == %@", "Prices: cut $45, color $120, blowout $35").waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(element(app, "label == %@", "Cancellation: 24h notice or 50% fee").exists)
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("38-notes-screen")
+        let saved = element(app, "label BEGINSWITH %@", "Prices: cut $45, color $120, blowout $35 Cancellation")
+        if saved.exists {
+            saved.tap()
+            XCTAssertTrue(element(app, "identifier == %@", "note.delete").waitForExistence(timeout: 5))
+            Thread.sleep(forTimeInterval: 0.5)
+            shot("39-note-editor")
+            element(app, "identifier == %@", "note.delete").tap()
+            XCTAssertFalse(saved.waitForExistence(timeout: 2), "deleted note is gone")
+        }
+    }
 }

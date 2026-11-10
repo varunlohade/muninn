@@ -66,6 +66,8 @@ final class KeyboardModel: ObservableObject {
     @Published var copiedAvailable = false
     /// Today's appointments, as the main app last wrote them. The keyboard never reads the calendar.
     @Published var appointments: [Appointment] = []
+    @Published var notesOpen = false
+    @Published var notes: [Note] = []
     @Published var layout: KeyLayout = .letters
     @Published var shift: ShiftState = .once
     @Published var isDark = false
@@ -255,8 +257,39 @@ final class KeyboardModel: ObservableObject {
     }
 
     func keyboardDisappeared() {
+        notesOpen = false
         pollTask?.cancel()
         if watch?.paid == true { watch = nil }
+    }
+
+    // MARK: notes
+
+    private var typed: String { (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    func toggleNotes() {
+        host?.playClick()
+        if !notesOpen { notes = SharedStore.notes }
+        notesOpen.toggle()
+    }
+
+    /// A note goes into the field as it is. It is not sent for suggestions.
+    func insertNote(_ note: Note) {
+        host?.playClick()
+        let before = host?.contextBeforeInput ?? ""
+        host?.insert((before.last?.isWhitespace ?? true ? "" : " ") + note.text)
+        lastSent = typed
+        notesOpen = false
+        updateAutoShift()
+    }
+
+    var canSaveNote: Bool { !typed.isEmpty && !notes.contains { $0.text == typed } }
+
+    /// "+" keeps the text before the cursor as a new note, on this device.
+    func saveNote() {
+        guard canSaveNote else { return }
+        host?.playClick()
+        notes.insert(Note(text: typed), at: 0)
+        SharedStore.notes = notes
     }
 
     // MARK: suggestions

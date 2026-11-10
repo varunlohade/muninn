@@ -9,7 +9,11 @@ struct KeyboardView: View {
         let p = model.isDark ? M.dark : M.light
         ZStack(alignment: .top) {
             p.bed
-            SystemKeysView(model: model)
+            if model.notesOpen {
+                NotesPanel(model: model, palette: p).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
+            } else {
+                SystemKeysView(model: model)
+            }
             SuggestionBar(model: model, palette: p)
                 .frame(height: M.barHeight)
         }
@@ -35,16 +39,42 @@ struct SuggestionBar: View {
     var body: some View {
         let items = self.items
         HStack(spacing: 0) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                if i > 0 { Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight) }
-                Slot(item: item, palette: palette)
-                    .accessibilityIdentifier("chip.\(item.id)")
-                    .transition(.opacity)
+            if model.notesOpen {
+                Text("Notes").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, 12)
+                Spacer()
+                barButton("plus", id: "notes.add", label: "Save typed text as a note", action: model.saveNote)
+                    .disabled(!model.canSaveNote)
+                    .opacity(model.canSaveNote ? 1 : 0.3)
+            } else {
+                HStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                        if i > 0 { Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight) }
+                        Slot(item: item, palette: palette)
+                            .accessibilityIdentifier("chip.\(item.id)")
+                            .transition(.opacity)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            // Notes live in the App Group, which the keyboard reaches only with Full Access.
+            if model.hasFullAccess {
+                Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
+                barButton(model.notesOpen ? "keyboard" : "note.text", id: "notes.toggle", label: model.notesOpen ? "Keyboard" : "Notes", action: model.toggleNotes)
             }
         }
         .padding(.horizontal, 4)
         .padding(.bottom, M.barHeight - 2 * 23.8)
         .animation(Theme.Motion.chipAppear, value: items.map(\.id))
+    }
+
+    private func barButton(_ systemImage: String, id: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage).font(M.icon).foregroundStyle(palette.label)
+                .frame(width: 44).frame(maxHeight: .infinity).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(id)
     }
 
     private var items: [Item] {
@@ -117,6 +147,35 @@ struct SuggestionBar: View {
             }
             .buttonStyle(.plain)
             .disabled(item.action == nil)
+        }
+    }
+}
+
+/// The owner's notes, in place of the keys. A tap inserts the note at the cursor.
+struct NotesPanel: View {
+    @ObservedObject var model: KeyboardModel
+    let palette: Theme.SystemKeyboard.Palette
+    typealias M = Theme.SystemKeyboard
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: M.keyGap) {
+                ForEach(Array(model.notes.enumerated()), id: \.element.id) { i, note in
+                    Button { model.insertNote(note) } label: {
+                        Text(note.text).font(M.mode).foregroundStyle(palette.label)
+                            .lineLimit(2).multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, minHeight: M.keyHeight - 20, alignment: .leading)
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                            .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("note.\(i)")
+                }
+                if model.notes.isEmpty {
+                    Text("No notes yet. Type a reply, then tap +.").font(M.mode).foregroundStyle(palette.secondaryLabel).padding(.top, 40)
+                }
+            }
+            .padding(.horizontal, M.sideInset)
         }
     }
 }

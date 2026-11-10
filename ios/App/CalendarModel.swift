@@ -44,12 +44,15 @@ final class CalendarModel: ObservableObject {
         let start = cal.startOfDay(for: Date())
         let events = store.events(matching: store.predicateForEvents(withStart: start, end: start.addingTimeInterval(86_400), calendars: nil))
         let billed = Set(payments.filter { parseDate($0.created_at).map(cal.isDateInToday) ?? false }.compactMap(\.client_name))
+        // Before the first client list arrives (launch, or offline), keep the matches from the last snapshot.
+        let last = clients.isEmpty ? Dictionary(SharedStore.appointments.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }) : [:]
         today = events.filter { !$0.isAllDay && cal.isDateInToday($0.startDate) }.sorted { $0.startDate < $1.startDate }.map { e in
             // Read the URL by key: EventKit can return nil for it, and the Swift property is not optional.
             let people = (e.attendees ?? []).map { ($0.name, (($0.value(forKey: "URL") as? URL)?.absoluteString ?? "").replacingOccurrences(of: "mailto:", with: "")) }
             let client = Self.match(title: e.title ?? "", attendees: people, clients: clients)
-            return Appointment(start: e.startDate, end: e.endDate, title: e.title ?? "Appointment", clientName: client?.name, clientEmail: client?.email,
-                               billed: client.map { billed.contains($0.displayName) } ?? false)
+            let fresh = Appointment(start: e.startDate, end: e.endDate, title: e.title ?? "Appointment", clientName: client?.name, clientEmail: client?.email,
+                                    billed: client.map { billed.contains($0.displayName) } ?? false)
+            return last[fresh.id] ?? fresh
         }
         SharedStore.appointments = today
     }
