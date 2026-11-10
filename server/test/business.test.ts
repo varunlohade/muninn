@@ -287,3 +287,33 @@ test('ensureDemoUser: token only on creation, stored as a hash', () => {
   const rows = JSON.stringify(s.db.raw.prepare('SELECT * FROM devices').all());
   assert.ok(!rows.includes(first.token!));
 });
+
+test('clients: one person per email, best name wins, name-only rows attach; plus aliases stay apart; B sees none', async () => {
+  const s = world();
+  const inv = (b: Record<string, unknown>) => s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', ...b });
+  await inv({ client_name: 'Sam' });
+  await inv({ client_name: 'Sam Okafor', client_email: 'Sam.Okafor@Example.com', confirm_recipient: 'Sam.Okafor@Example.com' });
+  await inv({ client_name: 'Sam', client_email: 'sam.okafor@example.com', confirm_recipient: 'sam.okafor@example.com' });
+  await inv({ client_email: 'sam.okafor+work@example.com', confirm_recipient: 'sam.okafor+work@example.com' });
+  const { clients } = (await get(s, s.A.token, '/v1/clients')).json;
+  const sam = clients.filter((c: any) => c.email === 'sam.okafor@example.com');
+  assert.equal(sam.length, 1);
+  assert.equal(sam[0].name, 'Sam Okafor');
+  assert.deepEqual(sam[0].open_amount, { USD: '135.00' }, 'the name-only "Sam" invoice attaches too');
+  assert.deepEqual(clients.map((c: any) => c.name).sort(), ['Sam Okafor', 'sam.okafor+work']);
+  assert.deepEqual((await get(s, s.B.token, '/v1/clients')).json.clients, []);
+});
+
+test('payments: missing name falls back to the known client, then the email local part, never the item', async () => {
+  const s = world();
+  const inv = (b: Record<string, unknown>) => s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', ...b });
+  await inv({ client_name: 'Maya Lopez', client_email: 'maya@example.com', confirm_recipient: 'maya@example.com' });
+  await inv({ client_email: 'maya@example.com', confirm_recipient: 'maya@example.com' });
+  await inv({ client_email: 'lee@example.com', confirm_recipient: 'lee@example.com' });
+  await inv({ client_name: 'Haircut' });
+  await inv({});
+  const names = (await get(s, s.A.token, '/v1/payments')).json.payments.map((p: any) => p.client_name);
+  assert.deepEqual(names.sort(), [null, null, 'Maya Lopez', 'Maya Lopez', 'lee'].sort());
+  assert.ok(!names.includes('Haircut'));
+  assert.deepEqual((await get(s, s.B.token, '/v1/payments')).json.payments, []);
+});

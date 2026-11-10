@@ -285,7 +285,7 @@ export function createApp(deps: Deps) {
       const unpaid = db.listInvoices(userId).filter((r) => !r.paid_at && r.status !== 'CANCELLED');
       const hit = unpaid.find((r) => !want || (dec(userId, r.client_name_enc) ?? '').toLowerCase().includes(want)) ?? null;
       if (!hit) return [];
-      const name = dec(userId, hit.client_name_enc) ?? hit.item;
+      const name = biz.namer(userId)(hit) ?? 'client';
       return [chip('remind', `Remind ${name} · ${formatMoney(hit.amount_cents, hit.currency)}`, { invoice_id: hit.id })];
     }
     if (intent === 'refund') {
@@ -296,7 +296,7 @@ export function createApp(deps: Deps) {
       const hit = paid.find((r) => (!want || (dec(userId, r.client_name_enc) ?? '').toLowerCase().includes(want)) && (cents === null || cents <= left(r)));
       if (!hit) return [];
       const refundCents = cents ?? left(hit);
-      const who = dec(userId, hit.client_name_enc) ?? hit.item;
+      const who = biz.namer(userId)(hit) ?? hit.item;
       return [chip('refund', `Refund ${formatMoney(refundCents, hit.currency)} · ${who}`, { id: hit.id, amount: centsToValue(refundCents) })];
     }
     if (intent === 'catalog_reply') {
@@ -399,7 +399,7 @@ export function createApp(deps: Deps) {
       id: randomUUID(), user_id: userId, target_kind: kind, target_id: target.id, amount_cents: cents, currency: target.currency,
       capture_id: target.capture_id, token_hash: sha256(token), expires_at: now() + config.money.refundConfirmTtlMs, status: 'pending',
     });
-    const who = dec(userId, target.client_name_enc) ?? target.item;
+    const who = biz.namer(userId)(target) ?? 'the client';
     return c.json({ confirm_token: token, expires_in_s: config.money.refundConfirmTtlMs / 1000, summary: `Refund ${formatMoney(cents, target.currency)} to ${who}?` });
   });
 
@@ -422,18 +422,19 @@ export function createApp(deps: Deps) {
       }));
     }
     const t = now();
+    const nameOf = biz.namer(userId);
     const invoices = db.listInvoices(userId).map((r) => {
       const state = invoiceState(r.status);
       return {
         kind: 'invoice', id: r.id, state, paypal_status: r.status, amount: centsToValue(r.amount_cents), currency: r.currency, item: r.item,
-        client_name: dec(userId, r.client_name_enc), link: r.pay_link, created_at: new Date(r.created_at).toISOString(),
+        client_name: nameOf(r), link: r.pay_link, created_at: new Date(r.created_at).toISOString(),
         days_overdue: state === 'unpaid' && t > r.due_at ? Math.floor((t - r.due_at) / DAY) : 0,
         origin: 'paypal_invoice', paid_via: !r.paid_at ? null : r.status === 'MARKED_AS_PAID' ? 'recorded_payment' : 'paypal', seeded: r.source === 'demo_seed',
       };
     });
     const orders = db.listOrders(userId).map((r) => ({
       kind: 'order', id: r.id, state: orderState(r.status), paypal_status: r.status, amount: centsToValue(r.amount_cents), currency: r.currency,
-      item: r.item, client_name: dec(userId, r.client_name_enc), link: r.approve_link, created_at: new Date(r.created_at).toISOString(), days_overdue: 0,
+      item: r.item, client_name: nameOf(r), link: r.approve_link, created_at: new Date(r.created_at).toISOString(), days_overdue: 0,
       origin: 'paypal_order', paid_via: r.paid_at ? 'paypal' : null, seeded: false,
     }));
     const payments = [...invoices, ...orders].sort((a, b) => b.created_at.localeCompare(a.created_at));

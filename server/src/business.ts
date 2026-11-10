@@ -73,9 +73,10 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
   }
 
   function fromLocal(userId: string, since: number): Txn[] {
+    const nameOf = namer(userId);
     const row = (r: InvoiceRow | OrderRow, kind: 'invoice' | 'order'): Txn => ({
       id: r.capture_id ?? r.id, date: new Date(r.paid_at!).toISOString(), amount: centsToValue(r.amount_cents), fee: null, net: null,
-      currency: r.currency, payer_name: dec(userId, r.client_name_enc), payer_email: 'client_email_enc' in r ? dec(userId, r.client_email_enc) : null,
+      currency: r.currency, payer_name: nameOf(r), payer_email: 'client_email_enc' in r ? dec(userId, r.client_email_enc) : null,
       status: r.status, invoice_id: kind === 'invoice' ? r.id : null, order_id: kind === 'order' ? r.id : null, source: 'local',
       kind: kind === 'order' ? 'pay_link_payment' : r.status === 'MARKED_AS_PAID' ? 'recorded_payment' : 'invoice_payment',
     });
@@ -161,6 +162,7 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
     }
 
     const unpaid = unpaidInvoices(userId);
+    const nameOf = namer(userId);
     const unpaidAmount = new Map<string, number>();
     for (const r of unpaid) addTo(unpaidAmount, r.currency, r.amount_cents);
     const late = unpaid.filter((r) => at > r.due_at).sort((a, b) => a.due_at - b.due_at);
@@ -184,11 +186,11 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
       unpaid_amount: toTotals(unpaidAmount),
       late_count: late.length,
       most_late: top ? {
-        invoice_id: top.id, client_name: dec(userId, top.client_name_enc), days_over: Math.floor((at - top.due_at) / DAY),
+        invoice_id: top.id, client_name: nameOf(top), days_over: Math.floor((at - top.due_at) / DAY),
         amount: centsToValue(top.amount_cents), currency: top.currency,
       } : null,
       next_due: next ? {
-        invoice_id: next.id, client_name: dec(userId, next.client_name_enc), amount: centsToValue(next.amount_cents), currency: next.currency,
+        invoice_id: next.id, client_name: nameOf(next), amount: centsToValue(next.amount_cents), currency: next.currency,
         due_date: new Date(next.due_at - 1).toISOString().slice(0, 10),
       } : null,
       open_disputes: open?.length ?? null,
@@ -199,59 +201,90 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
     };
   }
 
+  // One name per client email: the most complete name seen (more words, then longer). Emails are lowercased only,
+  // so plus-aliases stay separate people.
+  function directory(userId: string) {
+    const best = new Map<string, string>();
+    for (const r of db.listInvoices(userId, 500)) {
+      const email = normEmail(dec(userId, r.client_email_enc));
+      const name = realName(dec(userId, r.client_name_enc), r.item);
+      if (email && name && moreComplete(name, best.get(email))) best.set(email, name);
+    }
+    return best;
+  }
+
+  // Display name for a row: the best name for its email, else its own name, else the email's local part.
+  // Never the item name.
+  function namer(userId: string) {
+    const best = directory(userId);
+    return (r: { client_name_enc: string | null; client_email_enc?: string | null; item: string }) => {
+      const email = normEmail(r.client_email_enc ? dec(userId, r.client_email_enc) : null);
+      return (email && best.get(email)) || realName(dec(userId, r.client_name_enc), r.item) || (email ? email.split('@')[0] : null);
+    };
+  }
+
   async function clients(userId: string) {
     type Client = { name: string | null; email: string | null; paid: Map<string, number>; open: Map<string, number>; visits: number; last: number; channels: Set<string> };
-    const byEmail = new Map<string, Client>();
-    const byName = new Map<string, Client>();
-    const all: Client[] = [];
-    const find = (name: string | null, email: string | null): Client | null => {
-      if (!name && !email) return null;
-      let c = (email && byEmail.get(email)) || (name && byName.get(name.toLowerCase())) || null;
-      if (!c) {
-        c = { name, email, paid: new Map(), open: new Map(), visits: 0, last: 0, channels: new Set() };
-        all.push(c);
-      }
-      c.name ??= name;
-      c.email ??= email;
-      if (email) byEmail.set(email, c);
-      if (name) byName.set(name.toLowerCase(), c);
-      return c;
-    };
-
+    type Hit = { name: string | null; email: string | null; channel: string; at: number; paid: number; open: number; currency: string };
+    const best = directory(userId);
+    const hits: Hit[] = [];
     const unpaidIds = new Set(unpaidInvoices(userId).map((r) => r.id));
     for (const r of db.listInvoices(userId, 500)) {
-      const c = find(dec(userId, r.client_name_enc), dec(userId, r.client_email_enc));
-      if (!c) continue;
-      c.channels.add('invoice');
-      c.last = Math.max(c.last, r.paid_at ?? r.created_at);
-      if (r.paid_at) { addTo(c.paid, r.currency, r.amount_cents); c.visits++; }
-      else if (unpaidIds.has(r.id)) addTo(c.open, r.currency, r.amount_cents);
+      hits.push({
+        name: realName(dec(userId, r.client_name_enc), r.item), email: normEmail(dec(userId, r.client_email_enc)), channel: 'invoice',
+        at: r.paid_at ?? r.created_at, paid: r.paid_at ? r.amount_cents : 0, open: !r.paid_at && unpaidIds.has(r.id) ? r.amount_cents : 0, currency: r.currency,
+      });
     }
     for (const r of db.listOrders(userId, 500)) {
-      const c = find(dec(userId, r.client_name_enc), null);
-      if (!c) continue;
-      c.channels.add('pay_link');
-      c.last = Math.max(c.last, r.paid_at ?? r.created_at);
-      if (r.paid_at) { addTo(c.paid, r.currency, r.amount_cents); c.visits++; }
+      hits.push({
+        name: realName(dec(userId, r.client_name_enc), r.item), email: null, channel: 'pay_link',
+        at: r.paid_at ?? r.created_at, paid: r.paid_at ? r.amount_cents : 0, open: 0, currency: r.currency,
+      });
     }
     const set = await window(userId);
     if (set.source === 'paypal') {
       for (const t of set.txns) {
-        if (t.invoice_id || t.order_id) continue;
         const cents = Math.round(Number(t.amount) * 100);
-        const c = cents > 0 ? find(t.payer_name, t.payer_email) : null;
-        if (!c) continue;
-        c.channels.add('paypal');
-        c.last = Math.max(c.last, Date.parse(t.date));
-        addTo(c.paid, t.currency, cents);
-        c.visits++;
+        if (t.invoice_id || t.order_id || cents <= 0) continue;
+        hits.push({ name: t.payer_name, email: normEmail(t.payer_email), channel: 'paypal', at: Date.parse(t.date), paid: cents, open: 0, currency: t.currency });
       }
     }
+
+    const byEmail = new Map<string, Client>();
+    const byName = new Map<string, Client>();
+    const make = (name: string | null, email: string | null): Client =>
+      ({ name, email, paid: new Map(), open: new Map(), visits: 0, last: 0, channels: new Set() });
+    for (const h of hits) {
+      if (!h.email) continue;
+      const c = byEmail.get(h.email) ?? make(best.get(h.email) ?? h.name, h.email);
+      if (h.name && moreComplete(h.name, c.name ?? undefined)) c.name = h.name;
+      byEmail.set(h.email, c);
+    }
+    // A row without an email joins the email client with the same full name, or the only one with that first name.
+    const emailClients = [...byEmail.values()];
+    const attach = (name: string): Client | undefined => {
+      const n = name.toLowerCase();
+      const full = emailClients.filter((c) => c.name?.toLowerCase() === n);
+      if (full.length === 1) return full[0];
+      if (full.length > 1 || n.includes(' ')) return undefined;
+      const first = emailClients.filter((c) => c.name?.toLowerCase().split(/\s+/)[0] === n);
+      return first.length === 1 ? first[0] : undefined;
+    };
+    for (const h of hits) {
+      const c = h.email ? byEmail.get(h.email)! : h.name ? attach(h.name) ?? byName.get(h.name.toLowerCase()) ?? make(h.name, null) : null;
+      if (!c) continue;
+      if (!h.email && h.name && !c.email) byName.set(h.name.toLowerCase(), c);
+      c.channels.add(h.channel);
+      c.last = Math.max(c.last, h.at);
+      if (h.paid) { addTo(c.paid, h.currency, h.paid); c.visits++; }
+      if (h.open) addTo(c.open, h.currency, h.open);
+    }
+    const all = [...new Set([...byEmail.values(), ...byName.values()])];
     return {
       source: set.source,
       clients: all.sort((a, b) => b.last - a.last).map((c) => ({
-        name: c.name, email: c.email, total_paid: toTotals(c.paid), open_amount: toTotals(c.open), visits: c.visits,
-        last_seen: c.last ? new Date(c.last).toISOString() : null, channels: [...c.channels],
+        name: c.name ?? (c.email ? c.email.split('@')[0] : null), email: c.email, total_paid: toTotals(c.paid), open_amount: toTotals(c.open),
+        visits: c.visits, last_seen: c.last ? new Date(c.last).toISOString() : null, channels: [...c.channels],
       })),
     };
   }
@@ -272,11 +305,19 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
     return { lines: fallback, source: 'template' as const, data_source: sum.source };
   }
 
-  return { transactions, summary, disputes, dispute, sendDisputeMessage, clients, brief };
+  return { namer, transactions, summary, disputes, dispute, sendDisputeMessage, clients, brief };
 }
 
 type Summary = Awaited<ReturnType<ReturnType<typeof createBusiness>['summary']>>;
 
+const normEmail = (e: string | null | undefined) => (e ? e.trim().toLowerCase() || null : null);
+// A stored name that only repeats the item ("Haircut / Haircut") is no name.
+const realName = (n: string | null, item: string) => (n && n.trim() && n.trim().toLowerCase() !== item.trim().toLowerCase() ? n.trim() : null);
+const moreComplete = (a: string, b: string | undefined) => {
+  if (!b) return true;
+  const wa = a.split(/\s+/).length, wb = b.split(/\s+/).length;
+  return wa !== wb ? wa > wb : a.length > b.length;
+};
 const firstName = (n: string | null) => (n ? n.trim().split(/\s+/)[0] : null);
 function dueLabel(iso: string, at: number): string {
   const t = Date.parse(iso);
