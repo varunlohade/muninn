@@ -64,6 +64,8 @@ final class KeyboardModel: ObservableObject {
     @Published var bar: BarState = .idle
     @Published var watch: Watch?
     @Published var copiedAvailable = false
+    /// Today's appointments, as the main app last wrote them. The keyboard never reads the calendar.
+    @Published var appointments: [Appointment] = []
     @Published var layout: KeyLayout = .letters
     @Published var shift: ShiftState = .once
     @Published var isDark = false
@@ -79,6 +81,9 @@ final class KeyboardModel: ObservableObject {
     private var suggestTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var lastSent = ""
+    /// The appointment whose "Invoice Sam" chip started the current request, and the ones invoiced from here.
+    private var billing: Appointment?
+    private var billedHere: Set<String> = []
     private let log = Logger(subsystem: "com.orseliyas.muninn", category: "keyboard")
     static let pollInterval: Duration = .seconds(10)
     static let pasteTimeout: TimeInterval = 8
@@ -242,6 +247,7 @@ final class KeyboardModel: ObservableObject {
         guard hasFullAccess else { copiedAvailable = false; return }
         SharedStore.keyboardLastSeen = Date()
         guard paired else { return }
+        appointments = SharedStore.appointments
         // hasStrings and changeCount do not trigger the paste prompt; only reading the string does.
         let pasteboard = UIPasteboard.general
         copiedAvailable = pasteboard.hasStrings && pasteboard.changeCount != SharedStore.lastPasteboardChange
@@ -265,8 +271,8 @@ final class KeyboardModel: ObservableObject {
         let text = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard text != lastSent else { return }
         suggestTask?.cancel()
-        guard !text.isEmpty else { lastSent = ""; bar = .idle; return }
-        requestSuggest(text: text, context: nil, debounce: true)
+        guard !text.isEmpty else { lastSent = ""; billing = nil; bar = .idle; return }
+        requestSuggest(text: billing.map { $0.invoicePrefix + " " + text } ?? text, context: nil, debounce: true, sentAs: text)
     }
 
     /// Tap on "Use copied message". Reading may show the system paste prompt once, so the read runs
@@ -307,9 +313,30 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
-    private func requestSuggest(text: String, context: String?, debounce: Bool) {
+    /// The latest ended appointment with a known client and no invoice today.
+    var toBill: Appointment? {
+        let now = Date()
+        return appointments.last { $0.end <= now && !$0.billed && !billedHere.contains($0.id) && ($0.clientName ?? $0.clientEmail) != nil }
+    }
+
+    var nextUp: Appointment? {
+        let now = Date()
+        return appointments.first { $0.start > now }
+    }
+
+    /// Tap on "Invoice Sam": from now on the client goes in front of the typed amount and item.
+    func invoiceAppointment(_ a: Appointment) {
+        let typed = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        suggestTask?.cancel()
+        billing = a
+        guard !typed.isEmpty else { bar = .done("Type the amount for \(a.who)"); return }
+        bar = .working("Invoice for \(a.who)…")
+        requestSuggest(text: a.invoicePrefix + " " + typed, context: nil, debounce: false, sentAs: typed)
+    }
+
+    private func requestSuggest(text: String, context: String?, debounce: Bool, sentAs: String? = nil) {
         let typedAt = ContinuousClock.now
-        lastSent = text
+        lastSent = sentAs ?? text
         suggestTask = Task { [weak self] in
             if debounce { try? await Task.sleep(for: AppConfig.suggestDebounce) }
             guard let self, !Task.isCancelled else { return }
@@ -319,7 +346,11 @@ final class KeyboardModel: ObservableObject {
                 let ms = Int((ContinuousClock.now - typedAt) / .milliseconds(1))
                 self.lastLatencyMs = ms
                 self.log.notice("MUNINN_TIMING keystroke_to_chip_ms=\(ms, privacy: .public) chips=\(res.chips.count, privacy: .public) server_ms=\(res.timings?["total_ms"] ?? -1, privacy: .public) copied=\(context != nil, privacy: .public)")
-                self.bar = res.chips.isEmpty ? .idle : .chips(res.chips, fromCopied: context != nil)
+                if res.chips.isEmpty, let a = self.billing {
+                    self.bar = .done("Type the amount for \(a.who)")
+                } else {
+                    self.bar = res.chips.isEmpty ? .idle : .chips(res.chips, fromCopied: context != nil)
+                }
             } catch is CancellationError {
             } catch let e as URLError where e.code == .cancelled {
             } catch {
@@ -356,6 +387,8 @@ final class KeyboardModel: ObservableObject {
                 lastSent = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 bar = .idle
                 watch = Watch(id: r.id, who: r.who, money: r.money)
+                if let billing { billedHere.insert(billing.id) }
+                billing = nil
                 startPolling()
             } catch APIError.needsConfirm(let recipient) {
                 bar = .confirm(chip, recipient: recipient)

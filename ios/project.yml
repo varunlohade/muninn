@@ -42,6 +42,7 @@ targets:
         AppGroupID: $(APP_GROUP_ID)
         AppIdentifierPrefix: $(AppIdentifierPrefix)
         UILaunchScreen: {}
+        NSCalendarsFullAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) reads today's appointments to suggest who to bill. They stay on this phone.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

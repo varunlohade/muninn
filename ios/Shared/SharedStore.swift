@@ -29,6 +29,31 @@ enum SharedStore {
         set { defaults?.set(newValue, forKey: keyboardSeenKey) }
     }
 
+    /// Small JSON files in the App Group container. They stay on the device, encrypted while it is locked.
+    static func load<T: Decodable>(_ type: T.Type, file: String) -> T? {
+        guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppConfig.appGroupID)?.appendingPathComponent(file),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    static func save<T: Encodable>(_ value: T, file: String) {
+        guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppConfig.appGroupID)?.appendingPathComponent(file),
+              let data = try? JSONEncoder().encode(value) else { return }
+        try? data.write(to: url, options: [.atomic, .completeFileProtection])
+    }
+
+    /// Today's appointments, written by the main app from the calendar. The keyboard only reads them.
+    static var appointments: [Appointment] {
+        get { (load([Appointment].self, file: "appointments.json") ?? []).filter { Calendar.current.isDateInToday($0.start) } }
+        set { save(newValue, file: "appointments.json") }
+    }
+
+    /// The owner's notes. Both the app and the keyboard read and write them.
+    static var notes: [Note] {
+        get { load([Note].self, file: "notes.json") ?? Note.demo }
+        set { save(newValue, file: "notes.json") }
+    }
+
     private static func baseQuery() -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,

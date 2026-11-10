@@ -37,6 +37,7 @@ final class HomeModel: ObservableObject {
             paymentTimes = ((try? await t)?.transactions ?? []).compactMap { parseDate($0.date) }
             error = nil
             checkNewlyPaid()
+            CalendarModel.shared.refresh(clients: clients, payments: payments)
         } catch {
             self.error = error.localizedDescription
         }
@@ -101,6 +102,8 @@ final class HomeModel: ObservableObject {
 struct HomeView: View {
     @EnvironmentObject var session: Session
     @StateObject private var model = HomeModel()
+    @StateObject private var ask = AskModel()
+    @ObservedObject private var calendar = CalendarModel.shared
     @Namespace private var folders
 
     var body: some View {
@@ -109,6 +112,7 @@ struct HomeView: View {
                 header
                 summaryCard
                 if !model.brief.isEmpty { briefCard }
+                if !calendar.today.isEmpty { todaySection }
                 keyboardCard
                 if let n = model.summary?.open_disputes, n > 0 { disputesRow(n) }
                 if let error = model.error {
@@ -121,11 +125,11 @@ struct HomeView: View {
         }
         .scrollIndicators(.hidden)
         .background(Theme.Color.bg.ignoresSafeArea())
-        .safeAreaInset(edge: .bottom) { AskBar() }
+        .safeAreaInset(edge: .bottom) { AskBar(model: ask) }
         .toolbar(.hidden, for: .navigationBar)
         .refreshable { await model.load() }
         .task { await model.load() }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in model.checkKeyboard() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in model.checkKeyboard(); calendar.refresh() }
         .overlay {
             if let p = model.raven {
                 RavenReturns(payment: p) { model.raven = nil }
@@ -179,6 +183,50 @@ struct HomeView: View {
         }
         .padding(.horizontal, Theme.Metric.cardInset)
         .accessibilityIdentifier("home.brief")
+    }
+
+    /// Today's appointments from the phone calendar. An ended one with no invoice today offers "Bill Sam?".
+    private var todaySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Today", count: calendar.today.count)
+            Card(padding: 0) {
+                TimelineView(.everyMinute) { now in
+                    VStack(spacing: 0) {
+                        ForEach(Array(calendar.today.enumerated()), id: \.element.id) { i, a in
+                            if i > 0 { Rectangle().fill(Theme.Color.hairline).frame(height: 1).padding(.horizontal, 18) }
+                            appointmentRow(a, ended: a.end <= now.date)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, Theme.Metric.cardInset)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.today")
+    }
+
+    private func appointmentRow(_ a: Appointment, ended: Bool) -> some View {
+        HStack(spacing: 14) {
+            Text(a.time).font(Theme.Font.body).monospacedDigit().foregroundStyle(ended ? Theme.Color.text3 : Theme.Color.text1)
+                .frame(width: 46, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(a.title).font(Theme.Font.body).foregroundStyle(Theme.Color.text1).lineLimit(1)
+                if let name = a.clientName ?? a.clientEmail {
+                    Text(name).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).lineLimit(1)
+                }
+            }
+            Spacer()
+            if a.clientName != nil || a.clientEmail != nil {
+                if a.billed {
+                    Text("Billed").font(Theme.Font.label).foregroundStyle(Theme.Color.paid)
+                } else if ended {
+                    AskChip(title: "Bill \(a.who)?", detail: nil) { ask.prefill(a.invoicePrefix + " $") }
+                        .accessibilityIdentifier("today.bill.\(a.who)")
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .frame(minHeight: Theme.Metric.rowHeight)
     }
 
     private var keyboardCard: some View {
@@ -317,6 +365,15 @@ final class AskModel: ObservableObject {
     @Published var text = ""
     @Published var state: State = .idle
     @Published var copied = false
+    /// Goes up each time the field must take focus with a prefilled request.
+    @Published var focusRequests = 0
+
+    /// Starts the invoice flow with the client filled in. Nothing is sent until the owner submits.
+    func prefill(_ request: String) {
+        text = request
+        state = .idle
+        focusRequests += 1
+    }
 
     /// The typed request goes through /v1/suggest, the same as typing in a chat.
     func submit() {
@@ -355,7 +412,8 @@ final class AskModel: ObservableObject {
 
 /// The prompt pill. Typed text gives the same chips as the keyboard; a tap runs the same action.
 struct AskBar: View {
-    @StateObject private var model = AskModel()
+    @ObservedObject var model: AskModel
+    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -365,6 +423,8 @@ struct AskBar: View {
                     .foregroundStyle(Theme.Color.text1)
                     .submitLabel(.send)
                     .onSubmit(model.submit)
+                    .focused($focused)
+                    .onChange(of: model.focusRequests) { focused = true }
                     .padding(.leading, 16)
                     .accessibilityIdentifier("ask.field")
                 Button(action: model.submit) { IconCircle(systemImage: model.state == .loading ? "ellipsis" : "arrow.up") }

@@ -65,6 +65,8 @@ struct IntegrationsView: View {
     @EnvironmentObject var session: Session
     @State private var items: [Integration] = []
     @State private var error: String?
+    @ObservedObject private var calendar = CalendarModel.shared
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         ScrollView {
@@ -86,9 +88,10 @@ struct IntegrationsView: View {
                     .padding(.horizontal, Theme.Metric.cardInset)
                     .accessibilityIdentifier("integration.\(i.id)")
                 }
+                calendarTile
                 SectionHeader(title: "Coming soon")
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                    ForEach(items.filter { $0.status == "coming_soon" }) { i in
+                    ForEach(items.filter { $0.status == "coming_soon" && $0.id != "google_calendar" }) { i in
                         Card(padding: 16) {
                             VStack(alignment: .leading, spacing: 10) {
                                 IconCircle(systemImage: icon(i.id), size: 36)
@@ -116,6 +119,34 @@ struct IntegrationsView: View {
         .task {
             do { items = try await APIClient.shared().integrations() } catch { self.error = error.localizedDescription }
         }
+    }
+
+    /// The phone calendar, read with EventKit. Google calendars synced to the phone come with it.
+    private var calendarTile: some View {
+        Card {
+            HStack(spacing: 14) {
+                IconCircle(systemImage: "calendar")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Calendar").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                    Text(calendar.connected ? "Connected · Apple + Google synced" : "Apple + Google synced").font(Theme.Font.label)
+                        .foregroundStyle(calendar.connected ? Theme.Color.paid : Theme.Color.text2)
+                }
+                Spacer()
+                if calendar.connected {
+                    Image(systemName: "checkmark").foregroundStyle(Theme.Color.paid)
+                } else if calendar.status == .notDetermined {
+                    AskChip(title: "Connect", detail: nil) { Task { await calendar.connect() } }
+                        .accessibilityIdentifier("calendar.connect")
+                } else {
+                    AskChip(title: "Open Settings", detail: nil) {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, Theme.Metric.cardInset)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("integration.calendar")
     }
 
     private func icon(_ id: String) -> String {

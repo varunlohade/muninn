@@ -420,4 +420,52 @@ final class FlowTests: XCTestCase {
         let left = text.label == "Type with the keyboard below" ? 0 : text.label.count
         XCTAssertLessThan(left, before - 5, "delete repeats on hold")
     }
+
+    /// Calendar: Connect on Integrations, the system prompt, then Home "Today" and "Bill Ava?".
+    /// "-calendarDemo" seeds four events for today. No model call: the prefilled request is not submitted.
+    func test15Calendar() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-calendarDemo"]
+        app.launch()
+        element(app, "identifier == %@", "nav.integrations").tap()
+        let connect = element(app, "identifier == %@", "calendar.connect")
+        if connect.waitForExistence(timeout: 5) {
+            shot("30-integrations-calendar-connect")
+            connect.tap()
+            let allow = springboard.buttons["Allow Full Access"]
+            XCTAssertTrue(allow.waitForExistence(timeout: 6), springboard.debugDescription)
+            allow.tap()
+        }
+        XCTAssertTrue(element(app, "label BEGINSWITH %@", "Connected ·").waitForExistence(timeout: 5), app.debugDescription)
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("31-integrations-calendar-connected")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Today"].waitForExistence(timeout: 10), app.debugDescription)
+        let bill = element(app, "identifier == %@", "today.bill.Ava")
+        XCTAssertTrue(bill.waitForExistence(timeout: 10), app.debugDescription)
+        if !bill.isHittable { app.swipeUp(velocity: .slow) }
+        Thread.sleep(forTimeInterval: 0.8)
+        shot("32-home-today")
+        bill.tap()
+        let field = element(app, "identifier == %@", "ask.field")
+        XCTAssertEqual(field.value as? String, "Invoice Ava Chen ava.chen@example.com $")
+        Thread.sleep(forTimeInterval: 0.8)
+        shot("33-bill-prefilled")
+    }
+
+    /// Our keyboard on the empty Messages search field shows the appointment snapshot. No model call.
+    func test16KeyboardAppointments() {
+        UIPasteboard.general.items = []
+        let messages = XCUIApplication(bundleIdentifier: "com.apple.MobileSMS")
+        messages.launch()
+        let search = messages.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        let ours = element(messages, "identifier == %@", "muninn.more")
+        for _ in 0..<4 where !ours.waitForExistence(timeout: 2) { element(messages, "label == %@", "Next keyboard").tap() }
+        XCTAssertTrue(ours.exists, messages.debugDescription)
+        XCTAssertTrue(element(messages, "identifier == %@", "chip.bill").waitForExistence(timeout: 5), messages.debugDescription)
+        XCTAssertTrue(element(messages, "label BEGINSWITH %@", "Next: ").exists, messages.debugDescription)
+        shot("34-keyboard-appointments")
+    }
 }

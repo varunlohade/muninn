@@ -59,6 +59,9 @@ struct SuggestionBar: View {
         switch model.bar {
         case .idle:
             if model.copiedAvailable { out.append(Item(id: "copied", title: "Use copied message", action: model.useCopied)) }
+            if let a = model.toBill { out.append(Item(id: "bill", title: "Invoice \(a.who)", action: { model.invoiceAppointment(a) })) }
+            if let a = model.nextUp { out.append(Item(id: "next", title: "Next: \(a.who) \(a.time)", tint: palette.secondaryLabel)) }
+            out = Array(out.prefix(3))
         case .chips(let chips, let fromCopied):
             for chip in chips.prefix(3 - min(out.count, 1)) {
                 out.append(Item(id: chip.kind, title: Self.title(chip), detail: Self.detail(chip, fromCopied: fromCopied), action: { model.tapChip(chip) }))
