@@ -331,6 +331,8 @@ function numbersIn(text: string): Set<string> {
 export function checkBrief(out: string, facts: string): string[] | null {
   const lines = out.split('\n').map((l) => clean(l).replace(/^(?:[-*•]|\d[.)])\s+/, '').trim()).filter(Boolean);
   if (lines.length < 1 || lines.length > 3 || lines.some((l) => l.length > 160)) return null;
+  // Muninn talks to the owner; it is not part of the business.
+  if (lines.some((l) => /\b(we|we're|we've|our|ours|us)\b/i.test(l))) return null;
   const allowed = numbersIn(facts);
   for (const n of numbersIn(lines.join(' '))) if (!allowed.has(n)) return null;
   return lines;

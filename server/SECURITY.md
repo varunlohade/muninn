@@ -48,5 +48,5 @@
 - The rate limiter lives in memory, so it resets on restart and does not span instances.
 - There is no key rotation yet. The `v1:` prefix leaves room for it.
 - CORS allows no origins by default. Set `CORS_ORIGINS` for a web client.
-- The server trusts `X-Forwarded-For` only with `TRUST_PROXY=1`, and then only the right-most hop. Failed webhook checks count per IP. Verified events have their own budget.
+- The server trusts `X-Forwarded-For` only with `TRUST_PROXY=1`, and then only the right-most hop. Behind Cloudflare (Render), set `CLIENT_IP_HEADER=cf-connecting-ip`, because there the right-most hop is the Cloudflare edge. Failed webhook checks count per IP. Verified events have their own budget.
 - `npm audit` still lists 12 issues. All of them come in through `@paypal/agent-toolkit` (langchain, ai-sdk, mathjs, uuid, its own zod 3). The only fix npm offers is a downgrade to toolkit 1.3.5.

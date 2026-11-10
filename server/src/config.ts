@@ -8,6 +8,8 @@ export const config = {
   dbPath: env.DB_PATH ?? new URL('../data/pro-keyboard.db', import.meta.url).pathname,
   corsOrigins: (env.CORS_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   trustProxy: env.TRUST_PROXY === '1',
+  // Behind Cloudflare (Render), X-Forwarded-For ends with the Cloudflare edge, so read the header Cloudflare sets instead.
+  clientIpHeader: (env.CLIENT_IP_HEADER ?? '').trim().toLowerCase(),
   bodyLimitBytes: 16 * 1024,
   maxTextChars: 2000,
   maxContextChars: 1000,

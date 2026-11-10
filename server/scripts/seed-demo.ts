@@ -7,7 +7,7 @@ import { config } from '../src/config.ts';
 import { createCipher, parseMasterKey, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
 import { createPayPalProvider } from '../src/paypal.ts';
-import { DEMO_LABEL, seedDemo, todaySpecs } from '../src/seed.ts';
+import { ensureDemoUser, seedDemo, todaySpecs } from '../src/seed.ts';
 
 const env = process.env as Record<string, string>;
 if (!config.paypal.sandbox) throw new Error('seed:demo runs against the PayPal sandbox only');
@@ -20,11 +20,10 @@ const db = openDb(config.dbPath);
 const cipher = createCipher(parseMasterKey(env.DATA_ENCRYPTION_KEY));
 const paypal = createPayPalProvider({ clientId: env.PAYPAL_CLIENT_ID, clientSecret: env.PAYPAL_CLIENT_SECRET });
 
-let userId = userArg ?? db.userForDeviceLabel(DEMO_LABEL);
-if (!userId) {
-  userId = db.createUser();
-  const token = randomToken('pkd');
-  db.addDevice(userId, sha256(token), DEMO_LABEL);
+const demo = userArg ? { userId: userArg, token: null } : ensureDemoUser(db);
+const userId = demo.userId;
+if (demo.token) {
+  const token = demo.token;
   // Written once to the git-ignored data dir, never printed. Re-runs reuse the user; `npm run device -- <user_id>` makes another token.
   const file = new URL('../data/demo-device.json', import.meta.url).pathname;
   writeFileSync(file, JSON.stringify({ user_id: userId, device_token: token }) + '\n', { mode: 0o600 });

@@ -1,0 +1,50 @@
+# Render Blueprint for the Muninn server. Sandbox PayPal only.
+# Secrets use sync: false, so Render asks for them in the dashboard. No value lives in this file.
+services:
+  - type: web
+    name: muninn-server
+    runtime: node
+    plan: starter
+    rootDir: server
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: false
+    # SQLite lives on the persistent disk. A service with a disk runs one instance and has no zero-downtime deploys.
+    disk:
+      name: muninn-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: HOST
+        value: 0.0.0.0
+      - key: DB_PATH
+        value: /var/data/pro-keyboard.db
+      - key: PAYPAL_ENV
+        value: sandbox
+      # Render sits behind Cloudflare. X-Forwarded-For there is "client, cloudflare-edge", so the right-most hop
+      # is the edge, not the client. CF-Connecting-IP is set by Cloudflare and is the key the rate limiter uses.
+      - key: TRUST_PROXY
+        value: "1"
+      - key: CLIENT_IP_HEADER
+        value: cf-connecting-ip
+      # Seeds the demo user on first boot and adds today's paid invoices every hour (in-process, idempotent).
+      - key: DEMO_SEED
+        value: "1"
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: TYPESAFE_API_KEY
+        sync: false
+      - key: TYPESAFE_MODEL
+        sync: false
+      # 64 hex chars (openssl rand -hex 32). Keep a copy: losing it makes stored names and emails unreadable.
+      - key: DATA_ENCRYPTION_KEY
+        sync: false

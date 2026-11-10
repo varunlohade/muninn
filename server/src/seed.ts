@@ -1,5 +1,5 @@
 import type { Cipher } from './crypto.ts';
-import { sha256 } from './crypto.ts';
+import { randomToken, sha256 } from './crypto.ts';
 import type { Db } from './db.ts';
 import type { PayPal } from './paypal.ts';
 import { centsToValue } from './money.ts';
@@ -63,6 +63,16 @@ export function todaySpecs(now: number): Spec[] {
 
 const ymd = (t: number) => new Date(t).toISOString().slice(0, 10);
 const startOfDay = (t: number) => Date.parse(`${ymd(t)}T00:00:00Z`);
+
+// Finds the demo user by its device label, or creates it. The token comes back only on creation; only its hash is stored.
+export function ensureDemoUser(db: Db): { userId: string; token: string | null } {
+  const existing = db.userForDeviceLabel(DEMO_LABEL);
+  if (existing) return { userId: existing, token: null };
+  const userId = db.createUser();
+  const token = randomToken('pkd');
+  db.addDevice(userId, sha256(token), DEMO_LABEL);
+  return { userId, token };
+}
 
 export type SeedResult = { created: number; recorded: number; reused: number };
 

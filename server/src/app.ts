@@ -63,6 +63,10 @@ function rateLimiter(bucket: keyof typeof config.rateLimit, keyOf: (c: Context<E
 }
 
 function clientIp(c: Context<Env>): string {
+  if (config.trustProxy && config.clientIpHeader) {
+    const ip = c.req.header(config.clientIpHeader)?.trim();
+    if (ip) return ip;
+  }
   if (config.trustProxy) {
     const hops = (c.req.header('x-forwarded-for') ?? '').split(',').map((h) => h.trim()).filter(Boolean);
     if (hops.length) return hops[hops.length - 1];

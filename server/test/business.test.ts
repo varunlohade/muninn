@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkBrief } from '../src/business.ts';
-import { DEMO_INVOICES, seedDemo, todaySpecs } from '../src/seed.ts';
+import { DEMO_INVOICES, ensureDemoUser, seedDemo, todaySpecs } from '../src/seed.ts';
 import type { PayPalDisputeDetail, PayPalTxn } from '../src/paypal.ts';
 import { paidEvent, setup, webhookHeaders } from './helpers.ts';
 
@@ -211,6 +211,8 @@ test('checkBrief: digits and number words must appear in the facts', () => {
   assert.deepEqual(checkBrief('No one paid late fees. A few clients are new.', facts), ['No one paid late fees. A few clients are new.']);
   assert.equal(checkBrief('2 invoices are late.', facts), null);
   assert.equal(checkBrief('Jordan owes $80.01.', facts), null);
+  assert.equal(checkBrief('We earned $1284 today.', facts), null);
+  assert.equal(checkBrief('Our late list: 3.', facts), null);
   assert.equal(checkBrief('Brought back $1284.50 today.', facts), null);
   assert.equal(checkBrief('a\nb\nc\nd', facts), null);
   assert.equal(checkBrief('', facts), null);
@@ -275,4 +277,13 @@ test('seed --refresh-today: two paid-today invoices per date, idempotent, new on
   assert.deepEqual(await today(T0 + DAY), { created: 2, recorded: 2, reused: 0 });
   const brief = (await get(s, s.A.token, '/v1/brief')).json;
   assert.match(brief.lines[0], /^Earned today: \$\d+/);
+});
+
+test('ensureDemoUser: token only on creation, stored as a hash', () => {
+  const s = world();
+  const first = ensureDemoUser(s.db);
+  assert.match(first.token!, /^pkd_/);
+  assert.deepEqual(ensureDemoUser(s.db), { userId: first.userId, token: null });
+  const rows = JSON.stringify(s.db.raw.prepare('SELECT * FROM devices').all());
+  assert.ok(!rows.includes(first.token!));
 });

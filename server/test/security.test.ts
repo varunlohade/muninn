@@ -116,6 +116,25 @@ test('L2: spoofed X-Forwarded-For does not dodge the limit, and verified events 
   }
 });
 
+test('L2: with CLIENT_IP_HEADER the Cloudflare header is the key, not the X-Forwarded-For edge hop', async () => {
+  config.trustProxy = true;
+  config.clientIpHeader = 'cf-connecting-ip';
+  try {
+    const p = setup({ verify: false });
+    const statuses: number[] = [];
+    for (let i = 0; i < config.rateLimit.webhook.limit + 5; i++) {
+      statuses.push((await p.call(null, 'POST', '/webhooks/paypal', paidEvent('INV2-X'),
+        { ...webhookHeaders, 'CF-Connecting-IP': '198.51.100.7', 'X-Forwarded-For': `198.51.100.7, 104.22.${i}.1` })).status);
+    }
+    assert.ok(statuses.includes(429), 'rotating edge hops must not dodge the limit');
+    const other = await p.call(null, 'POST', '/webhooks/paypal', paidEvent('INV2-X'), { ...webhookHeaders, 'CF-Connecting-IP': '203.0.113.9' });
+    assert.equal(other.status, 401);
+  } finally {
+    config.trustProxy = false;
+    config.clientIpHeader = '';
+  }
+});
+
 test('crypto: a truncated GCM tag is rejected (Node 26 already rejects it; authTagLength pins it)', () => {
   const master = randomBytes(32);
   const cipher = createCipher(master);
