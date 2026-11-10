@@ -245,3 +245,11 @@ func channelIcon(_ channels: [String]) -> String {
     if channels.contains("paypal") { return "dollarsign" }
     return "bubble.left.fill"
 }
+
+struct PressScale: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(configuration.isPressed ? Theme.Motion.press : .easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}

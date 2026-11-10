@@ -9,9 +9,37 @@ protocol TextHost: AnyObject {
     var contextBeforeInput: String? { get }
     var hasFullAccess: Bool { get }
     var needsGlobeKey: Bool { get }
+    var returnKeyType: UIReturnKeyType { get }
+    var autocapitalization: UITextAutocapitalizationType { get }
+    var enablesReturnKeyAutomatically: Bool { get }
     func insert(_ text: String)
     func deleteBackward()
     func nextKeyboard()
+    func playClick()
+}
+
+enum ShiftState { case off, once, locked }
+
+/// What the return key says, from the field's returnKeyType. Non-default types get the blue key, like iOS.
+struct ReturnStyle: Equatable {
+    let title: String?
+    let accent: Bool
+
+    init(_ type: UIReturnKeyType) {
+        switch type {
+        case .go: title = "go"
+        case .google, .yahoo, .search: title = "search"
+        case .join: title = "join"
+        case .next: title = "next"
+        case .route: title = "route"
+        case .send: title = "send"
+        case .done: title = "done"
+        case .emergencyCall: title = "Emergency"
+        case .continue: title = "continue"
+        default: title = nil
+        }
+        accent = title != nil && type != .next && type != .continue
+    }
 }
 
 enum BarState: Equatable {
@@ -36,8 +64,12 @@ final class KeyboardModel: ObservableObject {
     @Published var bar: BarState = .idle
     @Published var watch: Watch?
     @Published var copiedAvailable = false
-    @Published var shifted = true
-    @Published var symbols = false
+    @Published var layout: KeyLayout = .letters
+    @Published var shift: ShiftState = .once
+    @Published var isDark = false
+    @Published var pressedKeys: Set<String> = []
+    @Published var calloutKeyID: String?
+    @Published var returnStyle = ReturnStyle(.default)
     @Published var hasFullAccess = false
     @Published var paired = false
     @Published var lastLatencyMs: Int?
@@ -54,25 +86,159 @@ final class KeyboardModel: ObservableObject {
     func refreshAccess() {
         hasFullAccess = host?.hasFullAccess ?? false
         paired = hasFullAccess && SharedStore.deviceToken != nil
+        returnStyle = ReturnStyle(host?.returnKeyType ?? .default)
     }
 
-    // MARK: keys
+    // MARK: keys (touch model of the system keyboard)
 
-    func tapKey(_ s: String) {
-        host?.insert(shifted && !symbols ? s.uppercased() : s)
-        if shifted && !symbols { shifted = false }
-        textChanged()
+    private var active: [ObjectIdentifier: KeyCap] = [:]
+    private var lastShiftTap: Date?
+    private var lastSpaceTap: Date?
+    private var deleteTask: Task<Void, Never>?
+
+    func display(_ c: String) -> String { layout == .letters && shift != .off ? c.uppercased() : c }
+
+    func touchBegan(_ id: ObjectIdentifier, _ key: KeyCap) {
+        host?.playClick()
+        // A new touch commits any letter still held by another finger, like iOS.
+        for (other, k) in active where other != id { if case .char = k.kind { commit(k); release(other) } }
+        active[id] = key
+        pressedKeys.insert(key.id)
+        if case .char = key.kind { calloutKeyID = key.id }
+        if key.kind == .delete { deleteDown() }
     }
 
-    func tapSpace() { host?.insert(" "); textChanged() }
-    func tapReturn() { host?.insert("\n"); textChanged() }
-    func tapDelete() { host?.deleteBackward(); textChanged() }
+    func touchMoved(_ id: ObjectIdentifier, _ key: KeyCap) {
+        guard let current = active[id], current.id != key.id, case .char = current.kind, case .char = key.kind else { return }
+        pressedKeys.remove(current.id)
+        active[id] = key
+        pressedKeys.insert(key.id)
+        calloutKeyID = key.id
+    }
+
+    func touchEnded(_ id: ObjectIdentifier) {
+        guard let key = active[id] else { return }
+        release(id)
+        if key.kind == .delete { deleteTask?.cancel(); return }
+        commit(key)
+    }
+
+    func touchCancelled(_ id: ObjectIdentifier) {
+        if active[id]?.kind == .delete { deleteTask?.cancel() }
+        release(id)
+    }
+
+    /// VoiceOver activation and tests without touches.
+    func activate(_ key: KeyCap) {
+        host?.playClick()
+        if key.kind == .delete { host?.deleteBackward(); afterEdit(); return }
+        commit(key)
+    }
+
+    private func release(_ id: ObjectIdentifier) {
+        if let k = active.removeValue(forKey: id) {
+            pressedKeys.remove(k.id)
+            if calloutKeyID == k.id { calloutKeyID = nil }
+        }
+    }
+
+    private func commit(_ key: KeyCap) {
+        switch key.kind {
+        case .char(let c):
+            host?.insert(display(c))
+            if shift == .once && layout == .letters { shift = .off }
+            if layout != .letters && c == "'" { layout = .letters }
+            lastSpaceTap = nil
+            afterEdit()
+        case .shift:
+            let now = Date()
+            if shift == .locked { shift = .off }
+            else if let last = lastShiftTap, now.timeIntervalSince(last) < 0.35 { shift = .locked }
+            else { shift = shift == .off ? .once : .off }
+            lastShiftTap = now
+        case .mode(let to):
+            layout = to
+        case .space:
+            tapSpace()
+        case .ret:
+            host?.insert("\n")
+            lastSpaceTap = nil
+            afterEdit()
+        case .globe:
+            host?.nextKeyboard()
+        case .delete:
+            break
+        }
+    }
+
+    /// Double space after a word types ". ", like iOS. Space in 123 or #+= goes back to letters.
+    private func tapSpace() {
+        let now = Date()
+        let before = host?.contextBeforeInput ?? ""
+        if let last = lastSpaceTap, now.timeIntervalSince(last) < 0.45, before.hasSuffix(" "),
+           let prev = before.dropLast().last, prev.isLetter || prev.isNumber {
+            host?.deleteBackward()
+            host?.insert(". ")
+            lastSpaceTap = nil
+        } else {
+            host?.insert(" ")
+            lastSpaceTap = now
+        }
+        if layout != .letters { layout = .letters }
+        afterEdit()
+    }
+
+    /// Delete fires on touch down, repeats after 0.5 s, then speeds up to whole words.
+    private func deleteDown() {
+        host?.deleteBackward()
+        afterEdit()
+        deleteTask?.cancel()
+        deleteTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            var n = 0
+            while !Task.isCancelled, let self {
+                if n < 20 { self.host?.deleteBackward() } else { self.deleteWord() }
+                self.afterEdit()
+                n += 1
+                try? await Task.sleep(for: .milliseconds(n < 20 ? 100 : 250))
+            }
+        }
+    }
+
+    private func deleteWord() {
+        let before = host?.contextBeforeInput ?? ""
+        var count = 0
+        var seenWord = false
+        for ch in before.reversed() {
+            if ch.isWhitespace { if seenWord { break } } else { seenWord = true }
+            count += 1
+        }
+        for _ in 0..<max(count, 1) { host?.deleteBackward() }
+    }
+
+    private func afterEdit() { textChanged() }
+
+    /// Auto-capitalization follows the field's autocapitalizationType. Caps lock stays until tapped.
+    func updateAutoShift() {
+        guard shift != .locked else { return }
+        let raw = host?.contextBeforeInput ?? ""
+        let on: Bool
+        switch host?.autocapitalization ?? .sentences {
+        case .none: on = false
+        case .allCharacters: on = true
+        case .words: on = raw.isEmpty || raw.last?.isWhitespace == true
+        default: on = raw.trimmingCharacters(in: .whitespaces).isEmpty || [". ", "! ", "? ", "\n"].contains { raw.hasSuffix($0) }
+        }
+        if layout == .letters { shift = on ? .once : .off }
+    }
 
     // MARK: lifecycle
 
     /// On appear: note that the keyboard is on, offer copied text (without reading it), resume watching.
     func keyboardAppeared() {
         refreshAccess()
+        layout = .letters
+        updateAutoShift()
         guard hasFullAccess else { copiedAvailable = false; return }
         SharedStore.keyboardLastSeen = Date()
         guard paired else { return }
@@ -92,12 +258,11 @@ final class KeyboardModel: ObservableObject {
     /// Called on every edit, from our keys and from textDidChange.
     func textChanged() {
         refreshAccess()
+        updateAutoShift()
         guard paired else { return }
         if case .working = bar { return }
         if case .confirm = bar { return }
-        let raw = host?.contextBeforeInput ?? ""
-        shifted = raw.isEmpty || [". ", "! ", "? ", "\n"].contains { raw.hasSuffix($0) }
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard text != lastSent else { return }
         suggestTask?.cancel()
         guard !text.isEmpty else { lastSent = ""; bar = .idle; return }
@@ -182,42 +347,15 @@ final class KeyboardModel: ObservableObject {
     private func run(_ chip: Chip, confirmed: String?) {
         suggestTask?.cancel()
         bar = .working(chip.kind == "invoice" ? "Creating invoice…" : "Creating link…")
-        let who = if case .string(let v)? = chip.payload["client_name"] { v } else { "Client" }
         Task {
             do {
-                let insertion: String
-                let separator: String
-                let id: String
-                let money: String
-                switch chip.kind {
-                case "invoice":
-                    var payload = chip.payload
-                    if let confirmed { payload["confirm_recipient"] = .string(confirmed) }
-                    let res = try await api().invoice(payload)
-                    guard let link = res.pay_link else { bar = .error("No link came back"); return }
-                    // Item comes from the server-built chip, amount from the server's reply.
-                    let item = if case .string(let v)? = chip.payload["item"] { v } else { "your order" }
-                    money = formatMoney(res.amount, res.currency)
-                    insertion = "Here's your invoice for \(item) (\(money)): \(link)"
-                    separator = "\n"
-                    id = res.id
-                case "paylink":
-                    let res = try await api().payLink(chip.payload)
-                    guard let link = res.approve_link else { bar = .error("No link came back"); return }
-                    money = if case .string(let a)? = chip.payload["amount"], case .string(let c)? = chip.payload["currency"] { formatMoney(a, c) } else { "" }
-                    insertion = link
-                    separator = " "
-                    id = res.id
-                default:
-                    bar = .done("Open \(AppConfig.displayName) for this one")
-                    return
-                }
+                let r = try await ChipActions.run(chip, confirmed: confirmed, api: api())
                 let before = host?.contextBeforeInput ?? ""
                 let needsGap = !(before.last?.isWhitespace ?? true)
-                host?.insert((needsGap ? separator : "") + insertion)
+                host?.insert((needsGap ? (r.kind == "invoice" ? "\n" : " ") : "") + r.message)
                 lastSent = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 bar = .idle
-                watch = Watch(id: id, who: who, money: money)
+                watch = Watch(id: r.id, who: r.who, money: r.money)
                 startPolling()
             } catch APIError.needsConfirm(let recipient) {
                 bar = .confirm(chip, recipient: recipient)

@@ -9,6 +9,14 @@ final class HomeModel: ObservableObject {
     @Published var paymentTimes: [Date] = []
     @Published var error: String?
     @Published var raven: Payment?
+    @Published var keyboardOn = false
+
+    /// The keyboard writes a heartbeat to the App Group each time it appears (only possible with Full Access).
+    /// Seen within the last 14 days means it is installed and on.
+    static let heartbeatWindow: TimeInterval = 14 * 86_400
+    func checkKeyboard() {
+        keyboardOn = SharedStore.keyboardLastSeen.map { Date().timeIntervalSince($0) < Self.heartbeatWindow } ?? false
+    }
 
     private let briefKey = "brief_cache"
     private let paidKey = "known_paid_ids"
@@ -16,6 +24,7 @@ final class HomeModel: ObservableObject {
     static let briefTTL: TimeInterval = 600
 
     func load() async {
+        checkKeyboard()
         let api = APIClient.shared()
         async let s = api.summary()
         async let c = api.clients()
@@ -96,7 +105,7 @@ struct HomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 header
                 summaryCard
                 if !model.brief.isEmpty { briefCard }
@@ -108,7 +117,7 @@ struct HomeView: View {
                 clientsShelf
                 unpaidList
             }
-            .padding(.bottom, 96)
+            .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
         .background(Theme.Color.bg.ignoresSafeArea())
@@ -116,6 +125,7 @@ struct HomeView: View {
         .toolbar(.hidden, for: .navigationBar)
         .refreshable { await model.load() }
         .task { await model.load() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in model.checkKeyboard() }
         .overlay {
             if let p = model.raven {
                 RavenReturns(payment: p) { model.raven = nil }
@@ -134,7 +144,6 @@ struct HomeView: View {
         }
         .padding(.leading, Theme.Metric.margin)
         .padding(.trailing, Theme.Metric.cardInset)
-        .padding(.top, 8)
     }
 
     private var summaryCard: some View {
@@ -180,7 +189,7 @@ struct HomeView: View {
                 HStack(spacing: 14) {
                     IconCircle(systemImage: "keyboard")
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(SharedStore.keyboardLastSeen == nil ? "Turn on the keyboard" : "Keyboard is on")
+                        Text(model.keyboardOn ? "Keyboard is on" : "Turn on the keyboard")
                             .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                         if let b = model.broughtBack {
                             (Text("Brought back ") + Text(b.money).foregroundStyle(Theme.Color.paidInk).font(Theme.Font.urbanist(13, 600))
@@ -227,7 +236,7 @@ struct HomeView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 FolderView(papers: model.folderPapers(for: client), width: 160, channel: channelIcon(client.channels))
                                     .zoomSource(id: client.id, in: folders)
-                                    .padding(.top, 34)
+                                    .padding(.top, 26)
                                 Text(client.displayName).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1).padding(.top, 8)
                                 ClientLine(client: client)
                             }
@@ -300,25 +309,145 @@ struct PaymentRow: View {
     }
 }
 
-/// The prompt pill. There is no chat-command route on the server yet, so it only takes text for now.
+@MainActor
+final class AskModel: ObservableObject {
+    enum State: Equatable {
+        case idle, loading, chips([Chip]), confirm(Chip, String), working, result(ActionResult), error(String)
+    }
+    @Published var text = ""
+    @Published var state: State = .idle
+    @Published var copied = false
+
+    /// The typed request goes through /v1/suggest, the same as typing in a chat.
+    func submit() {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        state = .loading
+        Task {
+            do {
+                let chips = try await APIClient.shared().suggest(t).chips
+                state = chips.isEmpty ? .error("No action for that yet. Try \"invoice Sam $45 for a haircut\".") : .chips(chips)
+            } catch { state = .error(error.localizedDescription) }
+        }
+    }
+
+    func run(_ chip: Chip, confirmed: String? = nil) {
+        if confirmed == nil, chip.kind == "invoice", chip.needs_confirm, case .string(let email)? = chip.payload["client_email"] {
+            state = .confirm(chip, email)
+            return
+        }
+        state = .working
+        Task {
+            do {
+                state = .result(try await ChipActions.run(chip, confirmed: confirmed, api: APIClient.shared()))
+                text = ""
+            } catch APIError.needsConfirm(let r) {
+                state = .confirm(chip, r)
+            } catch { state = .error(error.localizedDescription) }
+        }
+    }
+
+    func copy(_ link: String) {
+        UIPasteboard.general.string = link
+        copied = true
+    }
+}
+
+/// The prompt pill. Typed text gives the same chips as the keyboard; a tap runs the same action.
 struct AskBar: View {
-    @State private var text = ""
+    @StateObject private var model = AskModel()
 
     var body: some View {
-        HStack(spacing: 6) {
-            TextField("", text: $text, prompt: Text("Ask Muninn to invoice or remind").foregroundStyle(Theme.Color.text3))
-                .font(Theme.Font.body)
-                .foregroundStyle(Theme.Color.text1)
-                .padding(.leading, 22)
-            IconCircle(systemImage: "mic")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                TextField("", text: $model.text, prompt: Text("Ask Muninn to invoice or remind").foregroundStyle(Theme.Color.text3))
+                    .font(Theme.Font.body)
+                    .foregroundStyle(Theme.Color.text1)
+                    .submitLabel(.send)
+                    .onSubmit(model.submit)
+                    .padding(.leading, 16)
+                    .accessibilityIdentifier("ask.field")
+                Button(action: model.submit) { IconCircle(systemImage: model.state == .loading ? "ellipsis" : "arrow.up") }
+                    .buttonStyle(PressScale())
+                    .accessibilityLabel("Ask")
+            }
+            content
         }
-        .frame(height: 56)
-        .padding(.trailing, 6)
-        .background(Theme.Color.card, in: Capsule())
-        .overlay(Capsule().strokeBorder(Theme.Color.edge, lineWidth: 1))
+        .padding(6)
+        .background(Theme.Color.card, in: RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
         .padding(.horizontal, Theme.Metric.cardInset)
         .padding(.bottom, 4)
-        .background(LinearGradient(colors: [Theme.Color.bg.opacity(0), Theme.Color.bg], startPoint: .top, endPoint: .center).ignoresSafeArea())
+        .background(Theme.Color.bg.ignoresSafeArea(edges: .bottom))
+        .animation(Theme.Motion.chipAppear, value: model.state)
+    }
+
+    @ViewBuilder private var content: some View {
+        switch model.state {
+        case .idle, .loading:
+            EmptyView()
+        case .chips(let chips):
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(chips) { chip in
+                        AskChip(title: SuggestionBar.title(chip), detail: SuggestionBar.detail(chip, fromCopied: false)) { model.run(chip) }
+                            .accessibilityIdentifier("ask.chip.\(chip.kind)")
+                    }
+                }
+                .padding(.horizontal, 10)
+            }
+            .padding(.bottom, 6)
+        case .confirm(let chip, let email):
+            HStack(spacing: 8) {
+                AskChip(title: "Send to \(email)", detail: nil) { model.run(chip, confirmed: email) }
+                AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+            }
+            .padding(.horizontal, 10).padding(.bottom, 6)
+        case .working:
+            Text("Creating…").font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, 16).padding(.bottom, 8)
+        case .result(let r):
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "checkmark").foregroundStyle(Theme.Color.paid)
+                    Text(r.kind == "invoice" ? "Invoice sent · \(r.money)" : "Pay link ready · \(r.money)").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                }
+                Text(r.link).font(Theme.Font.paper(12)).foregroundStyle(Theme.Color.text2).lineLimit(2).textSelection(.enabled)
+                    .accessibilityIdentifier("ask.link")
+                HStack(spacing: 8) {
+                    Button(model.copied ? "Copied" : "Copy link") { model.copy(r.link) }
+                        .buttonStyle(PrimaryButton())
+                        .accessibilityIdentifier("ask.copy")
+                    Button("Done") { model.state = .idle; model.copied = false }
+                        .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text2).frame(width: 80, height: 48)
+                }
+            }
+            .padding(.horizontal, 12).padding(.bottom, 8)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("ask.result")
+        case .error(let e):
+            Text(e).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, 16).padding(.bottom, 8)
+        }
+    }
+}
+
+struct AskChip: View {
+    let title: String
+    let detail: String?
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title).font(Theme.Font.urbanist(15, 600)).foregroundStyle(Theme.Color.text1)
+                if let detail { Text(detail).font(Theme.Font.urbanist(11, 500)).foregroundStyle(Theme.Color.text3) }
+            }
+            .lineLimit(1)
+            .padding(.horizontal, 14)
+            .frame(height: Theme.Metric.chipHeight + (detail == nil ? 0 : 6))
+            .background(Theme.Color.button, in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.Color.chipEdge, lineWidth: 1))
+        }
+        .buttonStyle(PressScale())
     }
 }
 

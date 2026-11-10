@@ -49,6 +49,43 @@ enum Theme {
         static let count = urbanist(13, 600)
     }
 
+    /// The keyboard copies the iOS 26 system keyboard (measured on the iPhone 17 Pro simulator, 402 pt wide).
+    /// Our own look comes later; for now it is a replica, light and dark.
+    enum SystemKeyboard {
+        struct Palette {
+            let bed: SwiftUI.Color, key: SwiftUI.Color, keyPressed: SwiftUI.Color, label: SwiftUI.Color
+            let divider: SwiftUI.Color, secondaryLabel: SwiftUI.Color, accent: SwiftUI.Color
+        }
+        static let light = Palette(bed: SwiftUI.Color(hex: 0xE2E4E7), key: .white, keyPressed: SwiftUI.Color(hex: 0xB9BDC6),
+                                   label: .black, divider: SwiftUI.Color(hex: 0xD0D2D7), secondaryLabel: SwiftUI.Color(hex: 0x6E6E73),
+                                   accent: SwiftUI.Color(hex: 0x0088FF))
+        static let dark = Palette(bed: SwiftUI.Color(hex: 0x171717), key: SwiftUI.Color(hex: 0x3D3D3D), keyPressed: SwiftUI.Color(hex: 0x6A6A6A),
+                                  label: .white, divider: SwiftUI.Color(hex: 0x323234), secondaryLabel: SwiftUI.Color(hex: 0x98989D),
+                                  accent: SwiftUI.Color(hex: 0x0091FF))
+
+        static let sideInset: CGFloat = 6.5
+        static let keyGap: CGFloat = 6
+        static let keyHeight: CGFloat = 43
+        static let rowGap: CGFloat = 11
+        static let barHeight: CGFloat = 51.33
+        static let bottomInset: CGFloat = 3.33
+        static let cornerRadius: CGFloat = 8.5
+        static let wideKey: CGFloat = 45.5      // shift, delete, #+=
+        static let modeKey: CGFloat = 43.5      // 123 / ABC
+        static let returnKey: CGFloat = 93.2
+        static let dividerHeight: CGFloat = 24
+        static var height: CGFloat { barHeight + 4 * keyHeight + 3 * rowGap + bottomInset }
+
+        static let letter = SwiftUI.Font.system(size: 22.5, weight: .regular)
+        static let symbol = SwiftUI.Font.system(size: 22.5, weight: .regular)
+        static let mode = SwiftUI.Font.system(size: 17, weight: .regular)
+        static let smallMode = SwiftUI.Font.system(size: 13, weight: .regular)
+        static let icon = SwiftUI.Font.system(size: 18, weight: .regular)
+        static let callout = SwiftUI.Font.system(size: 40, weight: .regular)
+        static let prediction = SwiftUI.Font.system(size: 17, weight: .regular)
+        static let predictionSmall = SwiftUI.Font.system(size: 12, weight: .regular)
+    }
+
     /// The keyboard extension ships no custom fonts, to stay light on memory.
     enum KeyboardFont {
         static let chipKey = SwiftUI.Font.system(size: 15, weight: .semibold)

@@ -305,4 +305,106 @@ final class FlowTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.9)
         shot("22-raven-returns")
     }
+
+    /// Screens of a keyboard in an empty Messages field: letters, then 123. KB=system or ours; NAME is the file prefix.
+    func test11KeyboardScreens() {
+        let which = env["KB"] ?? "system"
+        let name = env["NAME"] ?? "kb"
+        let messages = XCUIApplication(bundleIdentifier: "com.apple.MobileSMS")
+        messages.activate()
+        let convo = messages.cells.firstMatch
+        if convo.waitForExistence(timeout: 2) && convo.isHittable { convo.tap() }
+        let field = messages.textFields["messageBodyField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        let ours = element(messages, "identifier == %@", "muninn.more")
+        func isWanted() -> Bool { which == "ours" ? ours.exists : (messages.keys["q"].exists || messages.keys["Q"].exists) }
+        for _ in 0..<5 where !({ Thread.sleep(forTimeInterval: 1.2); return isWanted() }()) {
+            element(messages, "label == %@", "Next keyboard").tap()
+        }
+        XCTAssertTrue(isWanted(), "keyboard \(which) not shown")
+        XCTAssertTrue((field.value as? String ?? "").isEmpty || field.value as? String == "iMessage", "field not empty")
+        Thread.sleep(forTimeInterval: 0.8)
+        shot("\(name)-letters")
+        let more = which == "ours" ? ours : messages.keys["more"]
+        if more.exists { more.tap() } else { print("KEYS", messages.keys.allElementsBoundByIndex.map(\.label)) }
+        Thread.sleep(forTimeInterval: 0.8)
+        shot("\(name)-123")
+        if more.exists { more.tap() }
+    }
+
+    /// Home after the fixes, then the Ask bar: one /v1/suggest call, tap the invoice chip, result card with Copy.
+    func test12HomeAndAsk() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Keyboard is on"].waitForExistence(timeout: 15), app.debugDescription)
+        _ = element(app, "identifier == %@", "home.brief").waitForExistence(timeout: 15)
+        Thread.sleep(forTimeInterval: 1)
+        shot("24-home-fixed")
+        app.swipeUp()
+        Thread.sleep(forTimeInterval: 0.8)
+        shot("25-home-scrolled")
+        let field = element(app, "identifier == %@", "ask.field")
+        field.tap()
+        // Leave our own keyboard (it would send each keystroke) for the system one on the empty field.
+        for _ in 0..<4 where !(app.keys["q"].waitForExistence(timeout: 1.5) || app.keys["Q"].exists) {
+            element(app, "label == %@", "Next keyboard").tap()
+        }
+        field.typeText("invoice Sam Okafor $45 for a haircut sam.okafor@example.com\n")
+        let chip = element(app, "identifier == %@", "ask.chip.invoice")
+        XCTAssertTrue(chip.waitForExistence(timeout: 20), app.debugDescription)
+        shot("26-ask-chips")
+        chip.tap()
+        XCTAssertTrue(element(app, "identifier == %@", "ask.copy").waitForExistence(timeout: 30), app.debugDescription)
+        element(app, "identifier == %@", "ask.copy").tap()
+        Thread.sleep(forTimeInterval: 0.6)
+        shot("27-ask-result")
+    }
+
+    func test13HomeOnly() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Keyboard is on"].waitForExistence(timeout: 15))
+        _ = element(app, "identifier == %@", "home.brief").waitForExistence(timeout: 10)
+        Thread.sleep(forTimeInterval: 1)
+        shot("24-home-fixed")
+    }
+
+    /// Keyboard Lab with no Full Access (no network): auto-caps, double space, caps lock, delete repeat, callout.
+    func test14KeysOffline() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-labOffline"]
+        app.launch()
+        element(app, "identifier == %@", "nav.integrations").tap()
+        app.swipeUp()
+        tap(app, ["Keyboard Lab (debug)"])
+        let text = element(app, "identifier == %@", "lab.text")
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        func key(_ c: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ AND identifier BEGINSWITH 'k.'", c)).firstMatch
+        }
+        for c in ["h", "e", "l", "l", "o"] { key(c).tap() }
+        element(app, "identifier == %@", "space").doubleTap()
+        XCTAssertEqual(text.label, "Hello. ", "auto-caps + double space")
+        element(app, "identifier == %@", "shift").doubleTap()
+        key("o").tap(); key("k").tap()
+        XCTAssertEqual(text.label, "Hello. OK", "caps lock")
+        element(app, "identifier == %@", "shift").tap()
+        key("a").tap()
+        XCTAssertEqual(text.label, "Hello. OKa", "caps lock off")
+        element(app, "identifier == %@", "muninn.more").tap()
+        element(app, "label == %@", "4").tap()
+        element(app, "identifier == %@", "space").tap()
+        XCTAssertTrue(key("q").waitForExistence(timeout: 2), "space in 123 returns to letters")
+        shot("28-lab-keys")
+        print("PRESS_START", Date().timeIntervalSince1970)
+        key("g").press(forDuration: 3)
+        print("PRESS_END", Date().timeIntervalSince1970)
+        let before = text.label.count
+        element(app, "identifier == %@", "delete").press(forDuration: 2.5)
+        print("LAB_TEXT_AFTER_DELETE", text.label)
+        // An empty field shows the placeholder, so empty counts as zero characters left.
+        let left = text.label == "Type with the keyboard below" ? 0 : text.label.count
+        XCTAssertLessThan(left, before - 5, "delete repeats on hold")
+    }
 }

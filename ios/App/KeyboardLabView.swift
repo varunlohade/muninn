@@ -38,8 +38,13 @@ final class LabHost: ObservableObject, TextHost {
     }
 
     var contextBeforeInput: String? { text }
-    var hasFullAccess: Bool { true }
+    /// DEBUG "-labOffline": no Full Access, so no network; used to test the keys without model calls.
+    var hasFullAccess: Bool { !ProcessInfo.processInfo.arguments.contains("-labOffline") }
     var needsGlobeKey: Bool { false }
+    var returnKeyType: UIReturnKeyType { .default }
+    var autocapitalization: UITextAutocapitalizationType { .sentences }
+    var enablesReturnKeyAutomatically: Bool { false }
+    func playClick() {}
     func insert(_ s: String) { text += s }
     func deleteBackward() { if !text.isEmpty { text.removeLast() } }
     func nextKeyboard() {}
