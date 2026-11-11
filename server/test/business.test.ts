@@ -27,7 +27,7 @@ const get = async (s: ReturnType<typeof world>, token: string, path: string) => 
   return { status: r.status, json: await r.json() as any };
 };
 
-test('integrations: PayPal connected with encrypted config, others coming soon; per user', async () => {
+test('integrations: PayPal and supplier payouts connected with encrypted config, others coming soon; per user', async () => {
   const s = world();
   const { json } = await get(s, s.A.token, '/v1/integrations');
   const byId = Object.fromEntries(json.integrations.map((i: any) => [i.id, i]));
@@ -38,7 +38,8 @@ test('integrations: PayPal connected with encrypted config, others coming soon; 
   assert.equal(byId.contacts.status, 'on_device');
   assert.equal(byId.contacts.description, "Pick a client's email from your contacts. Stays on this phone.");
   for (const id of ['slack', 'google_reviews']) assert.equal(byId[id].status, 'not_connected');
-  for (const id of ['reminders', 'paypal_payouts', 'calendly', 'google_calendar', 'shopify']) {
+  assert.equal(byId.paypal_payouts.status, 'connected', 'payouts go through the PayPal connection');
+  for (const id of ['reminders', 'calendly', 'google_calendar', 'shopify']) {
     assert.equal(byId[id].status, 'coming_soon');
     assert.equal(byId[id].connected_at, null);
   }

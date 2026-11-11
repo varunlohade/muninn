@@ -33,7 +33,10 @@ export const PROVIDERS: Provider[] = [
   { id: 'google_reviews', name: 'Google reviews', description: 'Paste your review link. Muninn adds it to thank-you messages.', capabilities: ['review_link'], available: true, where: 'server' },
   { id: 'slack', name: 'Slack', description: 'Get a message when a client pays.', capabilities: ['payment_alerts'], available: true, where: 'server' },
   { id: 'reminders', name: 'Reminders', description: null, capabilities: ['device_reminders'], available: false, where: 'device' },
-  { id: 'paypal_payouts', name: 'Supplier payouts (PayPal)', description: null, capabilities: ['supplier_payouts'], available: false, where: 'server' },
+  {
+    id: 'paypal_payouts', name: 'Supplier payouts (PayPal)', description: 'Pay a supplier from the keyboard: "pay joe $200 joe@x.com".',
+    capabilities: ['supplier_payouts'], available: true, where: 'server',
+  },
   { id: 'calendly', name: 'Calendly', description: null, capabilities: ['bookings'], available: false, where: 'server' },
   { id: 'google_calendar', name: 'Google Calendar', description: null, capabilities: ['bookings'], available: false, where: 'server' },
   { id: 'shopify', name: 'Shopify orders', description: null, capabilities: ['store_orders'], available: false, where: 'server' },
@@ -64,10 +67,11 @@ export function createIntegrations(db: Db, cipher: Cipher, now: () => number, pa
 
   function list(userId: string): IntegrationView[] {
     ensureDefaults(userId);
-    // Google reviews is the review link on the profile; the others have their own row.
+    // Google reviews is the review link on the profile; supplier payouts ride on the PayPal row; the others have their own row.
     const reviewLink = !!db.getProfile(userId)?.review_url;
-    const connected = (id: string, r: { status: string } | undefined) => (id === 'google_reviews' ? reviewLink : r?.status === 'connected');
     const rows = new Map(db.listIntegrations(userId).map((r) => [r.provider, r]));
+    const connected = (id: string, r: { status: string } | undefined) =>
+      (id === 'google_reviews' ? reviewLink : (id === 'paypal_payouts' ? rows.get('paypal') : r)?.status === 'connected');
     const own = paypalLabel(userId);
     const describe = (p: Provider) => p.id !== 'paypal' ? p.description
       : own ? `PayPal connected \u00B7 ${own}` : 'Demo PayPal (sandbox)';

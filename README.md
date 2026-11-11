@@ -22,7 +22,7 @@ Hono server (Node 24, SQLite, per-user encryption)
 - The keyboard sends the typed text to `/v1/suggest`. The server returns chips. It never moves money on its own.
 - A tap on a chip calls `/v1/actions/*`. Each action needs a tap header and an idempotency key.
 - `/v1/summary`, `/v1/transactions`, `/v1/clients`, `/v1/disputes` and `/v1/brief` power the app home screen.
-- `/v1/integrations` lists PayPal (live), Contacts (on the phone only), Google reviews and Slack. Reminders, Supplier payouts (PayPal), Calendly, Google Calendar and Shopify orders show as "coming soon".
+- `/v1/integrations` lists PayPal (live), Supplier payouts through PayPal (live), Contacts (on the phone only), Google reviews and Slack. Reminders, Calendly, Google Calendar and Shopify orders show as "coming soon".
 
 ## Run it locally
 
