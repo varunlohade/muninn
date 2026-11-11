@@ -31,6 +31,12 @@ export type PayPal = {
   recordRefund(id: string, r: { date: string; value: string; currency: string; method: string }, requestId: string): Promise<{ refundId: string }>;
   /** Every currency the account holds. Read-only. */
   getBalances(): Promise<Balance[]>;
+  /** Sends money to one email. MONEY: the caller confirms recipient, amount and currency first. */
+  createPayout(p: { email: string; value: string; currency: string; note: string }, requestId: string): Promise<{ batchId: string; status: string }>;
+  /** The one item of a payout batch, or null while PayPal has not made it yet. */
+  getPayoutItem(batchId: string): Promise<{ itemId: string; status: string } | null>;
+  /** Only an UNCLAIMED item can be cancelled; the money goes back to the sender. */
+  cancelPayoutItem(itemId: string, requestId: string): Promise<{ status: string }>;
 };
 export type Balance = { currency: string; available: string; primary: boolean };
 export type SubscriptionState = { status: string; nextBillingAt: string | null; lastPaidAt: string | null };
@@ -345,6 +351,27 @@ function createClient(creds: Creds): PayPal {
       return (r?.balances ?? []).filter((b: any) => b?.currency && b?.available_balance?.value != null).map((b: any) => ({
         currency: String(b.currency), available: String(b.available_balance.value), primary: !!b.primary,
       }));
+    },
+
+    async createPayout(p, requestId) {
+      const r = await rest('POST', '/v1/payments/payouts', {
+        sender_batch_header: { sender_batch_id: requestId, email_subject: 'You have a payment', email_message: p.note.slice(0, 1000) },
+        items: [{ recipient_type: 'EMAIL', receiver: p.email, amount: { value: p.value, currency: p.currency }, note: p.note.slice(0, 4000), sender_item_id: requestId.slice(0, 63) }],
+      }, requestId);
+      const batchId = String(r?.batch_header?.payout_batch_id ?? '');
+      if (!batchId) throw new PayPalError('PayPal returned no payout batch id', 502);
+      return { batchId, status: String(r?.batch_header?.batch_status ?? 'PENDING') };
+    },
+
+    async getPayoutItem(batchId) {
+      const r = await rest('GET', `/v1/payments/payouts/${encodeURIComponent(batchId)}`);
+      const it = r?.items?.[0];
+      return it?.payout_item_id ? { itemId: String(it.payout_item_id), status: String(it.transaction_status ?? 'PENDING') } : null;
+    },
+
+    async cancelPayoutItem(itemId, requestId) {
+      const r = await rest('POST', `/v1/payments/payouts-item/${encodeURIComponent(itemId)}/cancel`, {}, requestId);
+      return { status: String(r?.transaction_status ?? 'RETURNED') };
     },
 
     async sendDisputeMessage(id, message, requestId) {

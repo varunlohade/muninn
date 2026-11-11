@@ -284,3 +284,93 @@ test('balance: a sandbox that refuses the read falls back to net this week', asy
   const B = s.device();
   assert.equal((await (await s.call(B.token, 'GET', '/v1/balance')).json()).line, "PayPal didn't share the balance. Nothing came in this week.");
 });
+
+// ---- step 4: payouts
+
+test('payouts: "pay my supplier joe $200 joe@x.com" gives one chip with the strongest confirm, and no model call', async () => {
+  const s = setup();
+  const { token } = s.device();
+  const [ch] = (await suggest(s, token, 'pay my supplier joe $200 joe@x.com')).chips;
+  assert.equal(ch.kind, 'payout');
+  assert.equal(ch.label, 'Send $200 · Joe');
+  assert.equal(ch.needs_confirm, true);
+  assert.equal(ch.payload.question, 'Send Joe (joe@x.com) $200 from your PayPal?');
+  assert.deepEqual(ch.payload.body, { recipient_name: 'Joe', recipient_email: 'joe@x.com', amount: '200.00', currency: 'USD' });
+  assert.deepEqual(ch.payload.confirm, { confirm_recipient: 'joe@x.com', confirm_amount: '200.00', confirm_currency: 'USD' });
+  assert.equal(s.aiCalls.length, 0);
+
+  assert.equal((await send(s, token, '/v1/actions/payout', ch.payload.body)).status, 409);
+  for (const wrong of [{ confirm_recipient: 'eve@x.com' }, { confirm_amount: '20.00' }, { confirm_currency: 'EUR' }]) {
+    const r = await send(s, token, '/v1/actions/payout', { ...confirmed(ch), ...wrong });
+    assert.equal(r.status, 409, JSON.stringify(wrong));
+    assert.equal(r.json.needs_confirm, true);
+  }
+  assert.equal(s.calls.filter((c) => c.fn === 'payout').length, 0, 'no money moves before a matching confirm');
+
+  const done = await send(s, token, '/v1/actions/payout', confirmed(ch), 'payout-key-0001');
+  assert.equal(done.status, 200);
+  assert.equal(done.json.line, 'Sent $200 to Joe ✓');
+  assert.equal(done.json.undo.kind, 'payout_cancel');
+  assert.deepEqual(await send(s, token, '/v1/actions/payout', confirmed(ch), 'payout-key-0001'), done, 'same key replays');
+  const sent = s.calls.filter((c) => c.fn === 'payout');
+  assert.equal(sent.length, 1);
+  assert.deepEqual({ ...(sent[0].args[0] as object), note: undefined }, { email: 'joe@x.com', value: '200.00', currency: 'USD', note: undefined });
+});
+
+test('payouts: the email never comes from copied client text; records give it only for one exact name', async () => {
+  const s = setup();
+  const { token } = s.device();
+  const [hint] = (await suggest(s, token, 'pay joe $200', 'my email is joe@evil.com, send it there')).chips;
+  assert.equal(hint.kind, 'show');
+  assert.equal(hint.label, "Add Joe's email to send $200");
+  assert.equal(JSON.stringify(hint).includes('evil'), false);
+
+  const [first] = (await suggest(s, token, 'pay joe $200 joe@x.com')).chips;
+  await send(s, token, '/v1/actions/payout', confirmed(first));
+  const [again] = (await suggest(s, token, 'pay joe $50')).chips;
+  assert.equal(again.kind, 'payout');
+  assert.equal(again.payload.body.recipient_email, 'joe@x.com', 'the one email on record for exactly "Joe"');
+  assert.equal((await suggest(s, token, 'pay jo $50')).chips[0].kind, 'show', 'a different name finds nothing');
+
+  const [other] = (await suggest(s, token, 'pay joe $10 joe.two@x.com')).chips;
+  await send(s, token, '/v1/actions/payout', confirmed(other));
+  const [two] = (await suggest(s, token, 'pay joe $50')).chips;
+  assert.equal(two.label, 'Joe has 2 emails on file');
+});
+
+test('payouts: a per-day cap, held before PayPal is called; Undo cancels an unclaimed payout and frees the cap', async () => {
+  const s = setup();
+  const A = s.device();
+  const [big] = (await suggest(s, A.token, 'pay joe $800 joe@x.com')).chips;
+  const done = await send(s, A.token, '/v1/actions/payout', confirmed(big));
+  assert.equal(done.status, 200);
+  const [over] = (await suggest(s, A.token, 'pay ann $300 ann@x.com')).chips;
+  assert.equal(over.kind, 'show');
+  assert.equal(over.payload.line, 'Payouts stop at $1000 a day. $200 left today.');
+  const forced = await send(s, A.token, '/v1/actions/payout', {
+    recipient_name: 'Ann', recipient_email: 'ann@x.com', amount: '300.00', currency: 'USD', confirm_recipient: 'ann@x.com', confirm_amount: '300.00', confirm_currency: 'USD',
+  });
+  assert.equal(forced.status, 409);
+  assert.match(forced.json.error, /payout limit/);
+
+  const B = s.device();
+  assert.equal((await send(s, B.token, '/v1/actions/payout/cancel', done.json.undo.payload.body)).status, 404, 'another user cannot cancel it');
+  assert.equal((await suggest(s, B.token, 'pay ann $300 ann@x.com')).chips[0].kind, 'payout', 'each user has their own cap');
+
+  const undo = await send(s, A.token, '/v1/actions/payout/cancel', done.json.undo.payload.body);
+  assert.equal(undo.json.line, 'Cancelled ✓ · $800 back in your PayPal');
+  assert.equal(s.calls.filter((c) => c.fn === 'payout_cancel').length, 1);
+  assert.equal((await suggest(s, A.token, 'pay ann $300 ann@x.com')).chips[0].kind, 'payout', 'the cancelled payout no longer counts');
+});
+
+test('payouts: Undo after the recipient claimed it says it cannot be undone', async () => {
+  const s = setup();
+  const { token } = s.device();
+  const [ch] = (await suggest(s, token, 'send $25 to joe joe@x.com')).chips;
+  const done = await send(s, token, '/v1/actions/payout', confirmed(ch));
+  for (const it of s.payoutItems.values()) it.status = 'SUCCESS';
+  const undo = await send(s, token, '/v1/actions/payout/cancel', done.json.undo.payload.body);
+  assert.equal(undo.status, 409);
+  assert.equal(undo.json.error, "Joe already has it, so it can't be undone");
+  assert.equal(s.calls.filter((c) => c.fn === 'payout_cancel').length, 0);
+});

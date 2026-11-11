@@ -20,6 +20,8 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
   const subStatus = new Map<string, string>();
   // What the balance read answers: the balances, or an error such as a sandbox that refuses it.
   const balance: { reply: Balance[] | Error } = { reply: [{ currency: 'USD', available: '1240.50', primary: true }] };
+  // Each payout batch's one item. A test sets status to SUCCESS to play a recipient who already claimed it.
+  const payoutItems = new Map<string, { itemId: string; status: string }>();
   const pp: PayPal = {
     async createAndSendInvoice(...args) {
       calls.push({ fn: 'invoice', args });
@@ -60,6 +62,19 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     async deleteRecordedPayment(...args) { calls.push({ fn: 'delete_payment', args }); },
     async cancelInvoice(...args) { calls.push({ fn: 'cancel_invoice', args }); },
     async recordRefund(...args) { calls.push({ fn: 'record_refund', args }); return { refundId: `RFX-${++n}` }; },
+    async createPayout(...args) {
+      calls.push({ fn: 'payout', args });
+      await sleep(opts.paypalDelayMs);
+      const batchId = `BATCH-${++n}`;
+      payoutItems.set(batchId, { itemId: `ITEM-${n}`, status: 'UNCLAIMED' });
+      return { batchId, status: 'PENDING' };
+    },
+    async getPayoutItem(batchId) { calls.push({ fn: 'payout_item', args: [batchId] }); return payoutItems.get(batchId) ?? null; },
+    async cancelPayoutItem(...args) {
+      calls.push({ fn: 'payout_cancel', args });
+      for (const it of payoutItems.values()) if (it.itemId === args[0]) it.status = 'RETURNED';
+      return { status: 'RETURNED' };
+    },
     async getBalances() {
       calls.push({ fn: 'balances', args: [] });
       if (balance.reply instanceof Error) throw balance.reply;
@@ -131,7 +146,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  return { db, cipher, app, calls, aiCalls, device, call, ppData, mockPayPal: pp, subStatus, balance };
+  return { db, cipher, app, calls, aiCalls, device, call, ppData, mockPayPal: pp, subStatus, balance, payoutItems };
 }
 
 export const webhookHeaders = {

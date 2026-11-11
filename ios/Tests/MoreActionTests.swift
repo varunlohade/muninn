@@ -134,6 +134,28 @@ final class MoreActionTests: XCTestCase {
         XCTAssertEqual(model.bar, .done("Ana $40/mo \u{00B7} active"))
     }
 
+    func testPayoutAsksWithRecipientAmountAndCurrencyAndKeepsItsKeyUntilTheAnswer() async {
+        let send = action("payout", "Send $200 \u{00B7} Joe",
+                          body: ["recipient_name": .string("Joe"), "recipient_email": .string("joe@x.com"), "amount": .string("200.00"), "currency": .string("USD")],
+                          confirm: ["confirm_recipient": .string("joe@x.com"), "confirm_amount": .string("200.00"), "confirm_currency": .string("USD")],
+                          question: "Send Joe (joe@x.com) $200 from your PayPal?")
+        XCTAssertTrue(ChipActions.sendsMoney.contains("payout"))
+        model.tapChip(send)
+        XCTAssertEqual(api.calls, [])
+        XCTAssertEqual(titles(), ["Send Joe (joe@x.com) $200 from your PayPal?", "Cancel"])
+        guard case .confirm(let next, let recipient) = model.bar else { return XCTFail("\(model.bar)") }
+        XCTAssertEqual(recipient, "joe@x.com")
+        model.confirm(next, recipient: recipient)
+        XCTAssertEqual(store.pendingAction?.key, send.key, "kept while the call runs, so a closed keyboard can look it up")
+        XCTAssertEqual(titles(), ["Sending\u{2026}"])
+        await settled()
+        XCTAssertEqual(api.moreSent.first?.path, "payout")
+        XCTAssertEqual(api.moreSent.first?.body["confirm_recipient"], .string("joe@x.com"))
+        XCTAssertEqual(api.moreSent.first?.body["confirm_amount"], .string("200.00"))
+        XCTAssertEqual(api.moreSent.first?.body["confirm_currency"], .string("USD"))
+        XCTAssertNil(store.pendingAction)
+    }
+
     func testBalanceReadsOnTapAndStaysInTheBar() async {
         host.text = "how much do I have"
         api.readReply = MoreResponse(line: "PayPal balance $1,240.50", undo: nil)

@@ -186,7 +186,7 @@ export function createApp(deps: Deps) {
   const integrations = createIntegrations(db, cipher, now);
   const slack = createSlack(db, cipher, now);
   const biz = createBusiness({ db, ai, paypal, integrations, dec, now });
-  const more = createMore({ db, paypal, biz, now, dec, body, requestIdFor, fail: (status, message) => new HttpError(status, message) });
+  const more = createMore({ db, paypal, biz, now, dec, enc, body, requestIdFor, fail: (status, message) => new HttpError(status, message) });
 
   app.use('*', secureHeaders());
   app.use('*', cors({ origin: (origin) => (config.corsOrigins.includes(origin) ? origin : null), allowMethods: ['GET', 'POST', 'PUT', 'DELETE'] }));

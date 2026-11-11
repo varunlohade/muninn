@@ -6,19 +6,22 @@
 // confirm tap, and shows `question` on that tap. The server checks every confirm value against its own records
 // and answers 409 needs_confirm on any mismatch.
 import type { Context, Hono } from 'hono';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Chip, Env } from './app.ts';
 import type { createBusiness } from './business.ts';
 import type { Db, InvoiceRow, SubscriptionRow } from './db.ts';
+import { config } from './config.ts';
 import { log } from './log.ts';
 import { Amount, Currency, centsToValue, formatMoney, valueToCents } from './money.ts';
 import { PayPalError, type PayPalProvider } from './paypal.ts';
-import { balanceAsk, invoiceVerb, mentions, payoutAsk, planVerb, quick, type InvoiceVerb, type PlanVerb } from './quick.ts';
+import { balanceAsk, invoiceVerb, mentions, payoutAsk, planVerb, quick, type InvoiceVerb, type PayoutAsk, type PlanVerb } from './quick.ts';
 import { clean } from './text.ts';
 
 export type MoreDeps = {
   db: Db; paypal: PayPalProvider; biz: ReturnType<typeof createBusiness>; now: () => number;
   dec: (userId: string, v: string | null) => string | null;
+  enc: (userId: string, v: string | null | undefined) => string | null;
   body: <T extends z.ZodTypeAny>(c: Context<Env>, schema: T) => Promise<z.infer<T>>;
   fail: (status: 400 | 404 | 409, message: string) => Error;
   requestIdFor: (userId: string, key: string) => string;
@@ -41,12 +44,25 @@ const InvoiceConfirm = { confirm_client: ConfirmName.optional(), confirm_amount:
 const MarkPaidBody = z.object({ invoice_id: InvoiceId, method: Method.default('OTHER'), ...InvoiceConfirm }).strict();
 const InvoiceOnlyBody = z.object({ invoice_id: InvoiceId, ...InvoiceConfirm }).strict();
 const RecordRefundBody = z.object({ invoice_id: InvoiceId, amount: Amount, method: Method.default('OTHER'), ...InvoiceConfirm }).strict();
+const Email = z.string().trim().toLowerCase().email().max(254);
+// The strongest confirm: who, how much and which currency, each checked against the body.
+const PayoutBody = z.object({
+  recipient_name: ConfirmName, recipient_email: Email, amount: Amount, currency: Currency,
+  confirm_recipient: Email.optional(), confirm_amount: Amount.optional(), confirm_currency: Currency.optional(),
+}).strict();
+const PayoutCancelBody = z.object({ payout_id: z.string().uuid() }).strict();
+// Not sent, or sent back: these no longer count toward the day's cap.
+const PAYOUT_GONE = ['FAILED', 'RETURNED', 'REFUNDED', 'REVERSED', 'BLOCKED', 'DENIED', 'CANCELED'];
 
 // Payments and refunds the owner recorded through Muninn, so Undo and "what is left" never guess.
 const TABLES = `
 CREATE TABLE IF NOT EXISTS recorded_payments (
   user_id TEXT NOT NULL REFERENCES users(id), invoice_id TEXT NOT NULL, payment_id TEXT NOT NULL, created_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, invoice_id));
+CREATE TABLE IF NOT EXISTS payouts (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name_enc TEXT NOT NULL, email_enc TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, status TEXT NOT NULL, batch_id TEXT, item_id TEXT, created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS payouts_user ON payouts(user_id, created_at);
 CREATE TABLE IF NOT EXISTS recorded_refunds (
   refund_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), invoice_id TEXT NOT NULL, amount_cents INTEGER NOT NULL, created_at INTEGER NOT NULL);
 `;
@@ -266,6 +282,95 @@ export function createMore(d: MoreDeps) {
     return c.json({ ok: true, invoice_id: r.id, status, line: 'Refund recorded ✓', undo: null });
   }
 
+  // ---- payouts: the owner's money out to a supplier. MONEY. Regex only, the strongest confirm, a cap per day.
+  type PayoutRow = { id: string; name_enc: string; email_enc: string; amount_cents: number; currency: string; status: string; batch_id: string | null; item_id: string | null };
+  const dayStart = () => { const t = new Date(d.now()); return Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()); };
+  const capCents = () => config.money.payoutDailyCap * 100;
+  const sentToday = (userId: string) => (sql(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM payouts WHERE user_id = ? AND created_at >= ?
+    AND status NOT IN (${PAYOUT_GONE.map(() => '?').join(', ')})`).get(userId, dayStart(), ...PAYOUT_GONE) as { c: number }).c;
+
+  /**
+   * The email for a payout: the one the owner typed, else the one email the owner's own records hold for exactly
+   * this name (earlier payouts and invoices). Never from a model or from copied client text. Null when 0 or 2+.
+   */
+  function payoutEmail(userId: string, ask: PayoutAsk): { email: string | null; several: boolean } {
+    if (ask.email) return { email: ask.email, several: false };
+    const want = ask.name.toLowerCase();
+    const same = (enc: string | null) => d.dec(userId, enc)?.trim().toLowerCase() === want;
+    const emails = new Set([
+      ...(sql('SELECT name_enc, email_enc FROM payouts WHERE user_id = ?').all(userId) as { name_enc: string; email_enc: string }[])
+        .filter((r) => same(r.name_enc)).map((r) => d.dec(userId, r.email_enc)),
+      ...db.listInvoices(userId, 500).filter((r) => same(r.client_name_enc)).map((r) => d.dec(userId, r.client_email_enc)),
+    ].filter((e): e is string => !!e).map((e) => e.trim().toLowerCase()));
+    return emails.size === 1 ? { email: [...emails][0], several: false } : { email: null, several: emails.size > 1 };
+  }
+
+  function payoutChips(userId: string, ask: PayoutAsk): Chip[] {
+    const { name } = ask;
+    const currency = ask.currency ?? db.getProfile(userId)?.currency ?? 'USD';
+    if (ask.amount === null) return [lineChip(`Type the amount for ${name}`, `Type the amount for ${name}, like "pay ${name.toLowerCase()} $200".`)];
+    const cents = Math.round(ask.amount * 100);
+    const money = formatMoney(cents, currency);
+    const { email, several } = payoutEmail(userId, ask);
+    if (!email) {
+      return [lineChip(several ? `${name} has 2 emails on file` : `Add ${name}'s email to send ${money}`,
+        several ? `${name} has more than one email on file. Type the one to pay.` : `Type ${name}'s email to send ${money}, like "pay ${name.toLowerCase()} ${money} ${name.toLowerCase()}@example.com".`)];
+    }
+    const left = capCents() - sentToday(userId);
+    if (cents > left) return [lineChip(`Over today's payout limit`, `Payouts stop at ${formatMoney(capCents(), currency)} a day. ${formatMoney(Math.max(0, left), currency)} left today.`)];
+    return [actionChip('payout', `Send ${money} · ${name}`,
+      { recipient_name: name, recipient_email: email, amount: centsToValue(cents), currency },
+      { confirm_recipient: email, confirm_amount: centsToValue(cents), confirm_currency: currency },
+      `Send ${name} (${email}) ${money} from your PayPal?`)];
+  }
+
+  async function payout(c: Context<Env>) {
+    const userId = userOf(c);
+    const b = await d.body(c, PayoutBody);
+    if (b.confirm_recipient !== b.recipient_email || b.confirm_amount !== b.amount || b.confirm_currency !== b.currency) {
+      return needsConfirm(c, b.recipient_email);
+    }
+    const left = capCents() - sentToday(userId);
+    if (b.amount > left) throw d.fail(409, `over today's payout limit (${centsToValue(Math.max(0, left))} left)`);
+    // The row holds the money against the cap before PayPal is called, so two taps at once cannot both pass.
+    const id = randomUUID();
+    sql(`INSERT INTO payouts (id, user_id, name_enc, email_enc, amount_cents, currency, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'SENDING', ?)`)
+      .run(id, userId, d.enc(userId, b.recipient_name), d.enc(userId, b.recipient_email), b.amount, b.currency, d.now());
+    const pp = d.paypal.forUser(userId);
+    let sent: { batchId: string; status: string };
+    try {
+      sent = await pp.createPayout({ email: b.recipient_email, value: centsToValue(b.amount), currency: b.currency, note: `Payment from ${db.getProfile(userId)?.business_name ?? 'your client'}` }, idemKey(c));
+    } catch (e) {
+      sql('DELETE FROM payouts WHERE id = ? AND user_id = ?').run(id, userId);
+      throw e;
+    }
+    // PayPal makes the item a moment later; without it yet, Undo looks again when tapped.
+    const item = await pp.getPayoutItem(sent.batchId).catch(() => null);
+    const status = item?.status ?? sent.status;
+    sql('UPDATE payouts SET status = ?, batch_id = ?, item_id = ? WHERE id = ? AND user_id = ?').run(status, sent.batchId, item?.itemId ?? null, id, userId);
+    log('payout_sent', { user_id: userId, payout_id: id, status });
+    const canUndo = ['UNCLAIMED', 'PENDING'].includes(status);
+    return c.json({ ok: true, payout_id: id, status, line: `Sent ${formatMoney(b.amount, b.currency)} to ${b.recipient_name} ✓`,
+      undo: canUndo ? undoChip('payout_cancel', { payout_id: id }) : null });
+  }
+
+  async function cancelPayout(c: Context<Env>) {
+    const userId = userOf(c);
+    const { payout_id } = await d.body(c, PayoutCancelBody);
+    const r = sql('SELECT * FROM payouts WHERE id = ? AND user_id = ?').get(payout_id, userId) as PayoutRow | undefined;
+    if (!r?.batch_id) throw d.fail(404, 'payout not found');
+    const name = d.dec(userId, r.name_enc) ?? 'They';
+    const pp = d.paypal.forUser(userId);
+    const item = await pp.getPayoutItem(r.batch_id);
+    if (item) sql('UPDATE payouts SET status = ?, item_id = ? WHERE id = ?').run(item.status, item.itemId, r.id);
+    if (!item || item.status === 'PENDING') throw d.fail(409, 'PayPal is still sending it. Try Undo again in a minute');
+    if (item.status !== 'UNCLAIMED') throw d.fail(409, `${name} already has it, so it can't be undone`);
+    const out = await pp.cancelPayoutItem(item.itemId, idemKey(c));
+    sql('UPDATE payouts SET status = ? WHERE id = ?').run(out.status === 'RETURNED' ? 'RETURNED' : out.status, r.id);
+    log('payout_cancelled', { user_id: userId, payout_id: r.id });
+    return c.json({ ok: true, payout_id: r.id, status: out.status, line: `Cancelled ✓ · ${formatMoney(r.amount_cents, r.currency)} back in your PayPal`, undo: null });
+  }
+
   // ---- balance: read-only, for the bar. Never typed into the chat.
   /** "$1,240.50": the bar shows a balance with thousands marks. */
   const big = (cents: number, currency: string) => formatMoney(cents, currency).replace(/\d+(?=\.|$)/, (n) => Number(n).toLocaleString('en-US'));
@@ -289,8 +394,9 @@ export function createMore(d: MoreDeps) {
 
   /** The chips for a more-verb, or null when the text is not one. No paid call. */
   async function suggest(userId: string, text: string): Promise<Chip[] | null> {
-    // "pay joe $200" is a payout, never a pay link. Until payouts ship it gets no chip.
-    if (payoutAsk(text)) return [];
+    // "pay joe $200" is a payout, never a pay link.
+    const pay = payoutAsk(text);
+    if (pay) return payoutChips(userId, pay);
     if (balanceAsk(text)) return [chip('balance', 'Balance', {}, false)];
     const plan = planVerb(text);
     if (plan) {
@@ -313,6 +419,8 @@ export function createMore(d: MoreDeps) {
     app.post('/v1/actions/invoice/unmark-paid', unmarkPaid);
     app.post('/v1/actions/invoice/cancel', cancelInvoice);
     app.post('/v1/actions/invoice/record-refund', recordRefund);
+    app.post('/v1/actions/payout', payout);
+    app.post('/v1/actions/payout/cancel', cancelPayout);
     app.get('/v1/balance', async (c) => c.json({ line: await balanceLine(userOf(c)) }));
     // Read-only: one repeat bill as PayPal sees it now.
     app.get('/v1/plans/:id', async (c) => {
