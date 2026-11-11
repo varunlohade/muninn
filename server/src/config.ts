@@ -46,6 +46,14 @@ export const config = {
     webUrl: env.PAYPAL_ENV === 'live' ? 'https://www.paypal.com' : 'https://www.sandbox.paypal.com',
     webhookId: env.PAYPAL_WEBHOOK_ID ?? '',
     timeoutMs: 15000,
+    // Connect PayPal: the platform account's own merchant id (merchant-integrations lookups need it),
+    // an optional partner BN code, and this server's public https address for PayPal's return link.
+    partnerMerchantId: env.PAYPAL_PARTNER_MERCHANT_ID ?? '',
+    bnCode: env.PAYPAL_BN_CODE ?? '',
+    publicUrl: (env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, ''),
+    // The app's ASWebAuthenticationSession waits for this scheme. A pending connect expires after this long.
+    appReturnUrl: 'muninn://paypal-connected',
+    connectTtlMs: 60 * 60 * 1000,
   },
 
   jev: {

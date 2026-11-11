@@ -44,7 +44,8 @@ export type IntegrationView = {
   status: 'connected' | 'not_connected' | 'on_device' | 'coming_soon'; connected_at: string | null;
 };
 
-export function createIntegrations(db: Db, cipher: Cipher, now: () => number) {
+// paypalLabel: the connected PayPal account, masked, or null while the user runs on the demo merchant.
+export function createIntegrations(db: Db, cipher: Cipher, now: () => number, paypalLabel: (userId: string) => string | null = () => null) {
   function connect(userId: string, provider: Provider) {
     if (!provider.available || !provider.connect) throw new Error(`${provider.id} cannot connect yet`);
     const cfg = provider.connect(userId);
@@ -67,10 +68,13 @@ export function createIntegrations(db: Db, cipher: Cipher, now: () => number) {
     const reviewLink = !!db.getProfile(userId)?.review_url;
     const connected = (id: string, r: { status: string } | undefined) => (id === 'google_reviews' ? reviewLink : r?.status === 'connected');
     const rows = new Map(db.listIntegrations(userId).map((r) => [r.provider, r]));
+    const own = paypalLabel(userId);
+    const describe = (p: Provider) => p.id !== 'paypal' ? p.description
+      : own ? `PayPal connected \u00B7 ${own}` : 'Demo PayPal (sandbox)';
     return PROVIDERS.map((p) => {
       const r = rows.get(p.id);
       return {
-        id: p.id, name: p.name, description: p.description, capabilities: p.capabilities,
+        id: p.id, name: p.name, description: describe(p), capabilities: p.capabilities,
         status: !p.available ? 'coming_soon' : p.where === 'device' ? 'on_device' : connected(p.id, r) ? 'connected' : 'not_connected',
         connected_at: p.available && r?.connected_at ? new Date(r.connected_at).toISOString() : null,
       };

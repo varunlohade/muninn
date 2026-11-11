@@ -21,6 +21,7 @@ import { createIntegrations } from './integrations.ts';
 import { createSlack, SlackWebhookUrl } from './slack.ts';
 import { RANGES, createBusiness } from './business.ts';
 import { createAppleVerifier, type AppleVerifier } from './apple.ts';
+import { createPayPalConnect } from './connect.ts';
 
 export type Deps = {
   db: Db; cipher: Cipher; ai: Ai; paypal: PayPalProvider; now?: () => number;
@@ -182,7 +183,8 @@ export function createApp(deps: Deps) {
   const profileOf = (userId: string) => db.getProfile(userId) ?? DEFAULT_PROFILE;
   const catalogText = (items: CatalogItem[]) => items.map((i) => `${i.name} ${formatMoney(i.price_cents, i.currency)}`).join('; ');
   const requestIdFor = (userId: string, key: string) => sha256(`${userId}:${key}`).slice(0, 36);
-  const integrations = createIntegrations(db, cipher, now);
+  const connect = createPayPalConnect({ db, cipher, paypal, now });
+  const integrations = createIntegrations(db, cipher, now, connect.label);
   const slack = createSlack(db, cipher, now);
   const biz = createBusiness({ db, ai, paypal, integrations, dec, now });
 
@@ -610,7 +612,8 @@ export function createApp(deps: Deps) {
       return c.json({ error: 'confirm the amount and recipient', needs_confirm: true, recipient: b.client_email, amount: centsToValue(b.amount), currency }, 409);
     }
     const t = performance.now();
-    const inv = await paypal.forUser(userId).createAndSendInvoice({
+    const account = connect.account(userId);
+    const inv = await paypal.forAccount(userId, account).createAndSendInvoice({
       value: centsToValue(b.amount), currency, item: b.item, clientName: b.client_name ?? null, clientEmail: b.client_email ?? null,
       businessName: profile?.business_name ?? null,
     }, idemKey(c));
@@ -618,11 +621,11 @@ export function createApp(deps: Deps) {
     db.insertInvoice({
       id: inv.id, user_id: userId, status: inv.status, amount_cents: b.amount, currency, item: b.item,
       client_name_enc: enc(userId, b.client_name), client_email_enc: enc(userId, b.client_email), pay_link: inv.payLink,
-      due_at: created + config.money.invoiceDueDays * DAY, created_at: created,
+      due_at: created + config.money.invoiceDueDays * DAY, created_at: created, pp_account: account,
     });
     const ms = Math.round(performance.now() - t);
     log('invoice_created', { user_id: userId, invoice_id: inv.id, status: inv.status, paypal_ms: ms });
-    return c.json({ id: inv.id, status: inv.status, pay_link: inv.payLink, amount: centsToValue(b.amount), currency, paypal_ms: ms });
+    return c.json({ id: inv.id, status: inv.status, pay_link: inv.payLink, amount: centsToValue(b.amount), currency, paypal_ms: ms, demo: !account });
   });
 
   app.post('/v1/actions/paylink', async (c) => {
@@ -630,14 +633,15 @@ export function createApp(deps: Deps) {
     const b = await body(c, PayLinkBody);
     const currency = b.currency ?? db.getProfile(userId)?.currency ?? 'USD';
     const t = performance.now();
-    const o = await paypal.forUser(userId).createOrder({ value: centsToValue(b.amount), currency, item: b.item }, idemKey(c));
+    const account = connect.account(userId);
+    const o = await paypal.forAccount(userId, account).createOrder({ value: centsToValue(b.amount), currency, item: b.item }, idemKey(c));
     db.insertOrder({
       id: o.id, user_id: userId, status: o.status, amount_cents: b.amount, currency, item: b.item,
-      client_name_enc: enc(userId, b.client_name), approve_link: o.approveLink, created_at: now(),
+      client_name_enc: enc(userId, b.client_name), approve_link: o.approveLink, created_at: now(), pp_account: account,
     });
     const ms = Math.round(performance.now() - t);
     log('order_created', { user_id: userId, order_id: o.id, status: o.status, paypal_ms: ms });
-    return c.json({ id: o.id, status: o.status, approve_link: o.approveLink, amount: centsToValue(b.amount), currency, paypal_ms: ms });
+    return c.json({ id: o.id, status: o.status, approve_link: o.approveLink, amount: centsToValue(b.amount), currency, paypal_ms: ms, demo: !account });
   });
 
   app.post('/v1/actions/subscribe', async (c) => {
@@ -654,23 +658,26 @@ export function createApp(deps: Deps) {
       }, 409);
     }
     const item = b.item ?? 'Repeat payment';
-    const planKey = `${currency}:${b.amount}:${b.interval}`;
+    // Plans and products belong to one PayPal account, so a connected seller's keys carry its account.
+    const account = connect.account(userId);
+    const acct = account ? `m:${account}:` : '';
+    const planKey = `${acct}${currency}:${b.amount}:${b.interval}`;
     const cached = db.getBillingPlan(userId, planKey);
     const t = performance.now();
-    const sub = await paypal.forUser(userId).createSubscription({
+    const sub = await paypal.forAccount(userId, account).createSubscription({
       value: centsToValue(b.amount), currency, interval: b.interval, clientEmail: b.client_email ?? null,
-      productId: cached?.product_id ?? db.anyBillingProduct(userId), planId: cached?.plan_id ?? null,
-      productRequestId: requestIdFor(userId, 'billing-product'), planRequestId: requestIdFor(userId, `billing-plan:${planKey}`),
+      productId: cached?.product_id ?? db.anyBillingProduct(userId, acct), planId: cached?.plan_id ?? null,
+      productRequestId: requestIdFor(userId, `${acct}billing-product`), planRequestId: requestIdFor(userId, `billing-plan:${planKey}`),
     }, idemKey(c));
     db.putBillingPlan(userId, planKey, sub.productId, sub.planId);
     db.insertSubscription({
       id: sub.id, user_id: userId, status: sub.status, amount_cents: b.amount, currency, interval: b.interval, item,
       client_name_enc: enc(userId, b.client_name), client_email_enc: enc(userId, b.client_email), approve_link: sub.approveLink,
-      plan_id: sub.planId, created_at: now(),
+      plan_id: sub.planId, created_at: now(), pp_account: account,
     });
     const ms = Math.round(performance.now() - t);
     log('subscription_created', { user_id: userId, subscription_id: sub.id, status: sub.status, paypal_ms: ms });
-    return c.json({ id: sub.id, status: sub.status, approve_link: sub.approveLink, amount: centsToValue(b.amount), currency, interval: b.interval, item, paypal_ms: ms });
+    return c.json({ id: sub.id, status: sub.status, approve_link: sub.approveLink, amount: centsToValue(b.amount), currency, interval: b.interval, item, paypal_ms: ms, demo: !account });
   });
 
   app.post('/v1/actions/remind', async (c) => {
@@ -686,7 +693,7 @@ export function createApp(deps: Deps) {
       c.set('idemSkip', true);
       return c.json({ error: 'confirm the client', needs_confirm: true, recipient: shown ?? 'the client', amount: centsToValue(inv.amount_cents), currency: inv.currency }, 409);
     }
-    await paypal.forUser(userId).remind(inv.id, idemKey(c));
+    await paypal.forAccount(userId, inv.pp_account).remind(inv.id, idemKey(c));
     db.addReminder(userId, inv.id);
     log('reminder_sent', { user_id: userId, invoice_id: inv.id });
     return c.json({ ok: true, invoice_id: inv.id });
@@ -702,15 +709,15 @@ export function createApp(deps: Deps) {
         throw new HttpError(404, 'confirm token not found, used or expired');
       }
       const r = claim.ok;
+      const target = r.target_kind === 'invoice' ? db.getInvoice(userId, r.target_id) : db.getOrder(userId, r.target_id);
       try {
-        const out = await paypal.forUser(userId).refundCapture(r.capture_id, centsToValue(r.amount_cents), r.currency, r.id);
+        const out = await paypal.forAccount(userId, target?.pp_account ?? null).refundCapture(r.capture_id, centsToValue(r.amount_cents), r.currency, r.id);
         db.finishRefund(userId, r.id, 'done', out.id);
-        const target = r.target_kind === 'invoice' ? db.getInvoice(userId, r.target_id) : db.getOrder(userId, r.target_id);
         const status = db.refundState(userId, r.target_id).doneCents >= (target?.amount_cents ?? 0) ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
         if (r.target_kind === 'invoice') db.setInvoiceStatus(userId, r.target_id, status, null, null);
         else db.setOrderStatus(userId, r.target_id, status, null, null);
         log('refund_done', { user_id: userId, target_id: r.target_id, refund_id: out.id, status });
-        return c.json({ ok: true, refund_id: out.id, status: out.status, amount: centsToValue(r.amount_cents), currency: r.currency });
+        return c.json({ ok: true, refund_id: out.id, status: out.status, amount: centsToValue(r.amount_cents), currency: r.currency, demo: !target?.pp_account });
       } catch (e) {
         db.finishRefund(userId, r.id, 'failed', null);
         throw e;
@@ -744,11 +751,10 @@ export function createApp(deps: Deps) {
   app.get('/v1/payments', async (c) => {
     const userId = c.get('userId');
     if (c.req.query('refresh') === '1') {
-      const pp = paypal.forUser(userId);
       const stale = db.listInvoices(userId, 10).filter((r) => invoiceState(r.status) === 'unpaid');
       await Promise.all(stale.map(async (r) => {
         try {
-          const s = await pp.getInvoice(r.id);
+          const s = await paypal.forAccount(userId, r.pp_account).getInvoice(r.id);
           db.setInvoiceStatus(userId, r.id, s.status, invoiceState(s.status) === 'paid' ? now() : null, s.captureId);
         } catch (e) {
           log('refresh_failed', { invoice_id: r.id, err: (e as Error).message });
@@ -782,6 +788,7 @@ export function createApp(deps: Deps) {
   app.get('/v1/summary', async (c) => c.json(await biz.summary(c.get('userId'))));
 
   // ---- integrations and the business view, all through the user's own PayPal connection
+  app.route('/', connect.routes);
   app.get('/v1/integrations', (c) => c.json({ integrations: integrations.list(c.get('userId')) }));
   // The webhook URL is a secret: stored encrypted and never sent back. null disconnects.
   app.put('/v1/integrations/slack', async (c) => {
@@ -1046,7 +1053,7 @@ export function createApp(deps: Deps) {
       const owner = res.id && db.ownerOfOrder(res.id);
       if (owner) {
         const before = db.getOrder(owner, res.id);
-        const cap = await paypal.forUser(owner).captureOrder(res.id, `capture-${res.id}`);
+        const cap = await paypal.forAccount(owner, before?.pp_account ?? null).captureOrder(res.id, `capture-${res.id}`);
         db.setOrderStatus(owner, res.id, cap.status, cap.status === 'COMPLETED' ? now() : null, cap.captureId);
         if (cap.status === 'COMPLETED') notify = paidNow(owner, before);
         handled = true;
@@ -1081,6 +1088,8 @@ export function createApp(deps: Deps) {
         }
         handled = true;
       }
+    } else if (type.startsWith('MERCHANT.')) {
+      handled = await connect.webhook(type, res);
     } else if (type === 'PAYMENT.CAPTURE.COMPLETED') {
       const orderId = res.supplementary_data?.related_ids?.order_id;
       const owner = orderId && db.ownerOfOrder(orderId);

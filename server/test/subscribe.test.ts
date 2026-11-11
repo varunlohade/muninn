@@ -135,7 +135,7 @@ test('subscribe: a confirmed repeat bill returns the approve link; the row is st
   assert.equal(r.status, 200);
   const j = await r.json() as any;
   assert.deepEqual({ ...j, paypal_ms: 0 }, {
-    id: 'I-TEST1', status: 'APPROVAL_PENDING', approve_link: 'https://paypal.test/sub/1', amount: '40.00', currency: 'USD', interval: 'month', item: 'Haircut', paypal_ms: 0,
+    id: 'I-TEST1', status: 'APPROVAL_PENDING', approve_link: 'https://paypal.test/sub/1', amount: '40.00', currency: 'USD', interval: 'month', item: 'Haircut', paypal_ms: 0, demo: true,
   });
   const [call] = s.calls;
   assert.equal(call.fn, 'subscribe');

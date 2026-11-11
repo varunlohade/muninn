@@ -33,7 +33,7 @@ test('integrations: PayPal connected with encrypted config, others coming soon; 
   const byId = Object.fromEntries(json.integrations.map((i: any) => [i.id, i]));
   assert.equal(byId.paypal.status, 'connected');
   assert.ok(byId.paypal.capabilities.includes('transactions'));
-  assert.equal(byId.paypal.description, 'Connected. Invoices, pay links, repeat billing, refunds, disputes.');
+  assert.equal(byId.paypal.description, 'Demo PayPal (sandbox)');
   for (const id of ['stripe', 'square', 'gmail']) assert.equal(byId[id], undefined);
   assert.equal(byId.contacts.status, 'on_device');
   assert.equal(byId.contacts.description, "Pick a client's email from your contacts. Stays on this phone.");
