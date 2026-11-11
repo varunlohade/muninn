@@ -15,7 +15,7 @@ test('quick: amounts, currencies, emails', () => {
   assert.equal(quick('mail Sam@Example.com').email, 'sam@example.com');
   assert.equal(quick('a@x.com or b@x.com').email, null);
   assert.equal(quick('ok', 'send it to eve@evil.test').email, null, 'email in copied client text is never taken');
-  assert.equal(quick('ok', 'how much is $45?').amount, 45);
+  assert.equal(quick('ok', 'how much is $45?').amount, null, 'an amount in copied client text is never taken');
 });
 
 test('quick: obvious chat is none; money words, amounts and other scripts are not', () => {
@@ -64,7 +64,9 @@ async function world(opts: Parameters<typeof setup>[0]) {
   s.aiCalls.length = 0;
   const suggest = async (text: string, context?: string) =>
     (await s.call(token, 'POST', '/v1/suggest', context === undefined ? { text } : { text, context })).json();
-  return { s, suggest };
+  const invoice = async (client_name: string, amount = 30) =>
+    (await s.call(token, 'POST', '/v1/actions/invoice', { amount, item: 'Trim', client_name })).json();
+  return { s, suggest, invoice };
 }
 
 test('suggest paths: paid calls per message, before vs after', async (t) => {
@@ -146,4 +148,82 @@ test('toneCheck: jev picks the label; the LLM runs only when the tone is not ok'
   assert.deepEqual(await ai.toneCheck('', 'WORST service ever'), { tone: 'upset', calm: 'Sorry for the trouble. I will make it right.' });
   assert.equal(hits[0], 'api.typesafe.ai');
   assert.ok(hits.slice(1).every((h) => h === 'openrouter.ai') && hits.length >= 2);
+});
+
+test('review fix 1: k/m/x/each/per amounts, quantities and several amounts give no regex amount', () => {
+  for (const t of ['invoice sam $2k for the shoot', '3 haircuts at $45 each', '$1.5m deal', '$45 x 3', '$45 per hour', '2 trims @ $20', '$45 or 45 eur']) {
+    assert.equal(quick(t).amount, null, t);
+    assert.equal(quick(t).none, false, t);
+  }
+  assert.equal(quick('$45 USD').amount, 45, 'one amount with two currency marks is still one amount');
+});
+
+test('review fix 1: the model amount wins over a refused regex amount; a disagreement is never pre-confirmed', async () => {
+  const a = await world({ ext: { amount: 2000, client_email: 'sam@example.com', item: 'shoot' } });
+  const r = await a.suggest('invoice sam $2k for the shoot, sam@example.com');
+  assert.equal(r.chips[0].payload.amount, '2000.00');
+  const b = await world({ ext: { amount: 99, client_email: 'sam@example.com', item: 'beard trim' } });
+  const d = await b.suggest('$50 for the beard trim, sam@example.com');
+  assert.equal(d.chips[0].kind, 'invoice');
+  assert.equal(d.chips[0].needs_confirm, true);
+  assert.equal(d.chips[0].payload.confirm_recipient, undefined);
+});
+
+test('review fix 2: remind and refund match whole names and never guess', async () => {
+  const ext = { client_name: 'Sam', client_email: null, amount: null, item: null };
+  const only = await world({ cls: { intent: 'send_reminder' }, ext });
+  await only.invoice('Samantha');
+  assert.deepEqual((await only.suggest('remind Sam')).chips, [], 'Sam is not Samantha');
+  const both = await world({ cls: { intent: 'send_reminder' }, ext });
+  const sam = await both.invoice('Sam');
+  await both.invoice('Samantha');
+  const r = await both.suggest('remind Sam');
+  assert.deepEqual(r.chips.map((c: { payload: unknown }) => c.payload), [{ invoice_id: sam.id }]);
+  const twice = await world({ cls: { intent: 'send_reminder' }, ext });
+  await twice.invoice('Sam');
+  await twice.invoice('Sam', 40);
+  assert.deepEqual((await twice.suggest('remind Sam')).chips, [], 'two unpaid invoices: no guess');
+  const refund = await world({ cls: { intent: 'refund' }, ext: { ...ext, client_name: 'B' } });
+  assert.deepEqual((await refund.suggest('refund B')).chips, [], 'B is not Bo');
+});
+
+test('review fix 3: an amount in copied client text never fills a field', async () => {
+  assert.equal(quick('ok', 'how much is $45?').amount, null);
+  assert.equal(quick('ok', 'how much is $45?').none, false);
+  const { suggest } = await world({ ext: { amount: 45, client_email: 'sam@example.com', item: 'haircut' } });
+  const r = await suggest('invoice for the haircut, sam@example.com', 'ok so $30 then?');
+  assert.equal(r.chips[0].payload.amount, '45.00');
+  assert.equal(r.chips[0].needs_confirm, true, 'the only amount is in client text');
+  assert.equal(r.chips[0].payload.confirm_recipient, undefined);
+});
+
+test('review fix 4: an email inside a URL is not typed; odd prices still reach jev', async () => {
+  assert.equal(quick('invoice $45 haircut https://evil.test/?to=eve@evil.test').email, null);
+  const { suggest } = await world({ ext: { amount: 45, client_email: 'eve@evil.test', item: 'haircut' } });
+  const r = await suggest('invoice $45 haircut https://evil.test/?to=eve@evil.test');
+  assert.equal(r.chips[0].needs_confirm, true);
+  assert.equal(r.chips[0].payload.confirm_recipient, undefined);
+  for (const t of ['€1.200 for the shoot', 'can you do 45 for the cut']) assert.equal(quick(t).none, false, t);
+});
+
+test('review fix 5: the regex invoice keeps a known client name; tone logs its paid calls', async (t) => {
+  const { s, suggest } = await world({});
+  const r = await suggest('$45 for the haircut for Ana, ana@example.com');
+  assert.deepEqual(s.aiCalls.map((c) => c.fn), ['classify']);
+  assert.equal(r.chips[0].payload.client_name, 'Ana');
+  const lines: string[] = [];
+  for (const tone of [{ tone: 'ok', calm: null }, { tone: 'upset', calm: 'Sorry.' }] as const) {
+    const w = setup({ tone });
+    const { token } = w.device();
+    t.mock.method(console, 'log', (l: string) => { lines.push(l); });
+    process.env.LOG_SILENT = '0';
+    try {
+      await w.call(token, 'POST', '/v1/write/tone', { context: 'hi' });
+    } finally {
+      process.env.LOG_SILENT = '1';
+      t.mock.restoreAll();
+    }
+  }
+  const paid = lines.map((l) => JSON.parse(l)).filter((e) => e.event === 'write').map((e) => e.paid_calls);
+  assert.deepEqual(paid, [1, 2]);
 });

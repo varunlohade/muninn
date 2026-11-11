@@ -12,7 +12,7 @@ import { PayPalError, type PayPalProvider } from './paypal.ts';
 import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './money.ts';
 import { log } from './log.ts';
 import { clean } from './text.ts';
-import { mentions, quick, type Quick } from './quick.ts';
+import { mentions, quick, withoutUrls, type Quick } from './quick.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { RANGES, createBusiness } from './business.ts';
@@ -289,6 +289,8 @@ export function createApp(deps: Deps) {
     if (cls.intent === 'none' || cls.confidence < config.jev.minConfidence) return done([], cls.intent, cls.confidence);
 
     let ext: Extraction | null = null;
+    // An amount the owner did not type, or one the regex and the model read differently, is never pre-confirmed.
+    let unsure = false;
     const fill = known[cls.intent as keyof typeof known];
     if (fill !== undefined) {
       if (fill && !extracting) {
@@ -296,6 +298,7 @@ export function createApp(deps: Deps) {
       } else {
         const model = await (extracting ??= extract());
         if (!model) return done([], cls.intent, cls.confidence);
+        unsure = q.clientAmountOnly || (q.amount !== null && model.amount !== null && model.amount !== q.amount);
         // What the regex read beats a model guess. Email comes only from the owner's own text (see buildChips).
         ext = {
           ...model,
@@ -307,7 +310,7 @@ export function createApp(deps: Deps) {
       }
     }
 
-    const chips = buildChips(userId, cls.intent, ext, text, context ?? '', items, profile.currency);
+    const chips = buildChips(userId, cls.intent, ext, text, context ?? '', items, profile.currency, unsure);
     return done(chips, cls.intent, cls.confidence);
   });
 
@@ -321,14 +324,16 @@ export function createApp(deps: Deps) {
    * named and, if the text has digits, the amount.
    */
   function regexFields(userId: string, q: Quick, seen: string, items: CatalogItem[]) {
-    const base: Extraction = { client_name: null, client_email: q.email, amount: q.amount, currency: q.currency, item: null };
     const hasItem = !!catalogMatch(items, seen.toLowerCase());
     const named = (rows: (InvoiceRow | OrderRow)[]) => {
       const names = new Set(rows.map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n && mentions(seen, n)));
       return names.size === 1 ? [...names][0] : null;
     };
-    const unpaid = db.listInvoices(userId).filter((r) => !r.paid_at && r.status !== 'CANCELLED');
-    const paid = [...db.listInvoices(userId), ...db.listOrders(userId)].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED');
+    const invoices = db.listInvoices(userId);
+    const orders = db.listOrders(userId);
+    const base: Extraction = { client_name: named([...invoices, ...orders]), client_email: q.email, amount: q.amount, currency: q.currency, item: null };
+    const unpaid = invoices.filter((r) => !r.paid_at && r.status !== 'CANCELLED');
+    const paid = [...invoices, ...orders].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED');
     const remindName = named(unpaid);
     const refundName = named(paid);
     return {
@@ -345,10 +350,20 @@ export function createApp(deps: Deps) {
 
   const knownClient = (userId: string, email: string) => db.listInvoices(userId, 200).some((r) => dec(userId, r.client_email_enc) === email);
 
-  function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, context: string, items: CatalogItem[], defaultCurrency: string): Chip[] {
+  /** True when `want` is the client's full name or first name (case-insensitive). No want matches everyone. */
+  const sameClient = (userId: string, r: InvoiceRow | OrderRow, want: string | undefined) => {
+    if (!want) return true;
+    const name = (dec(userId, r.client_name_enc) ?? '').trim().toLowerCase();
+    return name === want || name.split(/\s+/)[0] === want;
+  };
+  /** The one row that matches, or null when none or several do: a reminder or refund never guesses. */
+  const onlyOne = <T>(rows: T[]) => (rows.length === 1 ? rows[0] : null);
+
+  function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, context: string, items: CatalogItem[], defaultCurrency: string, unsure = false): Chip[] {
     const ext = rawExt && { ...rawExt, item: cleanOrNull(rawExt.item, 120), client_name: cleanOrNull(rawExt.client_name, 100) };
     // Only the owner's own typing pre-confirms an email. Copied client text may only help match the catalog.
     const lower = text.toLowerCase();
+    const typed = withoutUrls(lower);
     const seen = `${lower} ${context.toLowerCase()}`;
     const match = catalogMatch(items, seen, ext?.item);
     const currency = (config.money.currencies as readonly string[]).includes(ext?.currency ?? '') ? ext!.currency! : match?.currency ?? defaultCurrency;
@@ -362,10 +377,10 @@ export function createApp(deps: Deps) {
       const email = ext?.client_email ?? null;
       const recipient = email ?? ext?.client_name ?? null;
       // The model can inject an email. Only an email the owner typed, or a known client, is pre-confirmed.
-      const confirmed = email ? lower.includes(email) || knownClient(userId, email) : true;
+      const confirmed = !unsure && (email ? typed.includes(email) || knownClient(userId, email) : true);
       const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`,
         { ...base, client_email: email, ...(email && confirmed ? { confirm_recipient: email } : {}) }, !confirmed);
-      const link = chip('paylink', `Pay link ${money} · ${item}`, base);
+      const link = chip('paylink', `Pay link ${money} · ${item}`, base, unsure);
       return intent === 'create_invoice' ? [invoice, link] : [link, invoice];
     }
     if (intent === 'payment_status') {
@@ -373,19 +388,19 @@ export function createApp(deps: Deps) {
       return [chip('payments', `Who paid? · ${unpaid} unpaid`, {})];
     }
     if (intent === 'send_reminder') {
-      const want = ext?.client_name?.toLowerCase();
+      const want = ext?.client_name?.trim().toLowerCase();
       const unpaid = db.listInvoices(userId).filter((r) => !r.paid_at && r.status !== 'CANCELLED');
-      const hit = unpaid.find((r) => !want || (dec(userId, r.client_name_enc) ?? '').toLowerCase().includes(want)) ?? null;
+      const hit = onlyOne(unpaid.filter((r) => sameClient(userId, r, want)));
       if (!hit) return [];
       const name = biz.namer(userId)(hit) ?? 'client';
       return [chip('remind', `Remind ${name} · ${formatMoney(hit.amount_cents, hit.currency)}`, { invoice_id: hit.id })];
     }
     if (intent === 'refund') {
-      const want = ext?.client_name?.toLowerCase();
+      const want = ext?.client_name?.trim().toLowerCase();
       const cents = ext?.amount != null ? amountToCents(ext.amount) : null;
       const left = (r: InvoiceRow | OrderRow) => r.amount_cents - db.refundState(userId, r.id).doneCents;
       const paid = [...db.listInvoices(userId), ...db.listOrders(userId)].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED' && left(r) > 0);
-      const hit = paid.find((r) => (!want || (dec(userId, r.client_name_enc) ?? '').toLowerCase().includes(want)) && (cents === null || cents <= left(r)));
+      const hit = onlyOne(paid.filter((r) => sameClient(userId, r, want) && (cents === null || cents <= left(r))));
       if (!hit) return [];
       const refundCents = cents ?? left(hit);
       const who = biz.namer(userId)(hit) ?? hit.item;
@@ -581,12 +596,12 @@ export function createApp(deps: Deps) {
     if (c.req.header('x-user-action') !== 'tap') return c.json({ error: 'writing help runs only from an explicit user tap' }, 428);
     await next();
   });
-  const writing = async <T extends object>(c: Context<Env>, kind: string, chars: number, run: () => Promise<T>) => {
+  const writing = async <T extends object>(c: Context<Env>, kind: string, chars: number, run: () => Promise<T>, paid: (out: T) => number = () => 1) => {
     const t = performance.now();
     try {
       const out = await run();
       const ms = Math.round(performance.now() - t);
-      log('write', { user_id: c.get('userId'), kind, chars, ms, ok: true });
+      log('write', { user_id: c.get('userId'), kind, chars, ms, ok: true, paid_calls: paid(out) });
       return c.json({ ...out, ms });
     } catch (e) {
       // A model error can quote the text, so only its type is logged.
@@ -608,7 +623,8 @@ export function createApp(deps: Deps) {
   app.post('/v1/write/tone', async (c) => {
     const b = await body(c, ToneBody);
     const draft = b.text ?? '', client = b.context ?? '';
-    return writing(c, 'tone', draft.length + client.length, () => ai.toneCheck(draft, client));
+    // jev judges the tone; the LLM writes a calm reply only when the tone is not ok.
+    return writing(c, 'tone', draft.length + client.length, () => ai.toneCheck(draft, client), (out) => (out.tone === 'ok' ? 1 : 2));
   });
 
   // ---- profile and catalog

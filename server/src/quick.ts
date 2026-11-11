@@ -3,8 +3,10 @@
 export type Quick = {
   /** True when no model can find a payment action here, so suggest returns no chips with no paid call. */
   none: boolean;
-  /** The one amount stated, or null when there is none or more than one. */
+  /** The one amount the owner typed, or null when there is none, more than one, or one that is not a plain total. */
   amount: number | null;
+  /** True when the owner typed no amount and the copied client text has one. */
+  clientAmountOnly: boolean;
   /** Set only for an explicit currency (€, £, CA$, A$, EUR, ...). A bare $ stays null: it can be USD, CAD or AUD. */
   currency: string | null;
   /** The one email in the owner's own text, lowercased, or null. */
@@ -18,10 +20,19 @@ const WORD: Record<string, string | null> = {
 };
 const AMOUNTS = [
   // $60, €45.50, CA$1,200, usd 60
-  new RegExp(String.raw`(?<cur>us\$|ca\$|au?\$|\$|€|£|\b(?:usd|eur|gbp|cad|aud)\b)\s?${NUM}`, 'gi'),
+  new RegExp(String.raw`(?<cur>us\$|ca\$|au?\$|\$|€|£|\b(?:usd|eur|gbp|cad|aud)\b)\s?${NUM}`, 'gid'),
   // 60 usd, 45 euros, 60$, 45€
-  new RegExp(String.raw`(?<![\w.,])${NUM}\s?(?<cur>\$|€|£|(?:usd|eur|gbp|cad|aud|dollars?|bucks|euros?)\b)`, 'gi'),
+  new RegExp(String.raw`(?<![\w.,])${NUM}\s?(?<cur>\$|€|£|(?:usd|eur|gbp|cad|aud|dollars?|bucks|euros?)\b)`, 'gid'),
 ];
+// $2k, $45 each, $45 x 3, $45 per hour: not the total, so the model decides.
+const NOT_TOTAL_AFTER = /^\s?(?:k|m|x|each|per|ea)\b/i;
+// 3 haircuts at $45, 2 trims @ $20, 3x $45: a unit price after a quantity.
+const QUANTITY_BEFORE = /\b\d+\s*(?:x|@|[\p{L}-]+\s+(?:at|@))\s*$/iu;
+// A number that reads like a price with no currency or money word: "do 45 for the cut", "€1.200".
+const PRICE_SHAPE = /[$€£]\s?\d|\d\s?[$€£]|\b\d+(?:[.,]\d+)*\s+for\b|\b(?:do|for)\s+\d/i;
+const URL = /\S*\/\S*/g;
+/** Text with every URL-like token (anything with a slash) removed, so an email inside a link never counts as typed. */
+export const withoutUrls = (text: string) => text.replace(URL, ' ');
 const EMAIL = /[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi;
 const MONEY_WORDS = new RegExp(String.raw`\b(?:${[
   'invoic\\w*', 'bill\\w*', 'pay\\w*', 'paid', 'owe[sd]?', 'owing', 'refund\\w*', 'remind\\w*', 'link',
@@ -32,13 +43,16 @@ const MONEY_WORDS = new RegExp(String.raw`\b(?:${[
 // Letters outside plain A-Z: another language or script. The word list is English, so those go to the model.
 const OTHER_SCRIPT = /[^\P{L}A-Za-z]/u;
 
-function amountsIn(text: string): { amount: number; currency: string | null }[] {
-  const out: { amount: number; currency: string | null }[] = [];
+type Found = { at: number; amount: number; currency: string | null; total: boolean };
+
+function amountsIn(text: string): Found[] {
+  const out: Found[] = [];
   for (const re of AMOUNTS) {
     for (const m of text.matchAll(re)) {
       const { whole, frac, cur } = m.groups!;
       const c = cur.toLowerCase();
-      out.push({ amount: Number(`${whole.replace(/,/g, '')}${frac ? `.${frac}` : ''}`), currency: PREFIX[c] ?? WORD[c] ?? null });
+      const total = !NOT_TOTAL_AFTER.test(text.slice(m.index + m[0].length)) && !QUANTITY_BEFORE.test(text.slice(0, m.index));
+      out.push({ at: m.indices!.groups!.whole[0], amount: Number(`${whole.replace(/,/g, '')}${frac ? `.${frac}` : ''}`), currency: PREFIX[c] ?? WORD[c] ?? null, total });
     }
   }
   return out;
@@ -46,15 +60,25 @@ function amountsIn(text: string): { amount: number; currency: string | null }[] 
 
 const one = <T>(xs: T[], key: (x: T) => string): T | null => (new Set(xs.map(key)).size === 1 ? xs[0] : null);
 
-/** text: what the owner typed. context: text the owner copied from the client (may help with amounts, never with emails). */
+/** The single plain total in `found`: one number (by position; "$45 USD" is one), not a unit price or a 2k. */
+function single(found: Found[]): Found | null {
+  const at = one(found, (a) => String(a.at));
+  return at && found.every((a) => a.total) ? at : null;
+}
+
+/** text: what the owner typed. context: text the owner copied from the client (a money signal, never a field). */
 export function quick(text: string, context = ''): Quick {
   const all = `${context}\n${text}`;
-  const amounts = amountsIn(all);
-  const amt = one(amounts, (a) => String(a.amount));
-  const currency = one(amounts.map((a) => a.currency).filter((c) => c !== null), (c) => c);
-  const emails = [...text.matchAll(EMAIL)].map((m) => m[0].toLowerCase());
-  const none = amounts.length === 0 && !MONEY_WORDS.test(all) && !OTHER_SCRIPT.test(all);
-  return { none, amount: amt?.amount ?? null, currency: amt ? currency : null, email: one(emails, (e) => e) };
+  const typed = amountsIn(text);
+  const copied = amountsIn(context);
+  const amt = single(typed);
+  const currency = one(typed.map((a) => a.currency).filter((c) => c !== null), (c) => c);
+  const emails = [...withoutUrls(text).matchAll(EMAIL)].map((m) => m[0].toLowerCase());
+  const none = typed.length + copied.length === 0 && !MONEY_WORDS.test(all) && !PRICE_SHAPE.test(all) && !OTHER_SCRIPT.test(all);
+  return {
+    none, amount: amt?.amount ?? null, clientAmountOnly: typed.length === 0 && copied.length > 0,
+    currency: amt ? currency : null, email: one(emails, (e) => e),
+  };
 }
 
 /** True when `name` appears as whole words in `text` (case-insensitive). */
