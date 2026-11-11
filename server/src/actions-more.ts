@@ -303,22 +303,24 @@ export function createMore(d: MoreDeps) {
   };
   const dayStart = () => { const t = new Date(d.now()); return Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()); };
   const counted = `created_at >= ? AND status NOT IN (${PAYOUT_GONE.map(() => '?').join(', ')})`;
-  const sentToday = (userId: string) =>
-    (sql(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM payouts WHERE user_id = ? AND ${counted}`).get(userId, dayStart(), ...PAYOUT_GONE) as { c: number }).c;
+  const sentToday = (userId: string, currency: string) =>
+    (sql(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM payouts WHERE user_id = ? AND currency = ? AND ${counted}`)
+      .get(userId, currency, dayStart(), ...PAYOUT_GONE) as { c: number }).c;
   // Every user without their own PayPal sends from the one demo merchant, so the demo cap also counts across all of them.
-  const demoSentToday = () =>
-    (sql(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM payouts WHERE pp_account IS NULL AND ${counted}`).get(dayStart(), ...PAYOUT_GONE) as { c: number }).c;
-  /** What this user can still send today, and the cap that applies. A connected user's own account keeps the full cap. */
-  function payoutRoom(userId: string): { left: number; cap: number; demo: boolean } {
+  const demoSentToday = (currency: string) =>
+    (sql(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM payouts WHERE pp_account IS NULL AND currency = ? AND ${counted}`)
+      .get(currency, dayStart(), ...PAYOUT_GONE) as { c: number }).c;
+  /** What this user can still send today in this currency, and the cap that applies. A connected user's own account keeps the full cap. */
+  function payoutRoom(userId: string, currency: string): { left: number; cap: number; demo: boolean } {
     if (d.accountOf(userId) !== null) {
       const cap = config.money.payoutDailyCap * 100;
-      return { left: cap - sentToday(userId), cap, demo: false };
+      return { left: cap - sentToday(userId, currency), cap, demo: false };
     }
     const cap = config.money.demoPayoutDailyCap * 100;
-    const left = Math.min(cap - sentToday(userId), config.money.demoPayoutPlatformDailyCap * 100 - demoSentToday());
+    const left = Math.min(cap - sentToday(userId, currency), config.money.demoPayoutPlatformDailyCap * 100 - demoSentToday(currency));
     return { left, cap, demo: true };
   }
-  const DEMO_LIMIT = `Demo account: up to ${formatMoney(config.money.demoPayoutDailyCap * 100, 'USD')} a day`;
+  const demoLimit = (currency: string) => `Demo account: up to ${formatMoney(config.money.demoPayoutDailyCap * 100, currency)} a day`;
 
   /**
    * The email for a payout: the one the owner typed, else the one email the owner's own records hold for exactly
@@ -347,16 +349,16 @@ export function createMore(d: MoreDeps) {
       return [lineChip(several ? `${name} has 2 emails on file` : `Add ${name}'s email to send ${money}`,
         several ? `${name} has more than one email on file. Type the one to pay.` : `Type ${name}'s email to send ${money}, like "pay ${name.toLowerCase()} ${money} ${name.toLowerCase()}@example.com".`)];
     }
-    const { left, cap, demo } = payoutRoom(userId);
+    const { left, cap, demo } = payoutRoom(userId, currency);
     if (cents > left) {
       return [lineChip(`Over today's payout limit`, demo
-        ? `${DEMO_LIMIT}. ${formatMoney(Math.max(0, left), currency)} left today. Connect your PayPal to send more.`
+        ? `${demoLimit(currency)}. ${formatMoney(Math.max(0, left), currency)} left today. Connect your PayPal to send more.`
         : `Payouts stop at ${formatMoney(cap, currency)} a day. ${formatMoney(Math.max(0, left), currency)} left today.`)];
     }
     return [actionChip('payout', `Send ${money} · ${name}`,
       { recipient_name: name, recipient_email: email, amount: centsToValue(cents), currency },
       { confirm_recipient: email, confirm_amount: centsToValue(cents), confirm_currency: currency },
-      demo ? `Send ${name} (${email}) ${money} from the demo PayPal? ${DEMO_LIMIT}.` : `Send ${name} (${email}) ${money} from your PayPal?`)];
+      demo ? `Send ${name} (${email}) ${money} from the demo PayPal? ${demoLimit(currency)}.` : `Send ${name} (${email}) ${money} from your PayPal?`)];
   }
 
   async function payout(c: Context<Env>) {
@@ -365,8 +367,8 @@ export function createMore(d: MoreDeps) {
     if (b.confirm_recipient !== b.recipient_email || b.confirm_amount !== b.amount || b.confirm_currency !== b.currency) {
       return needsConfirm(c, b.recipient_email);
     }
-    const { left, demo } = payoutRoom(userId);
-    if (b.amount > left) throw d.fail(409, `over today's payout limit (${centsToValue(Math.max(0, left))} left)${demo ? `. ${DEMO_LIMIT}` : ''}`);
+    const { left, demo } = payoutRoom(userId, b.currency);
+    if (b.amount > left) throw d.fail(409, `over today's payout limit (${centsToValue(Math.max(0, left))} left)${demo ? `. ${demoLimit(b.currency)}` : ''}`);
     // The row holds the money against the cap before PayPal is called, so two taps at once cannot both pass.
     const id = randomUUID();
     const account = d.accountOf(userId);

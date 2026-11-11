@@ -79,7 +79,7 @@ export const config = {
     currencies: ['USD', 'EUR', 'GBP', 'CAD', 'AUD'] as const,
     invoiceDueDays: 7,
     refundConfirmTtlMs: 2 * 60 * 1000,
-    // Payouts send the owner's own money out. All payouts in one UTC day, in any currency, stay at or under this.
+    // Payouts send the owner's own money out. Each currency's payouts in one UTC day stay at or under this many units.
     payoutDailyCap: 1000,
     // The shared demo merchant sends real sandbox money for everyone not connected: a small cap per user and one for all of them.
     demoPayoutDailyCap: 50,

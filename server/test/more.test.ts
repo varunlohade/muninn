@@ -444,6 +444,21 @@ test('payouts: a timeout or 5xx keeps the row as UNKNOWN on the cap; only a clea
   assert.equal((t.db.raw.prepare('SELECT COUNT(*) AS n FROM payouts').get() as { n: number }).n, 0, 'a clear refusal frees the cap');
 });
 
+test('payouts: the daily cap counts each currency on its own', async () => {
+  const s = setup();
+  const { token, userId } = s.device();
+  connectSeller(s, userId);
+  const pay = (amount: string, currency: string, key: string) => send(s, token, '/v1/actions/payout', {
+    recipient_name: 'Eve', recipient_email: 'eve@x.com', amount, currency, confirm_recipient: 'eve@x.com', confirm_amount: amount, confirm_currency: currency,
+  }, key);
+  assert.equal((await pay('1000.00', 'USD', 'cur-usd-0001')).status, 200);
+  assert.equal((await pay('1.00', 'USD', 'cur-usd-0002')).status, 409);
+  assert.equal((await pay('1000.00', 'EUR', 'cur-eur-0001')).status, 200, 'euros are not counted against dollars');
+  const [eur] = (await suggest(s, token, 'pay eve €1 eve@x.com')).chips;
+  assert.equal(eur.kind, 'show');
+  assert.equal(eur.payload.line, 'Payouts stop at €1000 a day. €0 left today.');
+});
+
 // ---- step 5: disputes
 
 function withDispute(s: ReturnType<typeof setup>, userId: string) {
