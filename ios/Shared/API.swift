@@ -303,8 +303,10 @@ struct APIClient {
         return try await send(request("POST", "/v1/actions/paylink", body: body, tap: true, key: key, lookup: lookup), as: PayLinkResponse.self)
     }
 
-    func remind(invoiceID: String, key: String, lookup: Bool) async throws -> RemindResponse {
-        try await send(request("POST", "/v1/actions/remind", body: ["invoice_id": invoiceID], tap: true, key: key, lookup: lookup), as: RemindResponse.self)
+    func remind(invoiceID: String, confirmClient: String?, key: String, lookup: Bool) async throws -> RemindResponse {
+        var body = ["invoice_id": invoiceID]
+        if let confirmClient { body["confirm_client"] = confirmClient }
+        return try await send(request("POST", "/v1/actions/remind", body: body, tap: true, key: key, lookup: lookup), as: RemindResponse.self)
     }
 
     /// `body` is {id, amount} to get a confirm token, or {confirm_token} to run the refund.

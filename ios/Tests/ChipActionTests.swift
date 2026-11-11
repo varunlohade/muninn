@@ -69,7 +69,7 @@ final class ChipActionTests: XCTestCase {
 
     func testRemindSendsTheInvoiceIdAndShowsALine() async {
         host.text = "remind Sam"
-        model.tapChip(chip("remind", "Remind Sam · $45", ["invoice_id": .string("INV-9")]))
+        send(chip("remind", "Remind Sam · $45", ["invoice_id": .string("INV-9")]))
         await settled()
         XCTAssertEqual(api.calls, ["remind:INV-9"])
         XCTAssertEqual(model.bar, .done("Reminder sent \u{2713}"))
@@ -211,13 +211,14 @@ final class ChipActionTests: XCTestCase {
         let c = invoice
         api.failures = [URLError(.timedOut)]
         send(c)
+        await passChecks()
         await settled()
-        XCTAssertEqual(model.bar, .error("Took too long. Try again."))
+        XCTAssertEqual(titles(), ["It didn't go through. Tap to try again."])
         clock.advance(PendingAction.ttl + 1)
         send(c)
         await settled()
-        XCTAssertEqual(api.keys.count, 2)
-        XCTAssertEqual(api.keys[0], api.keys[1], "the same chip is the same request, however late the re-tap")
+        XCTAssertEqual(api.calls.filter { $0 == "invoice" }.count, 2)
+        XCTAssertEqual(Set(api.keys).count, 1, "the same chip is the same request, however late the re-tap")
     }
 
     func testEachServerReplyGivesNewKeysAndASavedChipKeepsItsKey() throws {
@@ -373,7 +374,7 @@ final class ChipActionTests: XCTestCase {
     func testAPayLinkThatNeedsAConfirmAsksFirst() async {
         model.tapChip(chip("paylink", "Pay link $135", ["amount": .string("135.00"), "currency": .string("USD"), "item": .string("Haircut")], confirm: true))
         XCTAssertEqual(api.calls, [])
-        XCTAssertEqual(titles(), ["Create $135 pay link?", "Cancel"])
+        XCTAssertEqual(titles(), ["Make a $135 pay link?", "Cancel"])
     }
 
     func testTwoClientsNeverShareAKey() async {
@@ -435,14 +436,62 @@ final class ChipActionTests: XCTestCase {
         XCTAssertEqual(host.text, "Thanks Sam\nHere's your invoice for Haircut ($45): https://fake.pay/INV-1")
     }
 
-    func testARemindNamedOnlyInCopiedTextAsksFirst() async {
-        model.tapChip(chip("remind", "Remind Ana · $90", ["invoice_id": .string("INV-A")], confirm: true))
-        XCTAssertEqual(api.calls, [], "no reminder goes out on the first tap")
-        XCTAssertEqual(titles(), ["Remind Ana · $90?", "Cancel"])
+    func testEveryRemindAsksFirstAndSendsTheClientItShowed() async {
+        let c = chip("remind", "Remind Ana · $90", ["invoice_id": .string("INV-A"), "client_name": .string("Ana"),
+                                                    "amount": .string("90.00"), "currency": .string("USD")])
+        model.tapChip(c)
+        XCTAssertEqual(api.calls, [], "no reminder goes out on the first tap, even with needs_confirm false")
+        XCTAssertEqual(titles(), ["Remind Ana about $90?", "Cancel"])
         guard case .confirm(let next, let recipient) = model.bar else { return XCTFail("expected the confirm slot, got \(model.bar)") }
         model.confirm(next, recipient: recipient)
         await settled()
         XCTAssertEqual(api.calls, ["remind:INV-A"])
+        XCTAssertEqual(api.reminded, ["Ana"])
+    }
+
+    func testTheInvoiceConfirmSendsTheCurrencyItShowed() async {
+        send(invoice)
+        await settled()
+        XCTAssertEqual(api.invoiced.last?["confirm_currency"], .string("USD"))
+    }
+
+    // MARK: a timeout on a money call may have run on the server: check with the same key, never send blind
+
+    private func passChecks(_ n: Int = ChipActions.checkTries) async {
+        for _ in 0..<n {
+            await until("check wait") { clock.sleeping > 0 }
+            clock.advance(ChipActions.checkDelay.seconds)
+        }
+    }
+
+    func testATimeoutThatRanOnTheServerChecksAndShowsTheResult() async {
+        host.text = "Thanks Sam"
+        api.lostReplies = 1
+        send(invoice)
+        await until("checking line") { model.bar == .working("Not sure it went through. Checking\u{2026}") }
+        XCTAssertNotNil(store.pendingAction, "kept with its key while unsure")
+        await passChecks(1)
+        await settled()
+        XCTAssertEqual(api.calls, ["invoice", "lookup:invoice"], "the check only looks up")
+        XCTAssertEqual(Set(api.keys).count, 1)
+        XCTAssertEqual(host.text, "Thanks Sam\nHere's your invoice for Haircut ($45): https://fake.pay/INV-1")
+        XCTAssertNil(store.pendingAction)
+    }
+
+    func testATimeoutNotFoundAfterTheChecksOffersARetryWithTheSameKey() async {
+        api.failures = [URLError(.timedOut)]
+        send(invoice)
+        await passChecks()
+        await settled()
+        XCTAssertEqual(api.calls, ["invoice"] + Array(repeating: "lookup:invoice", count: ChipActions.checkTries))
+        XCTAssertEqual(titles(), ["It didn't go through. Tap to try again."])
+        guard case .retry(let again, let confirmed) = model.bar else { return XCTFail("expected the retry slot, got \(model.bar)") }
+        model.perform(.retry(again, confirmed: confirmed))
+        await settled()
+        XCTAssertEqual(api.calls.last, "invoice")
+        XCTAssertEqual(api.invoiced.count, 2)
+        XCTAssertEqual(Set(api.keys).count, 1, "the retry is the same request")
+        XCTAssertEqual(api.invoiced.last?["confirm_recipient"], .string("sam@example.com"))
     }
 
     func testAPendingRefundOnAppearOnlyLooksUp() async {

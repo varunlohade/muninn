@@ -51,6 +51,8 @@ enum BarState: Equatable {
     case ask(Chip, question: String)
     case done(String)
     case error(String)
+    /// A money call a check never found: a tap sends the same chip again with its same key.
+    case retry(Chip, confirmed: String?)
 }
 
 /// The one-tap rewrites in the Refine panel. The raw value is the server's tone name.
@@ -777,6 +779,7 @@ final class KeyboardModel: ObservableObject {
         case .bill(let a): invoiceAppointment(a)
         case .chip(let chip): tapChip(chip)
         case .confirm(let chip, let recipient): confirm(chip, recipient: recipient)
+        case .retry(let chip, let confirmed): run(chip, confirmed: confirmed)
         case .cancelConfirm: cancelConfirm()
         case .undo: undoWrite()
         case .openCalm: openCalmOffer()
@@ -827,8 +830,22 @@ final class KeyboardModel: ObservableObject {
         }
         actionTask = Task { [weak self] in
             do {
-                let outcome = try await ChipActions.run(chip, confirmed: confirmed, source: source, api: api, key: key, sleep: sleep,
+                let outcome: ChipOutcome
+                do {
+                    outcome = try await ChipActions.run(chip, confirmed: confirmed, source: source, api: api, key: key, sleep: sleep,
                                                         stillSending: { self?.bar = .working("Still sending\u{2026}") })
+                } catch where sendsMoney && ChipActions.mayHaveRun(error) {
+                    // It may have run on the server. Keep the pending call and its key, and only look it up.
+                    guard let self, !Task.isCancelled else { return }
+                    self.bar = .working("Not sure it went through. Checking\u{2026}")
+                    guard let found = try await ChipActions.check(chip, confirmed: confirmed, api: api, key: key, sleep: sleep) else {
+                        guard !Task.isCancelled else { return }
+                        // The pending call stays: the next appear looks it up again, in case it lands late.
+                        self.bar = .retry(chip, confirmed: confirmed)
+                        return
+                    }
+                    outcome = found
+                }
                 guard let self, !Task.isCancelled else { return }
                 if sendsMoney { store.pendingAction = nil }
                 switch outcome {

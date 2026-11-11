@@ -47,6 +47,27 @@ enum ChipActions {
     private static let networkFailures: Set<URLError.Code> = [
         .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
     ]
+    /// Failures after the request may have reached the server: the action may have run.
+    private static let unsureFailures: Set<URLError.Code> = [.timedOut, .networkConnectionLost]
+    static let checkTries = 3
+    static let checkDelay: Duration = .seconds(2)
+
+    static func mayHaveRun(_ error: Error) -> Bool {
+        if let e = error as? URLError { unsureFailures.contains(e.code) } else { false }
+    }
+
+    /// After a call that may have run: looks up the stored answer of `key` up to `checkTries` times, never sends.
+    /// Nil when no check found it.
+    static func check(_ chip: Chip, confirmed: String?, api: KeyboardAPI, key: String,
+                      sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async throws -> ChipOutcome? {
+        for _ in 0..<checkTries {
+            try await sleep(checkDelay)
+            do { return try await run(chip, confirmed: confirmed, api: api, key: key, lookup: true, sleep: sleep) }
+            catch is CancellationError { throw CancellationError() }
+            catch {}
+        }
+        return nil
+    }
 
     /// `source` is the message a reply answers. `key` is the Idempotency-Key; every retry sends it, so the
     /// server never runs a money action twice. `sleep` waits before a retry. `stillSending` runs while the
@@ -77,6 +98,7 @@ enum ChipActions {
             if let confirmed {
                 if case .string? = payload["client_email"] { payload["confirm_recipient"] = .string(confirmed) }
                 payload["confirm_amount"] = payload["amount"]
+                if case .string? = payload["currency"] { payload["confirm_currency"] = payload["currency"] }
             }
             let res = try await call { try await api.invoice(payload, key: key, lookup: lookup) }
             guard let link = res.pay_link else { throw APIError.message("No link came back. Try again.") }
@@ -94,7 +116,7 @@ enum ChipActions {
             return .sent(ActionResult(id: res.id, kind: "paylink", link: link, money: money, who: who, message: link))
         case "remind":
             guard let id = string(chip, "invoice_id") else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
-            _ = try await call { try await api.remind(invoiceID: id, key: key, lookup: lookup) }
+            _ = try await call { try await api.remind(invoiceID: id, confirmClient: confirmed, key: key, lookup: lookup) }
             return .line("Reminder sent \u{2713}")
         case "refund":
             if let token = string(chip, "confirm_token") {
