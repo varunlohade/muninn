@@ -8,6 +8,8 @@ final class CalendarModel: ObservableObject {
     static let shared = CalendarModel()
 
     @Published var status = EKEventStore.authorizationStatus(for: .event)
+    /// The keyboard adds reminders from typed text ("call supplier at 5"). The app asks; the keyboard cannot.
+    @Published var remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
     @Published var today: [Appointment] = []
 
     private let store = EKEventStore()
@@ -16,6 +18,8 @@ final class CalendarModel: ObservableObject {
     private var changes: Any?
 
     var connected: Bool { status == .fullAccess }
+    /// Either permission has never been asked, so the Connect card still shows.
+    var neverAsked: Bool { status == .notDetermined || remindersStatus == .notDetermined }
 
     init() {
         changes = NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: store, queue: .main) { [weak self] _ in
@@ -24,18 +28,22 @@ final class CalendarModel: ObservableObject {
     }
 
     func connect() async {
-        _ = try? await store.requestFullAccessToEvents()
+        if status == .notDetermined { _ = try? await store.requestFullAccessToEvents() }
+        if remindersStatus == .notDetermined { _ = try? await store.requestFullAccessToReminders() }
+        remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
         refresh()
     }
 
     func refresh(clients: [Client], payments: [Payment]) {
         self.clients = clients
         self.payments = payments
+        SharedStore.unpaidCount = payments.filter { $0.kind == "invoice" && $0.state == "unpaid" }.count
         refresh()
     }
 
     func refresh() {
         status = EKEventStore.authorizationStatus(for: .event)
+        remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
         guard connected else { today = []; SharedStore.appointments = []; return }
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-calendarDemo") { seedDemo() }

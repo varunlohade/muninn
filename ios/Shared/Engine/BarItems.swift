@@ -14,6 +14,12 @@ enum BarItems {
         case cancelConfirm
         case undo
         case openCalm
+        /// On-device actions: add an event, a reminder or a note, then undo it.
+        case smart(SmartChip)
+        case undoSmart
+        case whoPaid
+        case today
+        case notes
     }
 
     struct Item: Equatable, Identifiable {
@@ -22,6 +28,14 @@ enum BarItems {
         var detail: String? = nil
         var tone: Tone = .label
         var action: Action? = nil
+        /// The typed words that caused the chip. The bar shows them quoted, in the accent color, before the title.
+        var trigger: String? = nil
+    }
+
+    /// A smart chip and whether its store can take it now.
+    struct Smart {
+        let chip: SmartChip
+        let access: SmartAccess
     }
 
     struct State {
@@ -34,6 +48,15 @@ enum BarItems {
         var copiedAvailable: Bool
         var toBill: Appointment?
         var nextUp: Appointment?
+        var smart: [Smart] = []
+        /// The line after a smart chip was added; Undo removes it.
+        var added: String?
+        /// Nothing is typed: the bar shows ready chips.
+        var fieldEmpty = false
+        /// The typed words a money chip came from, for a server that sends no trigger: "$45 for the haircut".
+        var moneyTrigger: String?
+        var ready = ReadyChips.Input()
+        var now = Date()
     }
 
     static func build(_ s: State) -> [Item] {
@@ -42,10 +65,17 @@ enum BarItems {
         if let u = s.undo {
             return [Item(id: "written", title: u.label, tone: .paid), Item(id: "undo", title: "Undo", action: .undo)]
         }
+        if let a = s.added {
+            return [Item(id: "added", title: a, tone: .paid), Item(id: "undo", title: "Undo", action: .undoSmart)]
+        }
         var out: [Item] = []
         if s.hasCalmOffer {
             out.append(Item(id: "calm", title: "Calm reply", detail: "client sounds upset", action: .openCalm))
         }
+        if case .idle = s.bar, s.fieldEmpty {
+            return Array((out + ReadyChips.build(s.ready)).prefix(3))
+        }
+        let smart = smartItems(s.smart, now: s.now)
         if let w = s.watch {
             out.append(w.paid
                 ? Item(id: "paid", title: "\(w.who) paid \(w.money) ✓", tone: .paid)
@@ -53,14 +83,17 @@ enum BarItems {
         }
         switch s.bar {
         case .idle:
+            out += smart
             if s.copiedAvailable { out.append(Item(id: "copied", title: "Use copied message", action: .useCopied)) }
             if let a = s.toBill { out.append(Item(id: "bill", title: "Invoice \(a.who)", action: .bill(a))) }
             if let a = s.nextUp { out.append(Item(id: "next", title: "Next: \(a.who) \(a.time)", tone: .secondary)) }
             out = Array(out.prefix(3))
         case .chips(let chips, let fromCopied):
             for chip in chips.prefix(max(1, 3 - out.count)) {
-                out.append(Item(id: chip.kind, title: title(chip), detail: detail(chip, fromCopied: fromCopied), action: .chip(chip)))
+                out.append(Item(id: chip.kind, title: title(chip), detail: detail(chip, fromCopied: fromCopied), action: .chip(chip),
+                                trigger: chip.trigger ?? (fromCopied ? nil : s.moneyTrigger)))
             }
+            out = Array((out + smart).prefix(max(3, out.count)))
         case .working(let text):
             out.append(Item(id: "working", title: text, tone: .secondary))
         case .confirm(let chip, let recipient):
@@ -75,6 +108,25 @@ enum BarItems {
             out.append(Item(id: "error", title: text, tone: .due))
         case .retry(let chip, let confirmed):
             out.append(Item(id: "retry", title: "It didn't go through. Tap to try again.", tone: .due, action: .retry(chip, confirmed: confirmed)))
+        }
+        return out
+    }
+
+    /// Each smart chip, or the one line that says which permission it waits for. The line opens nothing: a keyboard cannot.
+    static func smartItems(_ list: [Smart], now: Date) -> [Item] {
+        var out: [Item] = []
+        for s in list {
+            let item: Item
+            switch s.access {
+            case .ready:
+                item = Item(id: s.chip.id, title: s.chip.label(now: now), action: .smart(s.chip), trigger: s.chip.trigger)
+            case .needsFullAccess:
+                item = Item(id: "allow.full", title: "Allow Full Access for \(AppConfig.keyboardName)", tone: .secondary)
+            case .needsPermission:
+                let place = s.chip.place == .calendar ? "Calendar" : "Reminders"
+                item = Item(id: "allow.\(place)", title: "Allow \(place) in \(AppConfig.displayName)", tone: .secondary)
+            }
+            if !out.contains(where: { $0.id == item.id }) { out.append(item) }
         }
         return out
     }

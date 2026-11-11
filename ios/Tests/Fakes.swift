@@ -115,9 +115,34 @@ final class FakeStore: KeyboardStore {
     var keyboardLastSeen: Date?
     var lastPasteboardChange = 0
     var appointments: [Appointment] = []
+    var unpaidCount: Int?
     var notes: [Note] = []
     var actionShortcuts: [ActionShortcut] = ActionShortcut.defaults
     var pendingAction: PendingAction?
+}
+
+/// The phone's calendar and reminders, in memory. `granted` is what the app was allowed.
+final class FakeWriter: SmartWriter {
+    struct Failure: Error {}
+    var granted: Set<SmartChip.Place> = [.calendar, .reminders, .notes]
+    var fails = false
+    private(set) var events: [String: (title: String, start: Date, end: Date?)] = [:]
+    private(set) var reminders: [String: (title: String, due: Date)] = [:]
+
+    func access(_ place: SmartChip.Place, hasFullAccess: Bool) -> SmartAccess {
+        guard hasFullAccess else { return .needsFullAccess }
+        return granted.contains(place) ? .ready : .needsPermission
+    }
+    func addEvent(title: String, start: Date, end: Date?) throws -> String {
+        if fails { throw Failure() }
+        let id = "E\(events.count + 1)"; events[id] = (title, start, end); return id
+    }
+    func addReminder(title: String, due: Date) throws -> String {
+        if fails { throw Failure() }
+        let id = "R\(reminders.count + 1)"; reminders[id] = (title, due); return id
+    }
+    func removeEvent(_ id: String) throws { events[id] = nil }
+    func removeReminder(_ id: String) throws { reminders[id] = nil }
 }
 
 final class FakePasteboard: Pasteboard {
@@ -173,10 +198,10 @@ final class FakeClock {
 @MainActor
 extension KeyboardDeps {
     static func fake(api: FakeAPI, store: FakeStore = FakeStore(), pasteboard: FakePasteboard = FakePasteboard(),
-                     clock: FakeClock = FakeClock()) -> KeyboardDeps {
+                     clock: FakeClock = FakeClock(), writer: FakeWriter = FakeWriter()) -> KeyboardDeps {
         KeyboardDeps(api: { api }, store: store, pasteboard: pasteboard,
                      now: { MainActor.assumeIsolated { clock.now } },
-                     sleep: { d in try await clock.sleep(d) })
+                     sleep: { d in try await clock.sleep(d) }, writer: writer)
     }
 }
 

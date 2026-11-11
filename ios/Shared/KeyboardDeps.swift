@@ -25,6 +25,7 @@ protocol KeyboardStore: AnyObject {
     var keyboardLastSeen: Date? { get set }
     var lastPasteboardChange: Int { get set }
     var appointments: [Appointment] { get }
+    var unpaidCount: Int? { get }
     var notes: [Note] { get set }
     var actionShortcuts: [ActionShortcut] { get }
     /// A money call still waiting for its answer, kept when the keyboard closes.
@@ -42,6 +43,7 @@ final class SharedKeyboardStore: KeyboardStore {
         set { SharedStore.lastPasteboardChange = newValue }
     }
     var appointments: [Appointment] { SharedStore.appointments }
+    var unpaidCount: Int? { SharedStore.unpaidCount }
     var notes: [Note] {
         get { SharedStore.notes }
         set { SharedStore.notes = newValue }
@@ -69,6 +71,8 @@ struct KeyboardDeps {
     var pasteboard: Pasteboard
     var now: () -> Date
     var sleep: (Duration) async throws -> Void
+    /// The phone's calendar and reminders, for smart chips.
+    var writer: SmartWriter = EventKitWriter()
 
     static func live() -> KeyboardDeps {
         KeyboardDeps(api: { APIClient.shared() }, store: SharedKeyboardStore(), pasteboard: UIPasteboard.general,

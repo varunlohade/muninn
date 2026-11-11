@@ -9,6 +9,7 @@ enum SharedStore {
     private static let serverKey = "server_url"
     private static let pasteboardKey = "pasteboard_change_count"
     private static let keyboardSeenKey = "keyboard_last_seen"
+    private static let unpaidKey = "unpaid_count"
 
     private static var defaults: UserDefaults? { UserDefaults(suiteName: AppConfig.appGroupID) }
 
@@ -27,6 +28,12 @@ enum SharedStore {
     static var keyboardLastSeen: Date? {
         get { defaults?.object(forKey: keyboardSeenKey) as? Date }
         set { defaults?.set(newValue, forKey: keyboardSeenKey) }
+    }
+
+    /// How many invoices were unpaid when the app last loaded payments. Nil before the first load.
+    static var unpaidCount: Int? {
+        get { defaults?.object(forKey: unpaidKey) as? Int }
+        set { defaults?.set(newValue, forKey: unpaidKey) }
     }
 
     /// Small JSON files in the App Group container. They stay on the device, encrypted while it is locked.

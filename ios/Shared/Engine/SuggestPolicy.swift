@@ -22,6 +22,8 @@ struct SuggestPolicy {
 
     /// Chip kind → the text it was turned away on.
     private(set) var crossed: [String: String] = [:]
+    /// Sentences already sent on the "maybe an action" path, by their first words. Each goes once.
+    private(set) var askedSentences: Set<String> = []
 
     init() {}
 
@@ -33,6 +35,24 @@ struct SuggestPolicy {
         let words = text.split(whereSeparator: \.isWhitespace).count
         guard hasMoneySignal(text), words >= minMoneyWords else { return .skip }
         return .ask(text, after: debounce)
+    }
+
+    /// Text with no money signal and no clear on-device match, but action-ish signals ("can we do Ana's thing Friday"):
+    /// the last sentence goes to the server once, after the pause. Nil for plain chat, a clear match, or a sentence already sent.
+    func maybe(_ typed: String, clear: Bool) -> String? {
+        guard !clear, !typed.hasPrefix(Self.shortcutPrefix), !Self.hasMoneySignal(typed), SmartDetect.maybe(typed) else { return nil }
+        let sentence = SmartDetect.lastSentence(typed)
+        return askedSentences.contains(Self.sentenceKey(sentence)) ? nil : sentence
+    }
+
+    /// Called when the maybe request really goes out, after the pause.
+    mutating func markAsked(_ sentence: String) {
+        askedSentences.insert(Self.sentenceKey(sentence))
+    }
+
+    /// A sentence is known by its first three words, so typing on in the same sentence does not ask again.
+    static func sentenceKey(_ sentence: String) -> String {
+        sentence.lowercased().split(whereSeparator: \.isWhitespace).prefix(3).joined(separator: " ")
     }
 
     /// The server's gate (server/src/quick.ts): an amount, a price shape, a money word, or another script.

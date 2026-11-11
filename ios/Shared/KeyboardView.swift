@@ -118,10 +118,18 @@ struct SuggestionBar: View {
         var body: some View {
             Button { action?() } label: {
                 VStack(spacing: 0) {
-                    Text(item.title).font(item.detail == nil ? M.prediction : M.prediction.weight(.medium))
-                        .foregroundStyle(tint)
-                        .lineLimit(item.id == "confirm" ? 2 : 1).minimumScaleFactor(item.id == "confirm" ? 0.8 : 0.6)
-                        .multilineTextAlignment(.center)
+                    HStack(spacing: 4) {
+                        // The words that caused the chip, quoted. They truncate first, so the action stays whole.
+                        if let t = item.trigger {
+                            Text("\u{201C}\(t)\u{201D}").font(M.prediction).foregroundStyle(palette.accent)
+                                .lineLimit(1).truncationMode(.tail)
+                        }
+                        Text(item.title).font(item.detail == nil ? M.prediction : M.prediction.weight(.medium))
+                            .foregroundStyle(tint)
+                            .lineLimit(item.id == "confirm" ? 2 : 1).minimumScaleFactor(item.id == "confirm" ? 0.8 : 0.6)
+                            .multilineTextAlignment(.center)
+                            .layoutPriority(1)
+                    }
                     if let d = item.detail {
                         Text(d).font(M.predictionSmall).foregroundStyle(palette.secondaryLabel).lineLimit(1).minimumScaleFactor(0.7)
                     }

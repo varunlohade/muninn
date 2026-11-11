@@ -91,6 +91,14 @@ struct WriteUndo: Equatable {
     let replacement: String
 }
 
+/// A smart chip one tap added, and what Undo removes.
+struct SmartAdded: Equatable {
+    enum Item: Equatable { case event(String), reminder(String), note(UUID) }
+    let chip: SmartChip
+    let label: String
+    let item: Item
+}
+
 /// A sent invoice or pay link the keyboard watches until it is paid.
 struct Watch: Equatable {
     let id: String
@@ -127,6 +135,13 @@ final class KeyboardModel: ObservableObject {
     @Published var hasFullAccess = false
     @Published var paired = false
     @Published var lastLatencyMs: Int?
+    /// Events, reminders and notes read from the typed text on the phone.
+    @Published var smart: [SmartChip] = []
+    /// The line after a smart chip was added, kept for the Undo window.
+    @Published var added: SmartAdded?
+    /// Nothing is typed, so the bar shows ready chips.
+    @Published var fieldEmpty = true
+    @Published var unpaidCount: Int?
 
     weak var host: TextHost?
     /// False in the intro scenes about writing, where a payment chip would get in the way. Then typing sends nothing.
@@ -142,6 +157,12 @@ final class KeyboardModel: ObservableObject {
     private var actions: [ActionShortcut] = ActionShortcut.defaults
     private var writeTask: Task<Void, Never>?
     private var undoTask: Task<Void, Never>?
+    private var smartTask: Task<Void, Never>?
+    private var addedTask: Task<Void, Never>?
+    /// Smart chips added from the current text, so they do not come back after the tap.
+    private var smartDone: Set<SmartChip> = []
+    /// Device chips the server gave for a sentence, kept while the owner types on in that sentence.
+    private var serverSmart: (sentence: String, chips: [SmartChip])?
     /// The last text Fix returned or found clean, so the chip does not offer the same text twice.
     private var lastFixed = ""
     static let undoWindow: Duration = .seconds(5)
@@ -319,7 +340,7 @@ final class KeyboardModel: ObservableObject {
         deps.store.keyboardLastSeen = deps.now()
         reloadShortcuts()
         guard paired else { return }
-        appointments = deps.store.appointments
+        reloadSnapshot()
         // hasStrings and changeCount do not trigger the paste prompt; only reading the string does.
         let pasteboard = deps.pasteboard
         copiedAvailable = pasteboard.hasStrings && pasteboard.changeCount != deps.store.lastPasteboardChange
@@ -365,6 +386,12 @@ final class KeyboardModel: ObservableObject {
                 if !(error is URLError), !isInProgress(error) { store.pendingAction = nil }
             }
         }
+    }
+
+    /// What the app last wrote for the ready chips: today's appointments and the unpaid count.
+    private func reloadSnapshot() {
+        appointments = deps.store.appointments
+        unpaidCount = deps.store.unpaidCount
     }
 
     func keyboardDisappeared() {
@@ -420,6 +447,11 @@ final class KeyboardModel: ObservableObject {
         if case .confirm = bar { return }
         if case .ask = bar { return }
         let text = typed
+        let wasEmpty = fieldEmpty
+        fieldEmpty = text.isEmpty
+        // Empty again, as after a send: the ready chips read the app's latest snapshot.
+        if text.isEmpty, !wasEmpty { reloadSnapshot() }
+        let clear = detectSmart(text)
         suggest.observe(text)
         switch SuggestPolicy.ask(text, lastAsked: lastSent, prefix: billing?.invoicePrefix) {
         case .keep:
@@ -429,6 +461,9 @@ final class KeyboardModel: ObservableObject {
             lastSent = text
             if text.isEmpty { billing = nil }
             bar = .idle
+            if let sentence = suggest.maybe(text, clear: clear) {
+                requestSuggest(text: sentence, context: nil, debounce: SuggestPolicy.debounce, sentAs: text, maybe: true)
+            }
         case .ask(let sent, let after):
             suggestTask?.cancel()
             requestSuggest(text: sent, context: nil, debounce: after, sentAs: text)
@@ -488,7 +523,25 @@ final class KeyboardModel: ObservableObject {
         requestSuggest(text: a.invoicePrefix + " " + typed, context: nil, debounce: nil, sentAs: typed)
     }
 
-    private func requestSuggest(text: String, context: String?, debounce: Duration?, sentAs: String? = nil) {
+    /// On every pause, on the phone: events, reminders and notes in the typed text. True when something clear was found.
+    private func detectSmart(_ text: String) -> Bool {
+        smartTask?.cancel()
+        if text.isEmpty { smart = []; smartDone = []; serverSmart = nil; return false }
+        let found = SmartDetect.detect(text, now: deps.now(), clients: appointments.compactMap(\.clientName))
+        let kept = serverSmart.flatMap { s in SuggestPolicy.sentenceKey(SmartDetect.lastSentence(text)) == s.sentence ? s.chips : nil } ?? []
+        let shown = Array((found + kept.filter { k in !found.contains { $0.id == k.id } }).filter { !smartDone.contains($0) }.prefix(SmartDetect.maxChips))
+        guard shown != smart else { return !found.isEmpty }
+        let sleep = deps.sleep
+        smartTask = Task { [weak self] in
+            try? await sleep(SuggestPolicy.debounce)
+            guard let self, !Task.isCancelled else { return }
+            self.smart = shown
+        }
+        return !found.isEmpty
+    }
+
+    /// `maybe`: the sentence had no clear match on the phone; the server's device chips may answer it.
+    private func requestSuggest(text: String, context: String?, debounce: Duration?, sentAs: String? = nil, maybe: Bool = false) {
         let typedAt = ContinuousClock.now
         let askedFor = sentAs ?? text
         lastSent = askedFor
@@ -496,10 +549,18 @@ final class KeyboardModel: ObservableObject {
         suggestTask = Task { [weak self] in
             if let debounce { try? await sleep(debounce) }
             guard let self, !Task.isCancelled else { return }
+            if maybe { self.suggest.markAsked(text) }
             do {
                 let res = try await self.deps.api().suggest(text, context: context)
                 guard !Task.isCancelled else { return }
-                guard let chips = self.suggest.show(res.chips, askedFor: askedFor, current: self.typed) else {
+                let device = res.chips.filter { Self.deviceKinds.contains($0.kind) }
+                if !device.isEmpty, self.typed == askedFor {
+                    let more = device.compactMap { Self.smartChip($0, sentence: text, now: self.deps.now()) }.filter { !self.smartDone.contains($0) }
+                    self.serverSmart = (SuggestPolicy.sentenceKey(text), more)
+                    self.smart = Array((self.smart + more.filter { m in !self.smart.contains { $0.id == m.id } }).prefix(SmartDetect.maxChips))
+                }
+                if maybe { return }
+                guard let chips = self.suggest.show(res.chips.filter { !Self.deviceKinds.contains($0.kind) }, askedFor: askedFor, current: self.typed) else {
                     // The text moved on while the server thought. Ask again for what is there now.
                     self.log.notice("MUNINN_SUGGEST stale reply dropped")
                     if case .working = self.bar { self.bar = .idle }
@@ -518,10 +579,38 @@ final class KeyboardModel: ObservableObject {
             } catch is CancellationError {
             } catch let e as URLError where e.code == .cancelled {
             } catch {
-                guard !Task.isCancelled else { return }
+                // A maybe ask is a guess the owner never asked for: a failure stays quiet.
+                guard !Task.isCancelled, !maybe else { return }
                 self.lastSent = ""
                 self.bar = .error(plainLine(error))
             }
+        }
+    }
+
+    /// Kinds the server answers on the "maybe an action" path. They run on the phone, never on the server.
+    static let deviceKinds: Set<String> = ["event", "reminder", "note", "followup"]
+
+    /// A server device chip as a smart chip. The phone fills a time the server left out from its own reading of the sentence.
+    static func smartChip(_ c: Chip, sentence: String, now: Date, calendar cal: Calendar = .current) -> SmartChip? {
+        let title = BarItems.string(c, "title") ?? ""
+        let when = SmartDetect.findWhen(sentence, now: now, cal: cal)
+        let iso = { (key: String) in BarItems.string(c, key).flatMap { ISO8601DateFormatter().date(from: $0) } }
+        let trigger = c.trigger ?? when.map { String(sentence[$0.range]) } ?? String(sentence.prefix(24))
+        let at9 = { (d: Date) in cal.date(bySettingHour: 9, minute: 0, second: 0, of: d) ?? d }
+        switch c.kind {
+        case "event":
+            guard !title.isEmpty, let start = iso("start") ?? when?.date else { return nil }
+            let end = iso("end") ?? ((when?.hasTime ?? true) ? start.addingTimeInterval(3600) : nil)
+            return SmartChip(action: .event(title: title, start: start, end: end), trigger: trigger)
+        case "reminder", "followup":
+            guard !title.isEmpty else { return nil }
+            let due = iso("due") ?? when.map { $0.hasTime ? $0.date : at9($0.date) } ?? at9(now.addingTimeInterval(86_400))
+            return SmartChip(action: .reminder(title: title, due: due), trigger: trigger)
+        case "note":
+            guard let text = BarItems.string(c, "text") else { return nil }
+            return SmartChip(action: .note(text: text), trigger: trigger)
+        default:
+            return nil
         }
     }
 
@@ -769,8 +858,14 @@ final class KeyboardModel: ObservableObject {
     // MARK: bar
 
     var barItems: [BarItems.Item] {
-        BarItems.build(.init(hasFullAccess: hasFullAccess, paired: paired, undo: undo, hasCalmOffer: calmOffer != nil, watch: watch,
-                             bar: bar, copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp))
+        let writer = deps.writer
+        return BarItems.build(.init(hasFullAccess: hasFullAccess, paired: paired, undo: undo, hasCalmOffer: calmOffer != nil, watch: watch,
+                                    bar: bar, copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp,
+                                    smart: smart.map { BarItems.Smart(chip: $0, access: writer.access($0.place, hasFullAccess: hasFullAccess)) },
+                                    added: added?.label, fieldEmpty: fieldEmpty, moneyTrigger: SmartDetect.moneyTrigger(typed),
+                                    ready: .init(copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp, today: appointments,
+                                                 unpaidCount: unpaidCount, watch: watch),
+                                    now: deps.now()))
     }
 
     func perform(_ action: BarItems.Action) {
@@ -783,7 +878,68 @@ final class KeyboardModel: ObservableObject {
         case .cancelConfirm: cancelConfirm()
         case .undo: undoWrite()
         case .openCalm: openCalmOffer()
+        case .smart(let chip): tapSmart(chip)
+        case .undoSmart: undoSmart()
+        case .whoPaid: showLate()
+        case .today: showToday()
+        case .notes: toggleNotes()
         }
+    }
+
+    // MARK: smart chips (on the phone, no server)
+
+    /// One tap adds it: the chip is the confirm. The bar then shows what was added, with Undo for a few seconds.
+    func tapSmart(_ chip: SmartChip) {
+        guard deps.writer.access(chip.place, hasFullAccess: hasFullAccess) == .ready else { return }
+        host?.playClick()
+        let item: SmartAdded.Item
+        do {
+            switch chip.action {
+            case .event(let title, let start, let end): item = .event(try deps.writer.addEvent(title: title, start: start, end: end))
+            case .reminder(let title, let due): item = .reminder(try deps.writer.addReminder(title: title, due: due))
+            case .invoiceLater(let client, let due): item = .reminder(try deps.writer.addReminder(title: "Invoice \(client)", due: due))
+            case .note(let text):
+                let note = Note(text: text)
+                notes = [note] + deps.store.notes
+                deps.store.notes = notes
+                item = .note(note.id)
+            }
+        } catch {
+            bar = .error("Could not add that. Try again.")
+            return
+        }
+        smartDone.insert(chip)
+        smart.removeAll { $0 == chip }
+        added = SmartAdded(chip: chip, label: chip.doneLabel(now: deps.now()), item: item)
+        addedTask?.cancel()
+        let sleep = deps.sleep
+        addedTask = Task { [weak self] in
+            try? await sleep(Self.undoWindow)
+            guard !Task.isCancelled else { return }
+            self?.added = nil
+        }
+    }
+
+    /// Removes what the last smart tap added, and offers the chip again.
+    func undoSmart() {
+        guard let a = added else { return }
+        host?.playClick()
+        addedTask?.cancel()
+        added = nil
+        switch a.item {
+        case .event(let id): try? deps.writer.removeEvent(id)
+        case .reminder(let id): try? deps.writer.removeReminder(id)
+        case .note(let id):
+            notes = deps.store.notes.filter { $0.id != id }
+            deps.store.notes = notes
+        }
+        smartDone.remove(a.chip)
+        if !smart.contains(a.chip) { smart.insert(a.chip, at: 0) }
+    }
+
+    /// "9:20 Sam · 11:00 Ava", from the snapshot the app wrote.
+    private func showToday() {
+        bar = .done(appointments.isEmpty ? "Nothing on your calendar today" : appointments.map { "\($0.time) \($0.who)" }.joined(separator: " \u{00B7} "))
     }
 
     // MARK: actions
