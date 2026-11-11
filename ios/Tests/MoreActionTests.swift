@@ -174,6 +174,15 @@ final class MoreActionTests: XCTestCase {
         }
     }
 
+    func testOfferAndClaimAloneStayOnThePhone() {
+        for text in ["I can offer 2 slots", "that's my claim to fame"] {
+            XCTAssertFalse(SuggestPolicy.hasMoneySignal(text), text)
+        }
+        for text in ["offer sam $20 back", "accept sam's claim in the dispute"] {
+            XCTAssertTrue(SuggestPolicy.hasMoneySignal(text), text)
+        }
+    }
+
     func testAskRouteActionDecodesChips() throws {
         let json = #"{"route":"action","confidence":1,"result":{"chips":[{"kind":"plan_pause","label":"Pause $40/mo · Ana","payload":{"body":{"subscription_id":"I-ANA1"}},"needs_confirm":true}]}}"#
         let r = try JSONDecoder().decode(AskResponse.self, from: Data(json.utf8))

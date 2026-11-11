@@ -520,21 +520,23 @@ test('payouts: the daily cap counts each currency on its own', async () => {
 
 // ---- step 5: disputes
 
-function withDispute(s: ReturnType<typeof setup>, userId: string) {
+async function withDispute(s: ReturnType<typeof setup>, { userId, token }: { userId: string; token: string }) {
+  // Sam Lee is the owner's own client: a repeat bill of theirs took the disputed payment.
+  const sub = await plan(s, token, 'Sam Lee', 'sam@x.com');
   const due = new Date(Date.now() + 2 * 86_400_000).toISOString();
   s.ppData.set(userId, { disputes: [{
     id: 'PP-D-12345', status: 'WAITING_FOR_SELLER_RESPONSE', reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', amount: { value: '45.00', currency: 'USD' },
     due_date: due, created_at: new Date().toISOString(), stage: 'INQUIRY', buyer_name: 'Sam Lee', transaction_id: 'TX-D1', messages: [],
   }] });
   // The disputed payment is one this user's own repeat bill took on the demo merchant.
-  s.db.raw.prepare('INSERT INTO subscription_payments (sale_id, user_id, subscription_id, paid_at) VALUES (?, ?, ?, ?)').run('TX-D1', userId, 'I-SUB1', Date.now());
+  s.db.raw.prepare('INSERT INTO subscription_payments (sale_id, user_id, subscription_id, paid_at) VALUES (?, ?, ?, ?)').run('TX-D1', userId, sub, Date.now());
   return new Date(due).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
 }
 
 test('disputes: the list names the buyer, the amount and the reply-by day, in the bar and for the app', async () => {
   const s = setup();
   const A = s.device();
-  const day = withDispute(s, A.userId);
+  const day = await withDispute(s, A);
   const [ch] = (await suggest(s, A.token, 'disputes')).chips;
   assert.equal(ch.label, 'Disputes · 1 open');
   assert.equal(ch.payload.line, `Sam Lee $45 · reply by ${day}`);
@@ -548,7 +550,7 @@ test('disputes: the list names the buyer, the amount and the reply-by day, in th
 test('disputes: a reply quotes the owner, asks first, and sends once per key', async () => {
   const s = setup();
   const { token, userId } = s.device();
-  withDispute(s, userId);
+  await withDispute(s, { token, userId });
   const [ch] = (await suggest(s, token, 'tell sam in the dispute: I shipped it Monday. Tracking 1Z999')).chips;
   assert.equal(ch.kind, 'dispute_reply');
   assert.equal(ch.label, 'Reply in dispute · Sam Lee');
@@ -566,7 +568,7 @@ test('disputes: a reply quotes the owner, asks first, and sends once per key', a
 test('disputes: accept and offer take confirm_amount matched to the dispute; another user is refused', async () => {
   const s = setup();
   const A = s.device();
-  withDispute(s, A.userId);
+  await withDispute(s, A);
   const [accept] = (await suggest(s, A.token, "accept sam's claim")).chips;
   assert.equal(accept.label, 'Accept claim $45 · Sam Lee');
   assert.equal(accept.payload.question, "Accept Sam Lee's claim and refund $45? Can't undo.");
@@ -589,6 +591,29 @@ test('disputes: accept and offer take confirm_amount matched to the dispute; ano
   assert.deepEqual((s.calls.find((c) => c.fn === 'make_offer')!.args[2] as any).value, '20.00');
   assert.equal((await send(s, A.token, '/v1/actions/dispute/accept', confirmed(accept))).json.line, 'Claim accepted ✓');
   assert.equal(s.calls.filter((c) => c.fn === 'accept_claim').length, 1);
+});
+
+test('disputes: chat with "offer" or a name never reads PayPal; an own client reads it once a minute; a PayPal error never fails suggest', async () => {
+  const s = setup({ cls: { intent: 'none' } });
+  const A = s.device();
+  await withDispute(s, A);
+  const reads = () => s.calls.filter((c) => c.fn === 'disputes' || c.fn === 'dispute_detail').length;
+  for (const text of ['I can offer 2 slots', 'offer ana $20 back', 'tell ana see you at 3', "accept ana's claim"]) {
+    assert.equal((await suggest(s, A.token, text)).chips.some((c) => c.kind.startsWith('dispute')), false, text);
+  }
+  assert.equal(reads(), 0, 'no own client named, no PayPal read');
+
+  assert.equal((await suggest(s, A.token, 'offer sam $20 back')).chips[0].kind, 'dispute_offer');
+  const once = reads();
+  assert.ok(once > 0);
+  assert.equal((await suggest(s, A.token, "accept sam's claim")).chips[0].kind, 'dispute_accept');
+  assert.equal(reads(), once, 'the open disputes are kept for a minute');
+
+  const B = s.device();
+  await plan(s, B.token, 'Sam Lee', 'sam@x.com');
+  s.ppData.set(B.userId, { disputes: new PayPalError('PayPal GET /v1/customer/disputes failed (503)', 502, 503) });
+  const res = await s.call(B.token, 'POST', '/v1/suggest', { text: 'offer sam $20 back' });
+  assert.equal(res.status, 200);
 });
 
 test('accounts: invoice and plan actions run on the account that made them; a payout and its Undo on the account connected when sent', async () => {

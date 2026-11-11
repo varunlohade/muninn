@@ -438,7 +438,8 @@ export function disputeVerb(text: string): DisputeVerb | null {
   const s = lastSentence(text);
   if (/^(?:(?:show|list|see|check|any|my|open|what are)\s+)*(?:my\s+|open\s+|paypal\s+)*disputes\??$/i.test(s)) return { verb: 'list' };
   if (/\baccept\b.*\b(?:claim|dispute|case)\b/i.test(s)) return { verb: 'accept' };
-  if (/\boffer\b/i.test(s) && /\d/.test(s)) return { verb: 'offer' };
+  // "I can offer 2 slots" is chat: an offer needs a money amount or a dispute word.
+  if (/\boffer\b/i.test(s) && (amountsIn(s).length > 0 || /\b(?:dispute|claim|case)\b/i.test(s))) return { verb: 'offer' };
   // A reply keeps every sentence of its last line.
   const m = (text.trim().split('\n').pop() ?? '').trim().match(DISPUTE_REPLY);
   return m?.groups ? { verb: 'reply', name: m.groups.name, message: m.groups.message.trim() } : null;

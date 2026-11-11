@@ -84,10 +84,14 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     },
   };
   // PayPal data per user, standing in for each user's own connected merchant account.
-  const ppData = new Map<string, { txns?: PayPalTxn[] | Error; disputes?: PayPalDisputeDetail[] }>();
+  const ppData = new Map<string, { txns?: PayPalTxn[] | Error; disputes?: PayPalDisputeDetail[] | Error }>();
   const forUser = (userId: string): PayPal => {
     const d = ppData.get(userId) ?? {};
-    const list = (): PayPalDispute[] => (d.disputes ?? []).map(({ buyer_name, transaction_id, messages, ...x }) => x);
+    const all = (): PayPalDisputeDetail[] => {
+      if (d.disputes instanceof Error) throw d.disputes;
+      return d.disputes ?? [];
+    };
+    const list = (): PayPalDispute[] => all().map(({ buyer_name, transaction_id, messages, ...x }) => x);
     return {
       ...pp,
       async searchTransactions(...args) {
@@ -96,7 +100,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
         return d.txns ?? [];
       },
       async listDisputes() { calls.push({ fn: 'disputes', args: [userId] }); return list(); },
-      async getDispute(id) { return d.disputes?.find((x) => x.id === id) ?? null; },
+      async getDispute(id) { calls.push({ fn: 'dispute_detail', args: [userId, id] }); return all().find((x) => x.id === id) ?? null; },
       async sendDisputeMessage(...args) { calls.push({ fn: 'dispute_message', args: [userId, ...args] }); },
       async acceptClaim(...args) { calls.push({ fn: 'accept_claim', args: [userId, ...args] }); },
       async makeOffer(...args) { calls.push({ fn: 'make_offer', args: [userId, ...args] }); },

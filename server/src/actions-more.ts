@@ -444,7 +444,18 @@ export function createMore(d: MoreDeps) {
   const disputeLine = (o: OpenDispute) =>
     [`${o.name} ${disputeMoney(o)}`.trim(), o.due ? `reply by ${dueWord(o.due)}` : o.status.replace(/_/g, ' ').toLowerCase()].join(' · ');
 
+  // Each open dispute's detail is one PayPal read, so the whole list is kept a minute per user.
+  const openCache = new Map<string, { at: number; list: OpenDispute[] }>();
+  const forgetOpen = (userId: string) => { openCache.delete(userId); d.biz.forgetDisputes(userId); };
   async function openDisputes(userId: string): Promise<OpenDispute[]> {
+    const hit = openCache.get(userId);
+    if (hit && d.now() - hit.at < 60_000) return hit.list;
+    if (openCache.size > 10_000) openCache.clear();
+    const open = await readOpenDisputes(userId);
+    openCache.set(userId, { at: d.now(), list: open });
+    return open;
+  }
+  async function readOpenDisputes(userId: string): Promise<OpenDispute[]> {
     const list = (await d.biz.disputes(userId)).filter((x) => x.status !== 'RESOLVED').slice(0, 5);
     const details = await Promise.all(list.map((x) => d.biz.dispute(userId, x.id).catch(() => null)));
     return list.map((x, i) => ({
@@ -457,7 +468,16 @@ export function createMore(d: MoreDeps) {
   const disputeConfirm = (o: { name: string; cents: number | null; currency: string | null }, cents = o.cents) =>
     ({ confirm_client: o.name, confirm_amount: centsToValue(cents ?? 0), confirm_currency: o.currency });
 
+  /** True when the text names a client on this user's own invoices, pay links or repeat bills. No PayPal call. */
+  function namesOwnClient(userId: string, text: string): boolean {
+    const nameOf = d.biz.namer(userId);
+    const rows = [...db.listInvoices(userId, 500), ...db.listOrders(userId, 500), ...db.listSubscriptions(userId, 500)];
+    return namedIn(text, rows, nameOf).length > 0;
+  }
+
   async function disputeChips(userId: string, text: string, v: DisputeVerb): Promise<Chip[] | null> {
+    // "tell ana see you at 3" or "offer sam $20" reads PayPal only when the name is one of the owner's own clients.
+    if (v.verb !== 'list' && !namesOwnClient(userId, v.verb === 'reply' ? v.name : text)) return null;
     const open = await openDisputes(userId);
     if (v.verb === 'list') {
       if (!open.length) return [lineChip('Disputes · none open', 'No open disputes ✓')];
@@ -502,6 +522,7 @@ export function createMore(d: MoreDeps) {
     const { userId, name } = await disputeFor(c, b.dispute_id);
     if (!sameName(b.confirm_client, [name])) return needsConfirm(c, name);
     await d.biz.sendDisputeMessage(userId, b.dispute_id, b.message, idemKey(c));
+    forgetOpen(userId);
     log('dispute_message_sent', { user_id: userId, dispute_id: b.dispute_id });
     return c.json({ ok: true, dispute_id: b.dispute_id, line: 'Message sent ✓', undo: null });
   }
@@ -511,7 +532,7 @@ export function createMore(d: MoreDeps) {
     const { userId, name, cents, currency } = await disputeFor(c, b.dispute_id);
     if (cents === null || !sameName(b.confirm_client, [name]) || b.confirm_amount !== cents || b.confirm_currency !== currency) return needsConfirm(c, name);
     await d.paypal.forUser(userId).acceptClaim(b.dispute_id, 'Claim accepted. A full refund is on its way.', idemKey(c));
-    d.biz.forgetDisputes(userId);
+    forgetOpen(userId);
     log('dispute_accepted', { user_id: userId, dispute_id: b.dispute_id });
     return c.json({ ok: true, dispute_id: b.dispute_id, line: 'Claim accepted ✓', undo: null });
   }
@@ -523,7 +544,7 @@ export function createMore(d: MoreDeps) {
     if (b.amount > cents) throw d.fail(400, `the offer is more than the dispute (${centsToValue(cents)})`);
     if (!sameName(b.confirm_client, [name]) || b.confirm_amount !== b.amount || b.confirm_currency !== b.currency) return needsConfirm(c, name);
     await d.paypal.forUser(userId).makeOffer(b.dispute_id, { note: `Offering ${formatMoney(b.amount, b.currency)} back to settle this.`, value: centsToValue(b.amount), currency: b.currency }, idemKey(c));
-    d.biz.forgetDisputes(userId);
+    forgetOpen(userId);
     log('dispute_offer_sent', { user_id: userId, dispute_id: b.dispute_id });
     return c.json({ ok: true, dispute_id: b.dispute_id, line: 'Offer sent ✓', undo: null });
   }

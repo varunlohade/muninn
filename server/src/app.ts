@@ -341,7 +341,13 @@ export function createApp(deps: Deps) {
       log('suggest', { user_id: userId, path, paid_calls, parallel, intent, confidence, chips: chips.length, ...timings });
       return c.json({ chips, intent, confidence, timings });
     };
-    const extra = await more.suggest(userId, text);
+    let extra: Chip[] | null = null;
+    try {
+      extra = await more.suggest(userId, text);
+    } catch (e) {
+      // A PayPal read behind a dispute or plan chip never fails suggest.
+      log('more_suggest_failed', { err: (e as Error).message });
+    }
     if (extra) return done(extra, 'more', 1);
 
     // A lookup of the owner's own records: regex settles it with no paid call when the phrase and the name are clear.
