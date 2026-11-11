@@ -545,3 +545,15 @@ test('accounts: invoice and plan actions run on the account that made them; a pa
   await send(s, A.token, '/v1/actions/payout/cancel', done.json.undo.payload.body);
   assert.deepEqual(s.accounts.map((a) => a.account), ['acct-new', 'acct-new']);
 });
+
+test('accounts: a demo invoice made before Connect is still marked paid on the demo merchant', async () => {
+  const s = setup();
+  const A = s.device();
+  const id = await invoiceFor(s, A.token, 'Sam', 45, 'sam@x.com');
+  assert.equal(s.db.getInvoice(A.userId, id)!.pp_account, null);
+  connectSeller(s, A.userId, 'acct-new');
+  s.accounts.length = 0;
+  const [mark] = (await suggest(s, A.token, 'sam paid cash')).chips;
+  assert.equal((await send(s, A.token, '/v1/actions/invoice/mark-paid', confirmed(mark))).status, 200);
+  assert.deepEqual(s.accounts, [{ userId: A.userId, account: null }]);
+});
