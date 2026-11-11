@@ -638,7 +638,12 @@ final class KeyboardModel: ObservableObject {
     private func updateFixable() {
         let d = draft
         guard paired, d.text != lastFixed, d.text.split(separator: " ").count >= 3 else { fixPlan = nil; return }
-        fixPlan = FixCheck.plan(d.text, names: appointments.compactMap(\.clientName), skipLast: d.original.last?.isLetter ?? false)
+        fixPlan = localFix(d)
+    }
+
+    /// The on-device fix for the draft. The chip and its tap both use this, so the tap does exactly what the chip said.
+    private func localFix(_ d: (text: String, original: String)) -> FixPlan? {
+        FixCheck.plan(d.text, names: appointments.compactMap(\.clientName), skipLast: d.original.last?.isLetter ?? false)
     }
 
     /// Deletes exactly `original` before the cursor and types `new`. False when the text is no longer there.
@@ -683,7 +688,7 @@ final class KeyboardModel: ObservableObject {
         host?.playClick()
         suggestTask?.cancel()
         writeTask?.cancel()
-        if let plan = FixCheck.plan(d.text, names: appointments.compactMap(\.clientName)) {
+        if let plan = localFix(d) {
             apply(WritePreview(kind: "fix", title: plan.title, original: d.original, text: plan.fixed), label: plan.done)
             return
         }

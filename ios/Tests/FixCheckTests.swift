@@ -115,6 +115,18 @@ final class FixModelTests: XCTestCase {
         XCTAssertNil(model.fixPlan, "Fix is not offered again for text the owner kept")
     }
 
+    /// The word still being typed is left out of the chip, so the tap leaves it alone too.
+    func testTapAppliesExactlyWhatTheChipSaid() {
+        host.text = "can u send teh bill tomorow"
+        model.textChanged()
+        let chip = try? XCTUnwrap(model.fixPlan)
+        XCTAssertEqual(chip?.title, "Fix 2 typos")
+        model.fix()
+        XCTAssertEqual(host.text, chip?.fixed)
+        XCTAssertTrue(host.text.contains("tomorow"), "the word being typed is left alone: \(host.text)")
+        XCTAssertEqual(model.barItems.first?.title, "Fixed 2 typos \u{2713}")
+    }
+
     func testCleanShortTextHasNoChip() {
         host.text = "See you at noon"
         model.textChanged()
