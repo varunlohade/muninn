@@ -17,6 +17,20 @@ enum KeyboardState: Equatable {
         case .ready: "Keyboard is on"
         }
     }
+
+    /// The onboarding button that opens Settings, or nil when nothing is left to set.
+    var settingsButton: String? {
+        switch self {
+        // The app's own Settings page holds its Keyboards switch and Allow Full Access.
+        case .notAdded, .needsFullAccess: "Open \(AppConfig.displayName) settings"
+        // iOS allows no deep link to Settings › General › Keyboard. The app's own page is the closest one allowed,
+        // so the copy names the path to the list where the owner drags the keyboard to the top.
+        case .notFirst: "Open Settings"
+        case .ready: nil
+        }
+    }
+
+    static let reorderSteps = "Settings › General › Keyboard › Keyboards › Edit, then drag \(AppConfig.displayName) to the top."
 }
 
 /// The one keyboard check for onboarding and Home.

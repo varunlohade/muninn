@@ -33,7 +33,7 @@ struct OnboardingView: View {
         switch step {
         case .intro: ""
         case .keyboard: "Three taps in Settings. Then come back."
-        case .makeDefault: "So it opens first in every chat."
+        case .makeDefault: setup.state == .notFirst ? KeyboardState.reorderSteps : "So it opens first in every chat."
         case .calendar: "The keyboard adds the events and reminders you type. They stay on this phone."
         case .start: "\(AppConfig.displayName) suggests the invoice while you type."
         case .paypal: paypal.note ?? "Invoices and pay links go to your own PayPal. Or try the demo account first."
@@ -158,18 +158,25 @@ struct OnboardingView: View {
                 quietButton("Not now") { Task { await advance(from: .keyboard, skipped: true) } }
                     .accessibilityIdentifier("onboarding.later")
             case .makeDefault:
-                if setup.state.isOn {
-                    Button("Next") { Task { await complete(.makeDefault) } }
-                        .buttonStyle(PrimaryButton())
-                        .accessibilityIdentifier("onboarding.default.next")
-                } else {
-                    Button("Open Settings") {
+                if let open = setup.state.settingsButton {
+                    Button(open) {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                     }
                     .buttonStyle(PrimaryButton())
+                    .accessibilityIdentifier("onboarding.default.settings")
+                } else {
+                    Button("Next") { Task { await complete(.makeDefault) } }
+                        .buttonStyle(PrimaryButton())
+                        .accessibilityIdentifier("onboarding.default.next")
                 }
-                quietButton("Not now") { Task { await advance(from: .makeDefault) } }
-                    .accessibilityIdentifier("onboarding.default.later")
+                // Not first is a hint, never a blocker: the keyboard works, so Next stays one tap away.
+                if setup.state == .notFirst {
+                    quietButton("Next") { Task { await complete(.makeDefault) } }
+                        .accessibilityIdentifier("onboarding.default.next")
+                } else {
+                    quietButton("Not now") { Task { await advance(from: .makeDefault) } }
+                        .accessibilityIdentifier("onboarding.default.later")
+                }
             case .calendar:
                 Button("Allow Calendar & Reminders") { Task { await CalendarModel.shared.connect(); await advance(from: .calendar) } }
                     .buttonStyle(PrimaryButton())

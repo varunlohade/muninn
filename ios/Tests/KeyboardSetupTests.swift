@@ -47,6 +47,15 @@ final class KeyboardSetupTests: XCTestCase {
         XCTAssertEqual(KeyboardState.notFirst.homeTitle, "Make Muninn your first keyboard")
     }
 
+    /// Onboarding's Settings button says where it goes. Reordering lives in Settings › General, which no link can open.
+    func testSettingsButtonSaysWhereItGoes() {
+        XCTAssertEqual(KeyboardState.needsFullAccess.settingsButton, "Open Muninn settings")
+        XCTAssertEqual(KeyboardState.notAdded.settingsButton, "Open Muninn settings")
+        XCTAssertEqual(KeyboardState.notFirst.settingsButton, "Open Settings")
+        XCTAssertNil(KeyboardState.ready.settingsButton)
+        XCTAssertEqual(KeyboardState.reorderSteps, "Settings › General › Keyboard › Keyboards › Edit, then drag Muninn to the top.")
+    }
+
     /// No age limit: a heartbeat from long ago still proves Full Access.
     func testOldHeartbeatIsStillReady() {
         XCTAssertEqual(state([ours], .distantPast), .ready)
