@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { randomBytes } from 'node:crypto';
 import { config } from './config.ts';
 import { sha256, type Cipher } from './crypto.ts';
@@ -10,6 +10,12 @@ import type { PayPalProvider, Seller } from './paypal.ts';
 // The tracking id is random per Connect tap, so it says nothing about the owner. Only its hash is stored.
 const TRACKING = /^mu[0-9a-f]{32}$/;
 const MERCHANT = /^[A-Z0-9]{8,20}$/;
+const CODE = /^[0-9a-f]{48}$/;
+type Verified = { merchantId: string; email: string | null; receivable: boolean; confirmed: boolean };
+const codeOf = async (c: Context) => {
+  const b = await c.req.json().catch(() => null) as { code?: unknown } | null;
+  return typeof b?.code === 'string' ? b.code : '';
+};
 const accountKey = (cipher: Cipher, merchantId: string) => cipher.lookupHash('paypal-merchant', merchantId);
 
 const decrypt = (cipher: Cipher, userId: string, v: string | null) => {
@@ -54,18 +60,25 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
   }
 
   // Checks with PayPal that this tracking id belongs to this merchant and that the seller granted our permissions,
-  // then stores the merchant for the user that started this Connect.
-  async function finish(row: PayPalConnectionRow, merchantId: string): Promise<'connected' | 'declined' | 'taken' | 'failed'> {
-    const partner = paypal.partner();
-    const st = await partner.merchantStatus(merchantId);
+  // then records the checked merchant on the pending Connect. It does not connect: only the owner's app can finish,
+  // with the one-time code, so a sign-up link sent to someone else never attaches their PayPal to the sender's account.
+  async function verify(row: PayPalConnectionRow, merchantId: string, code: string | null): Promise<'verified' | 'declined' | 'failed'> {
+    const st = await paypal.partner().merchantStatus(merchantId);
     if (!st || (st.trackingId !== null && sha256(st.trackingId) !== row.tracking_hash)) return 'failed';
     if (!st.permissionsGranted) return 'declined';
-    const ok = db.finishPayPalConnect(row.user_id, row.tracking_hash, {
-      merchant_hash: accountKey(cipher, merchantId), merchant_enc: cipher.encrypt(row.user_id, merchantId),
-      email_enc: st.primaryEmail ? cipher.encrypt(row.user_id, st.primaryEmail) : null,
-      payments_receivable: Number(st.paymentsReceivable), email_confirmed: Number(st.emailConfirmed),
-    });
-    return ok ? 'connected' : 'taken';
+    const v: Verified = { merchantId, email: st.primaryEmail, receivable: st.paymentsReceivable, confirmed: st.emailConfirmed };
+    const ok = db.verifyPayPalConnect(row.user_id, row.tracking_hash, cipher.encrypt(row.user_id, JSON.stringify(v)),
+      code ? sha256(code) : null, code ? now() + config.paypal.connectCodeTtlMs : null);
+    return ok ? 'verified' : 'failed';
+  }
+
+  /** The caller's own pending Connect for this code, while the code is fresh, with the merchant PayPal checked. */
+  function byCode(userId: string, code: string): { row: PayPalConnectionRow; v: Verified } | null {
+    if (!CODE.test(code)) return null;
+    const row = db.payPalConnectionByCode(sha256(code));
+    if (!row || row.user_id !== userId || !row.code_expires_at || row.code_expires_at < now() || !row.verified_enc) return null;
+    const raw = decrypt(cipher, userId, row.verified_enc);
+    return raw ? { row, v: JSON.parse(raw) as Verified } : null;
   }
 
   const pendingFor = (trackingId: string) => {
@@ -87,8 +100,10 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
   });
 
   // PayPal sends the seller's browser here. Nothing in the query is trusted: PayPal confirms the merchant for this tracking id.
+  // A good return hands the app a one-time code; the app finishes with it, signed in as the user who started this Connect.
   routes.get('/paypal/return', async (c) => {
     const back = (result: string) => c.redirect(`${config.paypal.appReturnUrl}?result=${result}`, 302);
+    const code = randomBytes(24).toString('hex');
     const trackingId = c.req.query('merchantId') ?? '';
     const merchantId = c.req.query('merchantIdInPayPal') ?? '';
     const row = TRACKING.test(trackingId) ? pendingFor(trackingId) : null;
@@ -97,16 +112,37 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
       return back('failed');
     }
     if (c.req.query('permissionsGranted') !== 'true' || c.req.query('consentStatus') !== 'true') return back('declined');
-    let result: Awaited<ReturnType<typeof finish>>;
+    let result: Awaited<ReturnType<typeof verify>>;
     try {
       const confirmed = await paypal.partner().merchantIdForTracking(trackingId);
-      result = confirmed === merchantId ? await finish(row, merchantId) : 'failed';
+      result = confirmed === merchantId ? await verify(row, merchantId, code) : 'failed';
     } catch (e) {
       log('paypal_return_error', { user_id: row.user_id, err: (e as Error).message });
       result = 'failed';
     }
     log('paypal_return', { user_id: row.user_id, result });
-    return back(result);
+    return result === 'verified' ? c.redirect(`${config.paypal.appReturnUrl}?code=${code}`, 302) : back(result);
+  });
+
+  // The app shows which PayPal came back before the owner says "Use this account".
+  routes.post('/v1/paypal/pending', async (c) => {
+    const found = byCode(c.get('userId'), await codeOf(c));
+    if (!found) return c.json({ error: 'This PayPal sign-in has expired. Connect again.' }, 404);
+    return c.json({ account: mask(found.v.email, found.v.merchantId) });
+  });
+
+  routes.post('/v1/paypal/finish', async (c) => {
+    const userId = c.get('userId');
+    const found = byCode(userId, await codeOf(c));
+    if (!found) return c.json({ error: 'This PayPal sign-in has expired. Connect again.' }, 404);
+    const { row, v } = found;
+    const ok = db.finishPayPalConnect(userId, row.tracking_hash, {
+      merchant_hash: accountKey(cipher, v.merchantId), merchant_enc: cipher.encrypt(userId, v.merchantId),
+      email_enc: v.email ? cipher.encrypt(userId, v.email) : null, payments_receivable: Number(v.receivable), email_confirmed: Number(v.confirmed),
+    });
+    log('paypal_connect_finished', { user_id: userId, result: ok ? 'connected' : 'taken' });
+    if (!ok) return c.json({ error: 'That PayPal account is already connected to another Muninn account.', result: 'taken' }, 409);
+    return c.json({ result: 'connected', account: label(userId) });
   });
 
   routes.get('/v1/paypal/status', async (c) => {
@@ -150,9 +186,10 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
       const trackingId = typeof res?.tracking_id === 'string' && TRACKING.test(res.tracking_id) ? res.tracking_id : null;
       const row = trackingId ? pendingFor(trackingId) : null;
       if (!row) return false;
-      const result = await finish(row, merchantId);
+      // Records the checked merchant only. The owner's app still finishes with the code from the return link.
+      const result = await verify(row, merchantId, null);
       log('paypal_onboarding_webhook', { user_id: row.user_id, result });
-      return result === 'connected';
+      return result === 'verified';
     }
     return false;
   }

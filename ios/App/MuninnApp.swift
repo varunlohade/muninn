@@ -8,6 +8,7 @@ struct MuninnApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(session)
+                .paypalConfirmSheet()
                 .onOpenURL { session.handle(url: $0) }
         }
     }

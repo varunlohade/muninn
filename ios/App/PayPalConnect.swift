@@ -2,7 +2,8 @@ import AuthenticationServices
 import SwiftUI
 
 /// Connect PayPal: the server makes a PayPal sign-up link, the owner signs in on PayPal's own page,
-/// and PayPal sends the browser back to the server, which sends it on to `muninn://paypal-connected?result=…`.
+/// and PayPal sends the browser back to the server, which sends it on to `muninn://paypal-connected?code=…`
+/// (or `?result=…` when it did not work). The app shows the account that came back; "Use this account" finishes with the code.
 @MainActor
 final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = PayPalConnector()
@@ -11,6 +12,9 @@ final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPres
     @Published private(set) var busy = false
     /// One plain line after a connect, or nil.
     @Published var note: String?
+    /// The masked PayPal account waiting for "Use this account", or nil.
+    @Published private(set) var confirming: String?
+    private var decision: CheckedContinuation<Bool, Never>?
     private var web: ASWebAuthenticationSession?
 
     var connected: Bool { status?.connected == true }
@@ -29,7 +33,12 @@ final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPres
             let start = try await APIClient.shared().paypalConnect()
             guard let url = URL(string: start.action_url) else { note = Self.line(for: "failed"); return false }
             let back = try await open(url, scheme: start.return_scheme)
-            note = Self.line(for: Self.result(of: back))
+            if let code = Self.code(of: back) {
+                let pending = try await APIClient.shared().paypalPending(code: code)
+                if await ask(pending.account ?? "your PayPal account") { try await APIClient.shared().paypalFinish(code: code) }
+            } else {
+                note = Self.line(for: Self.result(of: back))
+            }
         } catch let e as ASWebAuthenticationSessionError where e.code == .canceledLogin {
             // A cancel is the owner's choice, so it shows no error.
         } catch {
@@ -37,6 +46,21 @@ final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPres
         }
         await refresh()
         return connected
+    }
+
+    /// Shows the account and waits for the owner's answer.
+    private func ask(_ account: String) async -> Bool {
+        await withCheckedContinuation { cont in
+            decision = cont
+            confirming = account
+        }
+    }
+
+    /// "Use this account" (true) or "Not now" (false).
+    func decide(_ use: Bool) {
+        confirming = nil
+        decision?.resume(returning: use)
+        decision = nil
     }
 
     func disconnect() async {
@@ -68,7 +92,12 @@ final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPres
         }
     }
 
-    /// The `result` the server put on the return link: connected, declined, taken or failed.
+    /// The one-time code the server put on a good return link.
+    nonisolated static func code(of url: URL) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "code" })?.value.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// The `result` the server put on the return link: declined or failed.
     nonisolated static func result(of url: URL) -> String {
         URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "result" })?.value ?? "failed"
     }
@@ -163,4 +192,31 @@ struct PayPalIntegrationRow: View {
         }
         .task { await paypal.refresh() }
     }
+}
+
+/// The PayPal account that came back from sign-in. Nothing connects until the owner taps "Use this account".
+struct PayPalConfirmSheet: ViewModifier {
+    @ObservedObject private var paypal = PayPalConnector.shared
+
+    func body(content: Content) -> some View {
+        content.sheet(isPresented: Binding(get: { paypal.confirming != nil }, set: { if !$0 { paypal.decide(false) } })) {
+            VStack(spacing: Theme.Space.m) {
+                Text("Use this PayPal account?").font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
+                Text(paypal.confirming ?? "").font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
+                    .accessibilityIdentifier("paypal.confirm.account")
+                Button("Use this account") { paypal.decide(true) }
+                    .buttonStyle(PrimaryButton())
+                    .accessibilityIdentifier("paypal.confirm.use")
+                Button("Not now") { paypal.decide(false) }
+                    .font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
+                    .frame(maxWidth: .infinity, minHeight: Theme.Metric.secondaryButton)
+            }
+            .padding(Theme.Metric.margin)
+            .presentationDetents([.height(280)])
+        }
+    }
+}
+
+extension View {
+    func paypalConfirmSheet() -> some View { modifier(PayPalConfirmSheet()) }
 }

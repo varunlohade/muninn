@@ -41,6 +41,15 @@ async function startConnect(s: ReturnType<typeof setup>, token: string, calls: {
   return { j, tracking };
 }
 
+/** PayPal sends the browser back; the server answers with the app link that carries the one-time code. */
+async function returnCode(s: ReturnType<typeof setup>, tracking: string, merchant: string) {
+  const loc = (await s.call(null, 'GET', returnQuery(tracking, merchant))).headers.get('location') ?? '';
+  const m = /^muninn:\/\/paypal-connected\?code=([0-9a-f]{48})$/.exec(loc);
+  assert.ok(m, loc);
+  return m[1];
+}
+const finish = (s: ReturnType<typeof setup>, token: string, code: string) => s.call(token, 'POST', '/v1/paypal/finish', { code });
+
 beforeEach(() => {
   config.paypal.publicUrl = 'https://muninn.test';
   config.paypal.partnerMerchantId = 'PARTNER123';
@@ -75,15 +84,21 @@ test('connect: 503 when the server has no public URL or partner id, 401 without 
   assert.equal(p.calls.length, 0);
 });
 
-test('return: PayPal confirms the merchant for the tracking id, then the user is connected and the app is told', async () => {
+test('return: PayPal confirms the merchant, the app gets a one-time code, and the owner finishes with it', async () => {
   const p = fakePartner();
   const s = setup({ partner: p.partner });
   const a = s.device();
   const { tracking } = await startConnect(s, a.token, p.calls);
   p.onboard(tracking, 'SELLER12345');
-  const r = await s.call(null, 'GET', returnQuery(tracking, 'SELLER12345'));
-  assert.equal(r.status, 302);
-  assert.equal(r.headers.get('location'), 'muninn://paypal-connected?result=connected');
+  const code = await returnCode(s, tracking, 'SELLER12345');
+  // The return link alone connects nothing.
+  assert.equal((await (await s.call(a.token, 'GET', '/v1/paypal/status')).json() as any).connected, false);
+  assert.equal(s.db.getPayPalConnection(a.userId)!.code_hash, sha256(code), 'only the hash of the code is stored');
+  assert.deepEqual(await (await s.call(a.token, 'POST', '/v1/paypal/pending', { code })).json(), { account: 's•••@shop.test' });
+  const done = await finish(s, a.token, code);
+  assert.equal(done.status, 200);
+  assert.deepEqual(await done.json(), { result: 'connected', account: 's•••@shop.test' });
+  assert.equal((await finish(s, a.token, code)).status, 404, 'the code works once');
   const st = await (await s.call(a.token, 'GET', '/v1/paypal/status')).json() as any;
   assert.deepEqual(st, { connected: true, demo: false, pending: false, email_confirmed: true, payments_receivable: true, account: 's•••@shop.test' });
   // Stored encrypted: the merchant id and email are not in the row as plain text.
@@ -123,10 +138,12 @@ test('return: a user cannot take a merchant that another user connected, and per
   const ta = (await startConnect(s, a.token, p.calls)).tracking;
   const tb = (await startConnect(s, b.token, p.calls)).tracking;
   p.onboard(ta, 'SELLER12345');
-  assert.equal((await s.call(null, 'GET', returnQuery(ta, 'SELLER12345'))).headers.get('location'), 'muninn://paypal-connected?result=connected');
+  assert.equal((await finish(s, a.token, await returnCode(s, ta, 'SELLER12345'))).status, 200);
   // b's own tracking id, but the same PayPal merchant: refused.
   p.onboard(tb, 'SELLER12345');
-  assert.equal((await s.call(null, 'GET', returnQuery(tb, 'SELLER12345'))).headers.get('location'), 'muninn://paypal-connected?result=taken');
+  const taken = await finish(s, b.token, await returnCode(s, tb, 'SELLER12345'));
+  assert.equal(taken.status, 409);
+  assert.equal((await taken.json() as any).result, 'taken');
   assert.equal(s.db.getPayPalConnection(b.userId)!.status, 'pending');
   // b's tracking id never connects a.
   assert.equal(s.db.getPayPalConnection(a.userId)!.tracking_hash, sha256(ta));
@@ -137,6 +154,26 @@ test('return: a user cannot take a merchant that another user connected, and per
   const tc = (await startConnect(s2, c.token, q.calls)).tracking;
   q.onboard(tc, 'SELLER77777');
   assert.equal((await s2.call(null, 'GET', returnQuery(tc, 'SELLER77777'))).headers.get('location'), 'muninn://paypal-connected?result=declined');
+});
+
+test('login CSRF: a sign-up link someone else completes never connects their PayPal to the sender', async () => {
+  let t = Date.now();
+  const p = fakePartner();
+  const s = setup({ partner: p.partner, now: () => t });
+  const attacker = s.device(), victim = s.device();
+  const { tracking } = await startConnect(s, attacker.token, p.calls);
+  // The victim signs in to PayPal on the attacker's link; the return lands on the victim's phone.
+  p.onboard(tracking, 'VICTIM12345');
+  const code = await returnCode(s, tracking, 'VICTIM12345');
+  assert.equal((await finish(s, victim.token, code)).status, 404, 'the code only works for the user who started this Connect');
+  assert.equal((await s.call(victim.token, 'POST', '/v1/paypal/pending', { code })).status, 404);
+  assert.equal(s.db.getPayPalConnection(attacker.userId)!.status, 'pending');
+  assert.equal((await finish(s, attacker.token, 'f'.repeat(48))).status, 404, 'a guessed code finds nothing');
+  assert.equal((await s.call(null, 'POST', '/v1/paypal/finish', { code })).status, 401, 'finish needs the app sign-in');
+  // A code that waited too long is dead even for its owner.
+  t += config.paypal.connectCodeTtlMs + 1;
+  assert.equal((await finish(s, attacker.token, code)).status, 404);
+  assert.equal((await (await s.call(attacker.token, 'GET', '/v1/paypal/status')).json() as any).connected, false);
 });
 
 test('demo fallback: a user with no PayPal connected runs on the demo merchant, and money answers say demo', async () => {
@@ -157,7 +194,7 @@ test('connected: new invoices carry the seller account and say demo false; disco
   const a = s.device();
   const { tracking } = await startConnect(s, a.token, p.calls);
   p.onboard(tracking, 'SELLER12345');
-  await s.call(null, 'GET', returnQuery(tracking, 'SELLER12345'));
+  await finish(s, a.token, await returnCode(s, tracking, 'SELLER12345'));
   const inv = await (await s.call(a.token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', client_name: 'Sam' })).json() as any;
   assert.equal(inv.demo, false);
   assert.equal(s.db.getInvoice(a.userId, inv.id)!.pp_account, s.db.getPayPalConnection(a.userId)!.merchant_hash);
@@ -167,7 +204,7 @@ test('connected: new invoices carry the seller account and say demo false; disco
   assert.equal(s.db.getPayPalConnection(a.userId), undefined);
 });
 
-test('webhooks: ONBOARDING.COMPLETED connects a pending user; PARTNER-CONSENT.REVOKED disconnects; unverified events change nothing', async () => {
+test('webhooks: ONBOARDING.COMPLETED only records the check; PARTNER-CONSENT.REVOKED disconnects; unverified events change nothing', async () => {
   const p = fakePartner();
   let verified = true;
   const s = setup({ partner: p.partner, verify: () => verified });
@@ -183,7 +220,8 @@ test('webhooks: ONBOARDING.COMPLETED connects a pending user; PARTNER-CONSENT.RE
   assert.equal(s.db.getPayPalConnection(a.userId)!.status, 'pending');
   verified = true;
   assert.deepEqual(await (await hook(onboarded)).json(), { ok: true, handled: true });
-  assert.equal(s.db.getPayPalConnection(a.userId)!.status, 'connected');
+  assert.equal(s.db.getPayPalConnection(a.userId)!.status, 'pending', 'a webhook never connects; the owner finishes in the app');
+  assert.equal((await finish(s, a.token, await returnCode(s, tracking, 'SELLER12345'))).status, 200);
 
   verified = false;
   assert.equal((await hook(revoked)).status, 401);

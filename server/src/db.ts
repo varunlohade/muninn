@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS subscription_payments (
 CREATE TABLE IF NOT EXISTS paypal_connections (
   user_id TEXT PRIMARY KEY REFERENCES users(id), tracking_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL,
   merchant_hash TEXT, merchant_enc TEXT, email_enc TEXT, payments_receivable INTEGER NOT NULL DEFAULT 0, email_confirmed INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL, connected_at INTEGER);
+  created_at INTEGER NOT NULL, connected_at INTEGER, verified_enc TEXT, code_hash TEXT, code_expires_at INTEGER);
 CREATE UNIQUE INDEX IF NOT EXISTS paypal_connections_merchant ON paypal_connections(merchant_hash) WHERE merchant_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS subscriptions_user ON subscriptions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS refunds_target ON refunds(user_id, target_id, status);
@@ -89,6 +89,8 @@ export type IntegrationRow = { provider: string; status: string; connected_at: n
 export type PayPalConnectionRow = {
   user_id: string; tracking_hash: string; status: 'pending' | 'connected'; merchant_hash: string | null; merchant_enc: string | null;
   email_enc: string | null; payments_receivable: number; email_confirmed: number; created_at: number; connected_at: number | null;
+  // After PayPal sends the seller back: the checked merchant (encrypted JSON) and the hash of the one-time code the app must show.
+  verified_enc: string | null; code_hash: string | null; code_expires_at: number | null;
 };
 
 export type Db = ReturnType<typeof openDb>;
@@ -112,6 +114,10 @@ export function openDb(path: string) {
   for (const t of ['invoices', 'orders', 'subscriptions']) {
     const cols = db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[];
     if (cols.length && !cols.some((c) => c.name === 'pp_account')) db.exec(`ALTER TABLE ${t} ADD COLUMN pp_account TEXT`);
+  }
+  const connCols = db.prepare('PRAGMA table_info(paypal_connections)').all() as { name: string }[];
+  for (const [col, type] of [['verified_enc', 'TEXT'], ['code_hash', 'TEXT'], ['code_expires_at', 'INTEGER']]) {
+    if (connCols.length && !connCols.some((c) => c.name === col)) db.exec(`ALTER TABLE paypal_connections ADD COLUMN ${col} ${type}`);
   }
   db.exec(SCHEMA);
   const now = () => Date.now();
@@ -360,16 +366,26 @@ export function openDb(path: string) {
     payPalConnectionByTracking(trackingHash: string): PayPalConnectionRow | undefined {
       return q('SELECT * FROM paypal_connections WHERE tracking_hash = ?').get(trackingHash) as PayPalConnectionRow | undefined;
     },
+    payPalConnectionByCode(codeHash: string): PayPalConnectionRow | undefined {
+      return q("SELECT * FROM paypal_connections WHERE code_hash = ? AND status = 'pending'").get(codeHash) as PayPalConnectionRow | undefined;
+    },
+    // PayPal checked the merchant for this pending Connect. A null code keeps the one there (the webhook has none to give).
+    verifyPayPalConnect(userId: string, trackingHash: string, verifiedEnc: string, codeHash: string | null, codeExpiresAt: number | null): boolean {
+      return q(`UPDATE paypal_connections SET verified_enc = ?, code_hash = COALESCE(?, code_hash), code_expires_at = COALESCE(?, code_expires_at)
+                WHERE user_id = ? AND tracking_hash = ? AND status = 'pending'`).run(verifiedEnc, codeHash, codeExpiresAt, userId, trackingHash).changes > 0;
+    },
     // A new Connect replaces a pending one. False when this user is already connected.
     startPayPalConnect(userId: string, trackingHash: string, at: number): boolean {
       return q(`INSERT INTO paypal_connections (user_id, tracking_hash, status, created_at) VALUES (?, ?, 'pending', ?)
-                ON CONFLICT(user_id) DO UPDATE SET tracking_hash = excluded.tracking_hash, created_at = excluded.created_at
+                ON CONFLICT(user_id) DO UPDATE SET tracking_hash = excluded.tracking_hash, created_at = excluded.created_at,
+                  verified_enc = NULL, code_hash = NULL, code_expires_at = NULL
                 WHERE paypal_connections.status = 'pending'`).run(userId, trackingHash, at).changes > 0;
     },
     // Only the pending row with this tracking id becomes connected. False when another user already holds this merchant.
     finishPayPalConnect(userId: string, trackingHash: string, r: Pick<PayPalConnectionRow, 'merchant_hash' | 'merchant_enc' | 'email_enc' | 'payments_receivable' | 'email_confirmed'>): boolean {
       try {
-        return q(`UPDATE paypal_connections SET status = 'connected', merchant_hash = ?, merchant_enc = ?, email_enc = ?, payments_receivable = ?, email_confirmed = ?, connected_at = ?
+        return q(`UPDATE paypal_connections SET status = 'connected', merchant_hash = ?, merchant_enc = ?, email_enc = ?, payments_receivable = ?, email_confirmed = ?, connected_at = ?,
+                  verified_enc = NULL, code_hash = NULL, code_expires_at = NULL
                   WHERE user_id = ? AND tracking_hash = ? AND status = 'pending'`)
           .run(r.merchant_hash, r.merchant_enc, r.email_enc, r.payments_receivable, r.email_confirmed, now(), userId, trackingHash).changes > 0;
       } catch {

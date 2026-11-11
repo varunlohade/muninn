@@ -12,6 +12,12 @@ final class PayPalConnectTests: XCTestCase {
         XCTAssertEqual(PayPalConnector.result(of: URL(string: "muninn://paypal-connected")!), "failed")
     }
 
+    func testReturnLinkCode() {
+        XCTAssertEqual(PayPalConnector.code(of: URL(string: "muninn://paypal-connected?code=ab12")!), "ab12")
+        XCTAssertNil(PayPalConnector.code(of: URL(string: "muninn://paypal-connected?result=failed")!))
+        XCTAssertNil(PayPalConnector.code(of: URL(string: "muninn://paypal-connected?code=")!))
+    }
+
     func testResultLines() {
         XCTAssertNil(PayPalConnector.line(for: "connected"))
         XCTAssertEqual(PayPalConnector.line(for: "taken"), "That PayPal account is already connected to another Muninn account.")

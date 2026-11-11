@@ -54,6 +54,8 @@ export const config = {
     // The app's ASWebAuthenticationSession waits for this scheme. A pending connect expires after this long.
     appReturnUrl: 'muninn://paypal-connected',
     connectTtlMs: 60 * 60 * 1000,
+    // The one-time code on the app return link: the app finishes Connect with it, signed in, within this time.
+    connectCodeTtlMs: 10 * 60 * 1000,
   },
 
   jev: {
