@@ -41,6 +41,57 @@ struct SuggestResponse: Decodable {
     let timings: [String: Int]?
 }
 
+/// What /v1/ask sends back: the route the server picked and that route's result.
+struct AskResponse {
+    enum Result {
+        /// A money route: the same chips as suggest. Each one still needs its own tap.
+        case chips([Chip])
+        /// A rewrite or a reply.
+        case text(String)
+        case tone(ToneResponse)
+        case payments([Payment])
+        case brief([String])
+        case clients([Client])
+        case disputes([Dispute])
+        /// The phone saves this note. The server keeps nothing.
+        case addNote(String)
+        /// The phone shows today's appointments from its own calendar.
+        case showCalendar
+        /// No route fits: one plain line.
+        case line(String)
+    }
+    let route: String
+    let confidence: Double
+    let result: Result
+}
+
+extension AskResponse: Decodable {
+    private enum Keys: String, CodingKey { case route, confidence, result }
+    private struct Chips: Decodable { let chips: [Chip] }
+    private struct Lines: Decodable { let lines: [String] }
+    private struct Line: Decodable { let line: String? }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        route = try c.decode(String.self, forKey: .route)
+        confidence = try c.decode(Double.self, forKey: .confidence)
+        func get<T: Decodable>(_ type: T.Type) throws -> T { try c.decode(T.self, forKey: .result) }
+        switch route {
+        case "invoice", "paylink", "remind", "refund": result = .chips(try get(Chips.self).chips)
+        case "fix", "refine": result = .text(try get(WriteResponse.self).text)
+        case "reply": result = .text(try get(ReplyResponse.self).reply)
+        case "tone": result = .tone(try get(ToneResponse.self))
+        case "who_paid": result = .payments(try get(PaymentsResponse.self).payments)
+        case "brief": result = .brief(try get(Lines.self).lines)
+        case "clients": result = .clients(try get(ClientsResponse.self).clients)
+        case "disputes": result = .disputes(try get(DisputesResponse.self).disputes)
+        case "add_note": result = .addNote(try get(WriteResponse.self).text)
+        case "today_calendar": result = .showCalendar
+        default: result = .line((try? get(Line.self))?.line ?? "Not sure what you need. Try again with other words.")
+        }
+    }
+}
+
 struct InvoiceResponse: Decodable { let id: String; let status: String; let pay_link: String?; let amount: String; let currency: String }
 struct PayLinkResponse: Decodable { let id: String; let status: String; let approve_link: String?; let amount: String?; let currency: String? }
 struct RemindResponse: Decodable { let invoice_id: String }
@@ -209,6 +260,11 @@ struct APIClient {
         var body = ["text": text]
         if let context { body["context"] = context }
         return try await send(request("POST", "/v1/suggest", body: body), as: SuggestResponse.self)
+    }
+
+    /// One free-form request from the Ask bar. The server only routes it; it never moves money.
+    func ask(_ text: String) async throws -> AskResponse {
+        try await send(request("POST", "/v1/ask", body: ["text": text], tap: true), as: AskResponse.self)
     }
 
     func invoice(_ payload: [String: JSONValue], key: String) async throws -> InvoiceResponse {

@@ -382,16 +382,34 @@ struct PaymentRow: View {
     }
 }
 
+/// The server calls the Ask bar makes: the router, then the same chip actions as the keyboard.
+protocol AskAPI: KeyboardAPI {
+    func ask(_ text: String) async throws -> AskResponse
+}
+
+extension APIClient: AskAPI {}
+
 @MainActor
 final class AskModel: ObservableObject {
     enum State: Equatable {
-        case idle, loading, chips([Chip]), confirm(Chip, String), ask(Chip, String), working, result(ActionResult), line(String), error(String)
+        case idle, loading, chips([Chip]), clients([Client]), confirm(Chip, String), ask(Chip, String), working, result(ActionResult), line(String), error(String)
     }
     @Published var text = ""
     @Published var state: State = .idle
     @Published var copied = false
     /// Goes up each time the field must take focus with a prefilled request.
     @Published var focusRequests = 0
+
+    private let api: () -> AskAPI
+    private let store: KeyboardStore
+    private let now: () -> Date
+    private(set) var task: Task<Void, Never>?
+
+    init(api: @escaping () -> AskAPI = { APIClient.shared() }, store: KeyboardStore = SharedKeyboardStore(), now: @escaping () -> Date = Date.init) {
+        self.api = api
+        self.store = store
+        self.now = now
+    }
 
     /// Starts the invoice flow with the client filled in. Nothing is sent until the owner submits.
     func prefill(_ request: String) {
@@ -400,16 +418,41 @@ final class AskModel: ObservableObject {
         focusRequests += 1
     }
 
-    /// The typed request goes through /v1/suggest, the same as typing in a chat.
+    /// The typed request goes through /v1/ask. The server picks one function; notes and the calendar stay on the phone.
     func submit() {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         state = .loading
-        Task {
-            do {
-                let chips = try await APIClient.shared().suggest(t).chips
-                state = chips.isEmpty ? .error("No action for that yet. Try \"invoice Sam $45 for a haircut\".") : .chips(chips)
-            } catch { state = .error(plainLine(error)) }
+        task = Task {
+            do { show(try await api().ask(t).result) } catch { state = .error(plainLine(error)) }
+        }
+    }
+
+    private func show(_ result: AskResponse.Result) {
+        switch result {
+        case .chips(let chips):
+            state = chips.isEmpty ? .error("No action for that yet. Try \"invoice Sam $45 for a haircut\".") : .chips(chips)
+        case .text(let line), .line(let line):
+            state = .line(line)
+        case .tone(let t):
+            state = .line(t.calm ?? "Sounds fine \u{2713}")
+        case .payments(let payments):
+            state = .line(KeyboardModel.lateLine(payments))
+        case .brief(let lines):
+            state = .line(lines.joined(separator: "\n"))
+        case .clients(let clients):
+            state = clients.isEmpty ? .line("No clients yet") : .clients(clients)
+        case .disputes(let disputes):
+            let money = disputes.compactMap(\.amount).map { formatMoney($0.value, $0.currency_code) }
+            state = .line(disputes.isEmpty ? "No disputes \u{2713}"
+                : (["\(disputes.count) dispute\(disputes.count == 1 ? "" : "s")"] + money.prefix(3)).joined(separator: " \u{00B7} "))
+        case .addNote(let note):
+            store.notes.insert(Note(text: note), at: 0)
+            text = ""
+            state = .line("Note saved \u{2713}")
+        case .showCalendar:
+            let today = store.appointments
+            state = .line(today.isEmpty ? "Nothing on your calendar today" : today.map { "\($0.time) \($0.who)" }.joined(separator: " \u{00B7} "))
         }
     }
 
@@ -419,9 +462,11 @@ final class AskModel: ObservableObject {
             return
         }
         state = .working
-        Task {
+        // The key belongs to the chip: a second tap on the same chip replays the first call on the server.
+        let key = ChipActions.sendsMoney.contains(chip.kind) ? ChipKeys.key(for: chip, confirmed: confirmed, in: store, now: now()) : UUID().uuidString
+        task = Task {
             do {
-                switch try await ChipActions.run(chip, confirmed: confirmed, source: text, api: APIClient.shared()) {
+                switch try await ChipActions.run(chip, confirmed: confirmed, source: text, api: api(), key: key) {
                 case .sent(let r): state = .result(r)
                 case .insert(let line), .line(let line): state = .line(line)
                 case .ask(let question, let next): state = .ask(next, question)
@@ -439,7 +484,7 @@ final class AskModel: ObservableObject {
     }
 }
 
-/// The prompt pill. Typed text gives the same chips as the keyboard; a tap runs the same action.
+/// The prompt pill. A typed request goes to the router; money chips are the keyboard's chips and a tap runs the same action.
 struct AskBar: View {
     @ObservedObject var model: AskModel
     @FocusState private var focused: Bool
@@ -447,7 +492,7 @@ struct AskBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                TextField("", text: $model.text, prompt: Text("Ask Muninn to invoice or remind").foregroundStyle(Theme.Color.text3))
+                TextField("", text: $model.text, prompt: Text("Ask Muninn anything").foregroundStyle(Theme.Color.text3))
                     .font(Theme.Font.body)
                     .foregroundStyle(Theme.Color.text1)
                     .submitLabel(.send)
@@ -481,6 +526,18 @@ struct AskBar: View {
                     ForEach(chips) { chip in
                         AskChip(title: BarItems.title(chip), detail: BarItems.detail(chip, fromCopied: false)) { model.run(chip) }
                             .accessibilityIdentifier("ask.chip.\(chip.kind)")
+                    }
+                }
+                .padding(.horizontal, 10)
+            }
+            .padding(.bottom, 6)
+        case .clients(let clients):
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(clients.prefix(8)) { client in
+                        AskChip(title: client.displayName, detail: mainTotal(client.open_amount).map { "\(formatMoney($0.amount, $0.currency)) open" }) {
+                            model.prefill((["Invoice", client.name, client.email].compactMap { $0 }).joined(separator: " ") + " $")
+                        }
                     }
                 }
                 .padding(.horizontal, 10)

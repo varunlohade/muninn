@@ -20,7 +20,7 @@ final class FakeHost: TextHost {
 
 /// Answers with canned replies and records every call. Main-actor bound, so the model's tasks and the test never race on it.
 @MainActor
-final class FakeAPI: KeyboardAPI {
+final class FakeAPI: AskAPI {
     struct Failure: Error {}
 
     var suggestReply = SuggestResponse(chips: [], intent: "none", timings: nil)
@@ -33,12 +33,14 @@ final class FakeAPI: KeyboardAPI {
     var refundAskReply = RefundResponse(confirm_token: "rf_token_123", summary: "Refund $45 to Sam?", refund_id: nil, amount: nil, currency: nil)
     var refundDoneReply = RefundResponse(confirm_token: nil, summary: nil, refund_id: "RF-1", amount: "45.00", currency: "USD")
     var replyReply = ReplyResponse(reply: "A haircut is $45. Want a slot tomorrow?")
+    var askReply = AskResponse(route: "none", confidence: 1, result: .line("Not sure what you need."))
     /// Thrown one by one, first in line, by the next calls that would answer.
     var failures: [Error] = []
     /// When set, invoice() throws needsConfirm unless the payload carries this confirm_recipient.
     var requireConfirm: String?
 
     private(set) var calls: [String] = []
+    private(set) var asked: [String] = []
     private(set) var suggested: [(text: String, context: String?)] = []
     private(set) var invoiced: [[String: JSONValue]] = []
     private(set) var refunded: [[String: JSONValue]] = []
@@ -55,6 +57,8 @@ final class FakeAPI: KeyboardAPI {
         duringSuggest?()
         return suggestReply
     }
+
+    func ask(_ text: String) async throws -> AskResponse { calls.append("ask"); asked.append(text); try fail(); return askReply }
 
     private func fail() throws { if !failures.isEmpty { throw failures.removeFirst() } }
 

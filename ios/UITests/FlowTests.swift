@@ -843,4 +843,51 @@ final class FlowTests: XCTestCase {
         id(app, "note.delete").tap()
         XCTAssertFalse(app.staticTexts[";hours"].waitForExistence(timeout: 2), "a deleted shortcut is gone")
     }
+
+    /// The Ask bar against `npm run fake`: one request to /v1/ask shown as a line, one shown as the keyboard's chips.
+    /// Run with TEST_RUNNER_FAKE_URL=http://127.0.0.1:<port>. It pairs the app with that server. No model call.
+    func test17AskRouter() throws {
+        let fake = try XCTUnwrap(env["FAKE_URL"].flatMap(URL.init), "set TEST_RUNNER_FAKE_URL to the fake server")
+        func next(_ json: String) {
+            var r = URLRequest(url: fake.appendingPathComponent("_next"))
+            r.httpMethod = "POST"
+            r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            r.httpBody = Data(json.utf8)
+            let sent = expectation(description: "fake answer set")
+            URLSession.shared.dataTask(with: r) { _, _, _ in sent.fulfill() }.resume()
+            wait(for: [sent], timeout: 5)
+        }
+        let app = XCUIApplication()
+        app.launch()
+        // Pair with the fake through the dev link. iOS asks before it opens the app.
+        XCUIDevice.shared.system.open(URL(string: "muninn-dev://pair?token=pkd_fake&server=\(fake.absoluteString)")!)
+        let open = springboard.buttons["Open"]
+        if open.waitForExistence(timeout: 5) { open.tap() }
+        Thread.sleep(forTimeInterval: 2)
+        // Home loads once at launch, so start again on the new server.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(element(app, "label CONTAINS %@", "Jordan Ray").waitForExistence(timeout: 15), "Home did not load from the fake server")
+        let field = element(app, "identifier == %@", "ask.field")
+        XCTAssertTrue(field.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertEqual(field.placeholderValue, "Ask Muninn anything")
+        field.tap()
+        let other = element(app, "label == %@", "Next keyboard")
+        for _ in 0..<4 where other.exists && !(app.keys["q"].waitForExistence(timeout: 1.5) || app.keys["Q"].exists) { other.tap() }
+
+        next(#"{"group":{"group":"info"},"route":{"route":"who_paid"}}"#)
+        field.typeText("who hasn't paid\n")
+        XCTAssertTrue(element(app, "label BEGINSWITH %@", "Jordan Ray $120").waitForExistence(timeout: 10), app.debugDescription)
+        Thread.sleep(forTimeInterval: 0.6)
+        shot("40-ask-who-paid")
+
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20))
+        next(#"{"ext":{"client_name":"Jordan Ray","client_email":null,"amount":120,"item":"logo"}}"#)
+        field.typeText("invoice Jordan Ray $120 for the logo\n")
+        XCTAssertTrue(element(app, "identifier == %@", "ask.chip.invoice").waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(element(app, "identifier == %@", "ask.chip.paylink").exists)
+        Thread.sleep(forTimeInterval: 0.6)
+        shot("41-ask-money-chips")
+    }
 }
