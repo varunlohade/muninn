@@ -150,3 +150,101 @@ test('plans: end needs a plan word and says it cannot be undone; a plan waiting 
   assert.equal((await suggest(s, token, 'stop by at 3 ana')).chips.some((c) => c.kind === 'plan_cancel'), false);
   assert.equal((await suggest(s, token, "how is ana's plan")).chips.length, 0, 'an ended plan is no longer open');
 });
+
+// ---- step 2: invoices
+
+async function invoiceFor(s: ReturnType<typeof setup>, token: string, name: string, amount: number, email?: string) {
+  const body = email
+    ? { amount, currency: 'USD', item: 'Haircut', client_name: name, client_email: email, confirm_recipient: email, confirm_amount: amount, confirm_currency: 'USD' }
+    : { amount, item: 'Haircut', client_name: name };
+  return (await (await s.call(token, 'POST', '/v1/actions/invoice', body)).json()).id as string;
+}
+
+test('invoices: mark paid asks, checks client and amount, records once, and Undo takes the payment back', async () => {
+  const s = setup();
+  const A = s.device();
+  const id = await invoiceFor(s, A.token, 'Sam', 45, 'sam@x.com');
+  const [ch] = (await suggest(s, A.token, 'sam paid cash')).chips;
+  assert.equal(ch.kind, 'invoice_mark_paid');
+  assert.equal(ch.label, 'Mark paid $45 · Sam');
+  assert.equal(ch.payload.question, "Mark Sam's $45 invoice paid (cash)? No money moves.");
+  assert.deepEqual(ch.payload.body, { invoice_id: id, method: 'CASH' });
+  assert.equal((await suggest(s, A.token, 'mark sam paid')).chips[0].payload.question, "Mark Sam's $45 invoice paid? No money moves.");
+
+  assert.equal((await send(s, A.token, '/v1/actions/invoice/mark-paid', ch.payload.body)).status, 409);
+  assert.equal((await send(s, A.token, '/v1/actions/invoice/mark-paid', { ...confirmed(ch), confirm_client: 'Ana' })).status, 409);
+  assert.equal((await send(s, A.token, '/v1/actions/invoice/mark-paid', { ...confirmed(ch), confirm_amount: '40.00' })).status, 409);
+  const B = s.device();
+  assert.equal((await send(s, B.token, '/v1/actions/invoice/mark-paid', confirmed(ch))).status, 404);
+  assert.equal(s.calls.filter((c) => c.fn === 'record_payment').length, 0);
+
+  const done = await send(s, A.token, '/v1/actions/invoice/mark-paid', confirmed(ch), 'mark-key-0001');
+  assert.equal(done.json.line, 'Marked paid ✓');
+  assert.deepEqual(await send(s, A.token, '/v1/actions/invoice/mark-paid', confirmed(ch), 'mark-key-0001'), done);
+  const recorded = s.calls.filter((c) => c.fn === 'record_payment');
+  assert.equal(recorded.length, 1);
+  assert.equal((recorded[0].args[1] as any).method, 'CASH');
+  assert.equal(s.db.getInvoice(A.userId, id)!.status, 'MARKED_AS_PAID');
+  assert.ok(s.db.getInvoice(A.userId, id)!.paid_at);
+
+  assert.equal(done.json.undo.kind, 'invoice_unmark');
+  const paymentId = (s.db.raw.prepare('SELECT payment_id FROM recorded_payments WHERE invoice_id = ?').get(id) as { payment_id: string }).payment_id;
+  assert.match(paymentId, /^EXTR-/);
+  const undo = await send(s, A.token, '/v1/actions/invoice/unmark-paid', done.json.undo.payload.body);
+  assert.equal(undo.json.line, 'Back to unpaid ✓');
+  assert.deepEqual(s.calls.find((c) => c.fn === 'delete_payment')!.args.slice(0, 2), [id, paymentId]);
+  assert.equal(s.db.getInvoice(A.userId, id)!.paid_at, null);
+  assert.equal(s.db.getInvoice(A.userId, id)!.status, 'SENT');
+  assert.equal((await send(s, A.token, '/v1/actions/invoice/unmark-paid', done.json.undo.payload.body)).status, 409, 'nothing left to take back');
+});
+
+test('invoices: cancel says who PayPal tells and cannot be undone; two open invoices need the amount', async () => {
+  const s = setup();
+  const { token, userId } = s.device();
+  const emailed = await invoiceFor(s, token, 'Sam', 45, 'sam@x.com');
+  const [ch] = (await suggest(s, token, "cancel sam's invoice")).chips;
+  assert.equal(ch.kind, 'invoice_cancel');
+  assert.equal(ch.payload.question, "Cancel Sam's $45 invoice? PayPal tells Sam. Can't undo.");
+  const done = await send(s, token, '/v1/actions/invoice/cancel', confirmed(ch));
+  assert.equal(done.json.line, 'Invoice cancelled ✓');
+  assert.equal(done.json.undo, null);
+  assert.deepEqual(s.calls.find((c) => c.fn === 'cancel_invoice')!.args.slice(0, 2), [emailed, true]);
+  assert.equal(s.db.getInvoice(userId, emailed)!.status, 'CANCELLED');
+  assert.equal((await send(s, token, '/v1/actions/invoice/cancel', confirmed(ch))).status, 409);
+
+  await invoiceFor(s, token, 'Ana', 30);
+  await invoiceFor(s, token, 'Ana', 60);
+  const two = (await suggest(s, token, "cancel ana's invoice")).chips[0];
+  assert.equal(two.kind, 'show');
+  const [one] = (await suggest(s, token, "cancel ana's $60 invoice")).chips;
+  assert.equal(one.payload.question, "Cancel Ana's $60 invoice? No email goes out. Can't undo.");
+});
+
+test('invoices: record a refund only on a payment made outside PayPal, never more than is left', async () => {
+  const s = setup();
+  const { token, userId } = s.device();
+  const viaPayPal = await invoiceFor(s, token, 'Sam', 45, 'sam@x.com');
+  await s.call(null, 'POST', '/webhooks/paypal', paidEvent(viaPayPal), webhookHeaders);
+  const [hint] = (await suggest(s, token, 'record a $20 refund for sam')).chips;
+  assert.equal(hint.kind, 'show');
+  assert.match(hint.payload.line, /refund Sam \$20/);
+
+  const cash = await invoiceFor(s, token, 'Ana', 45);
+  const [mark] = (await suggest(s, token, 'ana paid cash')).chips;
+  await send(s, token, '/v1/actions/invoice/mark-paid', confirmed(mark));
+  const [ch] = (await suggest(s, token, 'refunded ana $20 in cash')).chips;
+  assert.equal(ch.kind, 'invoice_refund');
+  assert.equal(ch.label, 'Record refund $20 · Ana');
+  assert.equal(ch.payload.question, 'Record a $20 cash refund to Ana? No money moves.');
+  assert.equal((await send(s, token, '/v1/actions/invoice/record-refund', { ...confirmed(ch), confirm_amount: '45.00' })).status, 409);
+  assert.equal((await send(s, token, '/v1/actions/invoice/record-refund', { ...confirmed(ch), amount: '46.00', confirm_amount: '46.00' })).status, 400);
+  const done = await send(s, token, '/v1/actions/invoice/record-refund', confirmed(ch));
+  assert.equal(done.json.line, 'Refund recorded ✓');
+  assert.equal(s.db.getInvoice(userId, cash)!.status, 'PARTIALLY_REFUNDED');
+  const rest = (await suggest(s, token, 'record refund ana')).chips[0];
+  assert.equal(rest.label, 'Record refund $25 · Ana');
+  await send(s, token, '/v1/actions/invoice/record-refund', confirmed(rest));
+  assert.equal(s.db.getInvoice(userId, cash)!.status, 'MARKED_AS_REFUNDED');
+  assert.equal(s.calls.filter((c) => c.fn === 'record_refund').length, 2);
+  assert.equal(s.calls.filter((c) => c.fn === 'refund').length, 0, 'no PayPal money moved');
+});

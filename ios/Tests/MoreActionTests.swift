@@ -98,6 +98,28 @@ final class MoreActionTests: XCTestCase {
         XCTAssertEqual(titles(), ["Pause Ana's $40 monthly bill? PayPal tells Ana.", "Cancel"])
     }
 
+    func testMarkPaidRunsTheInvoiceRouteAndUndoTakesItBack() async {
+        let mark = action("invoice_mark_paid", "Mark paid $45 \u{00B7} Sam", body: ["invoice_id": .string("INV2-SAM"), "method": .string("CASH")],
+                          confirm: ["confirm_client": .string("Sam"), "confirm_amount": .string("45.00"), "confirm_currency": .string("USD")],
+                          question: "Mark Sam's $45 invoice paid (cash)? No money moves.")
+        let undo = Chip(kind: "invoice_unmark", label: "Undo", payload: ["body": .object(["invoice_id": .string("INV2-SAM")])], needs_confirm: false)
+        api.moreReply = MoreResponse(line: "Marked paid \u{2713}", undo: undo)
+        XCTAssertEqual(BarItems.title(mark), "Mark paid $45 \u{00B7} Sam")
+        model.tapChip(mark)
+        XCTAssertEqual(titles(), ["Mark Sam's $45 invoice paid (cash)? No money moves.", "Cancel"])
+        guard case .confirm(let next, let recipient) = model.bar else { return XCTFail("\(model.bar)") }
+        model.confirm(next, recipient: recipient)
+        XCTAssertEqual(titles(), ["Marking paid\u{2026}"])
+        await settled()
+        XCTAssertEqual(titles(), ["Marked paid \u{2713}", "Undo"])
+        XCTAssertEqual(store.pendingAction, nil, "the answer came, so nothing waits")
+        api.moreReply = MoreResponse(line: "Back to unpaid \u{2713}", undo: nil)
+        model.tapChip(undo)
+        await settled()
+        XCTAssertEqual(api.calls, ["more:invoice/mark-paid", "more:invoice/unmark-paid"])
+        XCTAssertEqual(model.bar, .done("Back to unpaid \u{2713}"))
+    }
+
     func testLineChipsShowTheirLineWithNoCall() async {
         model.tapChip(Chip(kind: "show", label: "Repeat bills \u{00B7} 2 active", payload: ["line": .string("Ana $40/mo, Ben $20/wk")], needs_confirm: false))
         await settled()

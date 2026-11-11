@@ -237,3 +237,26 @@ export function planVerb(text: string): PlanVerb | null {
   if (/\bstatus\b|\bhow(?:'s|\s+is)\b/i.test(s)) return 'status';
   return null;
 }
+
+// Money that moved outside PayPal, and invoices the owner calls off. PayPal's payment method names.
+const METHOD: [RegExp, string, string][] = [
+  [/\bcash\b/i, 'CASH', 'cash'], [/\b(?:check|cheque)\b/i, 'CHECK', 'check'], [/\bwire\b/i, 'WIRE_TRANSFER', 'wire'],
+  [/\b(?:zelle|venmo|bank|transfer)\b/i, 'BANK_TRANSFER', 'bank transfer'], [/\bcard\b/i, 'CREDIT_CARD', 'card'],
+];
+const OUTSIDE_METHOD = /\b(?:cash|check|cheque|wire|zelle|venmo|bank|transfer|card)\b/i;
+
+export type InvoiceVerb = { verb: 'mark_paid' | 'cancel_invoice' | 'record_refund'; method: string | null; methodWord: string | null };
+
+/** "sam paid cash", "mark sam paid", "cancel sam's invoice", "record a $20 refund for sam", "refunded sam $20 in cash". */
+export function invoiceVerb(text: string): InvoiceVerb | null {
+  const s = lastSentence(text);
+  const m = METHOD.find(([re]) => re.test(s));
+  const method = { method: m?.[1] ?? null, methodWord: m?.[2] ?? null };
+  if (/\b(?:cancel|void)\b.*\binvoice\b/i.test(s)) return { verb: 'cancel_invoice', method: null, methodWord: null };
+  if (/\b(?:record|log|mark)\b.*\brefund/i.test(s) || (/\brefunded\b/i.test(s) && OUTSIDE_METHOD.test(s))) return { verb: 'record_refund', ...method };
+  if (/^who\b/i.test(s)) return null;
+  if (/\bmark(?:ed)?\b.*\bpaid\b/i.test(s) || /\bpaid\s+(?:me\s+)?(?:(?:in|by|with|via)\s+)?(?:cash|check|cheque|wire|zelle|venmo|bank|transfer|card)\b/i.test(s)) {
+    return { verb: 'mark_paid', ...method };
+  }
+  return null;
+}

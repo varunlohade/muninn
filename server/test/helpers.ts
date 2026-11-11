@@ -55,6 +55,9 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       calls.push({ fn: 'change_subscription', args });
       subStatus.set(args[0], { suspend: 'SUSPENDED', activate: 'ACTIVE', cancel: 'CANCELLED' }[args[1]]);
     },
+    async deleteRecordedPayment(...args) { calls.push({ fn: 'delete_payment', args }); },
+    async cancelInvoice(...args) { calls.push({ fn: 'cancel_invoice', args }); },
+    async recordRefund(...args) { calls.push({ fn: 'record_refund', args }); return { refundId: `RFX-${++n}` }; },
   };
   // PayPal data per user, standing in for each user's own connected merchant account.
   const ppData = new Map<string, { txns?: PayPalTxn[] | Error; disputes?: PayPalDisputeDetail[] }>();

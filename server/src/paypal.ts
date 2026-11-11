@@ -23,6 +23,12 @@ export type PayPal = {
   getSubscription(id: string): Promise<SubscriptionState>;
   /** suspend = pause, activate = resume, cancel = end for good. */
   changeSubscription(id: string, to: 'suspend' | 'activate' | 'cancel', reason: string, requestId: string): Promise<void>;
+  /** Takes back a payment recordPayment made. `paymentId` is what recordPayment returned. */
+  deleteRecordedPayment(invoiceId: string, paymentId: string, requestId: string): Promise<void>;
+  /** `notify`: PayPal emails the client that the invoice is cancelled. */
+  cancelInvoice(id: string, notify: boolean, requestId: string): Promise<void>;
+  /** Notes a refund that happened outside PayPal. No money moves. */
+  recordRefund(id: string, r: { date: string; value: string; currency: string; method: string }, requestId: string): Promise<{ refundId: string }>;
 };
 export type SubscriptionState = { status: string; nextBillingAt: string | null; lastPaidAt: string | null };
 // Explicit dates and a reference tag; sent without emailing the recipient. Used by the demo seed.
@@ -314,6 +320,21 @@ function createClient(creds: Creds): PayPal {
 
     async changeSubscription(id, to, reason, requestId) {
       await rest('POST', `/v1/billing/subscriptions/${encodeURIComponent(id)}/${to}`, { reason: reason.slice(0, 127) }, requestId);
+    },
+
+    async deleteRecordedPayment(invoiceId, paymentId, requestId) {
+      await rest('DELETE', `/v2/invoicing/invoices/${encodeURIComponent(invoiceId)}/payments/${encodeURIComponent(paymentId)}`, undefined, requestId);
+    },
+
+    async cancelInvoice(id, notify, requestId) {
+      await rest('POST', `/v2/invoicing/invoices/${encodeURIComponent(id)}/cancel`, { send_to_recipient: notify, send_to_invoicer: false }, requestId);
+    },
+
+    async recordRefund(id, r, requestId) {
+      const out = await rest('POST', `/v2/invoicing/invoices/${encodeURIComponent(id)}/refunds`, {
+        method: r.method, refund_date: r.date, amount: { currency_code: r.currency, value: r.value },
+      }, requestId);
+      return { refundId: String(out?.refund_id ?? '') };
     },
 
     async sendDisputeMessage(id, message, requestId) {

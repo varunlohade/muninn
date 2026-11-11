@@ -50,10 +50,14 @@ enum ChipActions {
     /// The chip's payload is {body, confirm, question}; the server answers {line, undo}.
     static let moreActions = [
         "plan_pause": "plan/pause", "plan_resume": "plan/resume", "plan_cancel": "plan/cancel",
+        "invoice_mark_paid": "invoice/mark-paid", "invoice_unmark": "invoice/unmark-paid", "invoice_cancel": "invoice/cancel",
+        "invoice_refund": "invoice/record-refund",
     ]
     /// What the bar says while each of them runs.
     static let working = [
         "plan_pause": "Pausing\u{2026}", "plan_resume": "Restarting\u{2026}", "plan_cancel": "Ending\u{2026}", "plan_status": "Checking\u{2026}",
+        "invoice_mark_paid": "Marking paid\u{2026}", "invoice_unmark": "Taking it back\u{2026}", "invoice_cancel": "Cancelling invoice\u{2026}",
+        "invoice_refund": "Recording refund\u{2026}",
     ]
     /// Chips whose call moves money or messages a client. Only these keep a key and a pending call.
     static let sendsMoney = Set(["invoice", "paylink", "subscribe", "remind", "refund"]).union(moreActions.keys)
