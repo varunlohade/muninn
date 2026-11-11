@@ -15,7 +15,7 @@ export type AskRoute = (typeof ASK_ROUTES)[Exclude<AskGroup, 'none'>][number];
 // How often a repeat bill charges. PayPal plans take the same units in capitals.
 export const INTERVALS = ['week', 'month', 'year'] as const;
 export type Interval = (typeof INTERVALS)[number];
-export const TONES = ['professional', 'friendly', 'shorter', 'firmer'] as const;
+export const TONES = ['polite', 'professional', 'friendly', 'shorter', 'firmer'] as const;
 export type Tone = (typeof TONES)[number];
 
 export const config = {
