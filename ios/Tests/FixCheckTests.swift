@@ -1,0 +1,138 @@
+import XCTest
+@testable import Muninn
+
+/// The on-device Fix check, with the real system spell checker.
+final class FixCheckTests: XCTestCase {
+    private func plan(_ text: String, names: [String] = [], skipLast: Bool = false) -> FixPlan? {
+        FixCheck.plan(text, names: names, skipLast: skipLast)
+    }
+
+    func testTwoTyposNameTheCountAndFixOnThePhone() {
+        let p = plan("yes it's availble, can u pick it up today")
+        XCTAssertEqual(p?.title, "Fix 2 typos")
+        XCTAssertEqual(p?.done, "Fixed 2 typos \u{2713}")
+        XCTAssertEqual(p?.fixed, "Yes it's available, can you pick it up today?")
+    }
+
+    func testOneShortTypoShowsTheWord() {
+        let p = plan("i can do teh job")
+        XCTAssertEqual(p?.title, "Fix \u{201C}teh\u{201D} \u{2192} \u{201C}the\u{201D}")
+        XCTAssertEqual(p?.done, "Fixed 1 typo \u{2713}")
+        XCTAssertEqual(p?.fixed, "I can do the job.")
+    }
+
+    func testContractionSlips() {
+        XCTAssertEqual(plan("I dont think so, im busy")?.fixed, "I don't think so, I'm busy.")
+        XCTAssertEqual(plan("Dont worry about it")?.fixed, "Don't worry about it.")
+    }
+
+    func testCapitalsOnly() {
+        let p = plan("see you then. i will bring it")
+        XCTAssertEqual(p?.title, "Fix capitals")
+        XCTAssertEqual(p?.done, "Fixed capitals \u{2713}")
+        XCTAssertEqual(p?.fixed, "See you then. I will bring it.")
+        XCTAssertEqual(plan("Sure, i'll be there")?.fixed, "Sure, I'll be there.")
+    }
+
+    func testDoubleSpace() {
+        let p = plan("See you  at noon")
+        XCTAssertEqual(p?.title, "Fix spacing")
+        XCTAssertEqual(p?.fixed, "See you at noon.")
+    }
+
+    func testCleanTextShowsNoChip() {
+        XCTAssertNil(plan("See you at noon"))
+        XCTAssertNil(plan("Thanks, see you then!"))
+        XCTAssertNil(plan("Can you do Tuesday?"))
+        XCTAssertNil(plan("Ok sounds good lol"), "chat words are not typos")
+    }
+
+    func testLongCleanTextOffersGrammarOnTheServer() {
+        let p = plan("The cut and color will take about two hours on Friday")
+        XCTAssertEqual(p?.title, "Fix grammar")
+        XCTAssertNil(p?.fixed)
+    }
+
+    func testNamesLinksEmailsAmountsAreNotTypos() {
+        XCTAssertNil(plan("Thanks Priyanka, see you Tuesday"), "a capital word mid-sentence is a name")
+        XCTAssertNil(plan("Pay $120 at https://pp.me/xq7zk now"))
+        XCTAssertNil(plan("Mail it to jdoe@qmail.co please"))
+        XCTAssertNil(plan("See pp.me/abcd or www.zqxw.com"))
+        XCTAssertNil(plan("Invoice INV-0042 is #42"))
+        XCTAssertNil(plan("Priyanka booked a cut", names: ["Priyanka"]), "a name at the start, from the client list")
+    }
+
+    func testClientNamesAreNotTypos() {
+        XCTAssertEqual(plan("tell sanvika the cut is done", names: ["Sanvika Rao"])?.title, "Fix capitals",
+                       "the client name is left alone; only the start gets a capital")
+        XCTAssertEqual(plan("Tell sanvika the cut is done", names: ["Sanvika Rao"]), nil)
+    }
+
+    func testTheWordBeingTypedIsLeftAlone() {
+        XCTAssertNil(plan("See you at the availa", skipLast: true))
+        XCTAssertNotNil(plan("See you at the availa"))
+    }
+
+    func testAnotherLanguageIsNotFullOfTypos() {
+        let p = plan("hola que tal estoy bien gracias")
+        XCTAssertNotEqual(p?.title.hasPrefix("Fix 5"), true)
+        XCTAssertNil(p?.fixed)
+    }
+
+    func testSpellerIsOnlyAskedAboutRealWords() {
+        var asked: [String] = []
+        _ = FixCheck.plan("Send Sam $45 at sam@x.com or pp.me/abc, ok?", spell: { asked.append($0); return .ok })
+        XCTAssertEqual(asked, ["Send"], "names mid-sentence, amounts, emails, links and chat words are skipped")
+    }
+}
+
+@MainActor
+final class FixModelTests: XCTestCase {
+    private var host: FakeHost!
+    private var api: FakeAPI!
+    private var model: KeyboardModel!
+
+    override func setUp() async throws {
+        host = FakeHost()
+        api = FakeAPI()
+        model = KeyboardModel(deps: .fake(api: api))
+        model.host = host
+        model.keyboardAppeared()
+    }
+
+    override func tearDown() async throws {
+        model.keyboardDisappeared()
+        model = nil
+    }
+
+    func testLocalFixNeedsNoServerAndUndoPutsItBack() {
+        host.text = "can u send teh bill "
+        model.textChanged()
+        XCTAssertEqual(model.fixPlan?.title, "Fix 2 typos")
+        model.fix()
+        XCTAssertEqual(host.text, "Can you send the bill?")
+        XCTAssertEqual(model.barItems.first?.title, "Fixed 2 typos \u{2713}")
+        XCTAssertFalse(api.calls.contains("fix"))
+        model.perform(.undo)
+        XCTAssertEqual(host.text, "can u send teh bill ")
+        model.textChanged()
+        XCTAssertNil(model.fixPlan, "Fix is not offered again for text the owner kept")
+    }
+
+    func testCleanShortTextHasNoChip() {
+        host.text = "See you at noon"
+        model.textChanged()
+        XCTAssertNil(model.fixPlan)
+    }
+
+    func testGrammarGoesToTheServer() async {
+        host.text = "The cut and color will take about two hours on Friday"
+        model.textChanged()
+        XCTAssertEqual(model.fixPlan?.title, "Fix grammar")
+        api.writeReply = WriteResponse(text: "The cut and colour will take about two hours on Friday.", changed: true)
+        model.fix()
+        for _ in 0..<500 where model.undo == nil { await Task.yield() }
+        XCTAssertEqual(api.calls.filter { $0 == "fix" }.count, 1)
+        XCTAssertEqual(model.undo?.label, "Fixed grammar \u{2713}")
+    }
+}

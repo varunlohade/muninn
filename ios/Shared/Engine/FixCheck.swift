@@ -1,0 +1,158 @@
+import UIKit
+
+/// What the Fix chip offers for the text before the cursor. `fixed` is the on-device result; nil sends the text to the server.
+struct FixPlan: Equatable {
+    let title: String
+    /// The line beside Undo after the fix went in.
+    let done: String
+    let fixed: String?
+}
+
+/// Finds typos, capitals and spacing on the phone, before any tap. Names, links, emails and amounts are never touched.
+enum FixCheck {
+    enum Spell: Equatable { case ok, wrong(guess: String?) }
+    typealias Speller = (String) -> Spell
+
+    /// Below this many words, clean text shows no chip. At or above it, clean text offers a grammar check on the server.
+    static let grammarWords = 8
+    static let maxChars = 600
+
+    static let slips: [String: String] = [
+        "teh": "the", "adn": "and", "taht": "that", "waht": "what", "thier": "their", "recieve": "receive", "u": "you",
+        "dont": "don't", "cant": "can't", "wont": "won't", "didnt": "didn't", "doesnt": "doesn't", "isnt": "isn't",
+        "wasnt": "wasn't", "arent": "aren't", "couldnt": "couldn't", "wouldnt": "wouldn't", "shouldnt": "shouldn't",
+        "havent": "haven't", "hasnt": "hasn't", "im": "I'm", "ive": "I've", "youre": "you're", "theyre": "they're",
+        "thats": "that's", "whats": "what's",
+    ]
+    /// Chat words a spell checker flags but people mean.
+    static let chatWords: Set<String> = [
+        "ok", "okay", "lol", "pls", "plz", "thx", "btw", "omg", "np", "hmm", "haha", "yeah", "yep", "nope", "gonna",
+        "wanna", "gotta", "asap", "fyi", "eta", "tbh", "idk", "ya",
+    ]
+    static let questionWords: Set<String> = [
+        "can", "could", "will", "would", "do", "does", "did", "is", "are", "was", "were", "when", "what", "where", "who",
+        "how", "why", "which", "should", "shall", "may",
+    ]
+
+    /// `names`: client names, never flagged. `skipLast`: the last word is still being typed, so leave it alone.
+    static func plan(_ text: String, names: [String] = [], skipLast: Bool = false, spell: Speller = system) -> FixPlan? {
+        guard !text.isEmpty, text.count <= maxChars else { return nil }
+        let known = Set(names.flatMap { $0.lowercased().split(separator: " ").map(String.init) })
+        var chunks = split(text)
+        let lastWord = chunks.lastIndex { !$0.space }
+        var typos: [(String, String)] = [], capitals = 0, spacing = 0, checked = 0, misspelled = 0, unsure = 0
+        var atStart = true
+        for i in chunks.indices {
+            if chunks[i].space {
+                if chunks[i].text.count > 1, chunks[i].text.allSatisfy({ $0 == " " }) { chunks[i].text = " "; spacing += 1 }
+                continue
+            }
+            let parts = pieces(chunks[i].text)
+            let ends = chunks[i].text.last.map { ".!?".contains($0) } ?? false
+            defer { atStart = ends }
+            guard !(skipLast && i == lastWord), !parts.core.isEmpty, isWord(parts.core) else { continue }
+            var word = parts.core
+            let lower = word.lowercased()
+            if lower == "i" || lower.hasPrefix("i'") || lower.hasPrefix("i\u{2019}") {
+                if word.first == "i" { word = "I" + word.dropFirst(); capitals += 1 }
+            } else if let fix = slips[lower] {
+                let out = word.first!.isUppercase || atStart ? fix.prefix(1).uppercased() + fix.dropFirst() : fix
+                typos.append((word, String(out)))
+                word = String(out)
+            } else if lower.count >= 3, !known.contains(lower), !chatWords.contains(lower),
+                      !word.dropFirst().contains(where: \.isUppercase), atStart || !word.first!.isUppercase {
+                checked += 1
+                if case .wrong(let guess) = spell(word) {
+                    misspelled += 1
+                    if let guess, !guess.contains(" "), distance(lower, guess.lowercased()) <= 2 {
+                        let out = word.first!.isUppercase ? guess.prefix(1).uppercased() + guess.dropFirst() : guess
+                        typos.append((word, out))
+                        word = out
+                    } else {
+                        unsure += 1
+                    }
+                }
+            }
+            if atStart, let f = word.first, f.isLowercase {
+                word = f.uppercased() + word.dropFirst()
+                capitals += 1
+            }
+            chunks[i].text = parts.lead + word + parts.trail
+        }
+        let words = chunks.filter { !$0.space }.count
+        let grammar = words >= 3 && (unsure > 0 || words >= grammarWords)
+            ? FixPlan(title: "Fix grammar", done: "Fixed grammar \u{2713}", fixed: nil) : nil
+        // Mostly "wrong" words: another language, not typos.
+        if checked >= 3, misspelled * 2 >= checked { return grammar }
+        guard !typos.isEmpty || capitals > 0 || spacing > 0 else { return grammar }
+        var fixed = chunks.map(\.text).joined()
+        if let last = fixed.last, last.isLetter, let l = lastWord, isWord(pieces(chunks[l].text).core) {
+            let clause = fixed.split(whereSeparator: { ",.!?;".contains($0) }).last ?? ""
+            let first = clause.split(separator: " ").first.map { $0.lowercased() } ?? ""
+            fixed += questionWords.contains(first) ? "?" : "."
+        }
+        if typos.count == 1, let t = typos.first, t.0.count + t.1.count <= 14 {
+            return FixPlan(title: "Fix \u{201C}\(t.0)\u{201D} \u{2192} \u{201C}\(t.1)\u{201D}", done: "Fixed 1 typo \u{2713}", fixed: fixed)
+        }
+        if !typos.isEmpty {
+            let n = typos.count == 1 ? "1 typo" : "\(typos.count) typos"
+            return FixPlan(title: "Fix \(n)", done: "Fixed \(n) \u{2713}", fixed: fixed)
+        }
+        if capitals > 0 { return FixPlan(title: "Fix capitals", done: "Fixed capitals \u{2713}", fixed: fixed) }
+        return FixPlan(title: "Fix spacing", done: "Fixed spacing \u{2713}", fixed: fixed)
+    }
+
+    /// The system spell checker, in English. A word it has no guess for comes back `.wrong(guess: nil)`.
+    static func system(_ word: String) -> Spell {
+        let checker = UITextChecker()
+        let range = NSRange(location: 0, length: (word as NSString).length)
+        let bad = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: "en_US")
+        guard bad.location != NSNotFound else { return .ok }
+        return .wrong(guess: checker.guesses(forWordRange: bad, in: word, language: "en_US")?.first)
+    }
+
+    private struct Chunk { var text: String; let space: Bool }
+
+    private static func split(_ text: String) -> [Chunk] {
+        var out: [Chunk] = []
+        for ch in text {
+            let space = ch.isWhitespace
+            if let last = out.last, last.space == space { out[out.count - 1].text.append(ch) } else { out.append(Chunk(text: String(ch), space: space)) }
+        }
+        return out
+    }
+
+    /// Leading and trailing punctuation, and the word between. Links, emails, handles and amounts have an empty core.
+    private static func pieces(_ chunk: String) -> (lead: String, core: String, trail: String) {
+        let lower = chunk.lowercased()
+        if chunk.contains(where: { $0.isNumber || "@#$/\u{20AC}\u{00A3}".contains($0) }) || lower.contains("www.") {
+            return ("", "", chunk)
+        }
+        let isEdge = { (c: Character) in !c.isLetter && c != "'" && c != "\u{2019}" }
+        let lead = String(chunk.prefix(while: isEdge))
+        let rest = chunk.dropFirst(lead.count)
+        let trail = String(rest.reversed().prefix(while: isEdge).reversed())
+        let core = String(rest.dropLast(trail.count))
+        // "site.com" or "a.b": a dot inside is a link or an abbreviation.
+        if core.contains(".") { return ("", "", chunk) }
+        return (lead, core, trail)
+    }
+
+    private static func isWord(_ s: String) -> Bool { s.allSatisfy { $0.isLetter || $0 == "'" || $0 == "\u{2019}" } }
+
+    static func distance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        guard !a.isEmpty else { return b.count }
+        var row = Array(0...b.count)
+        for i in 1...a.count {
+            var prev = row[0]
+            row[0] = i
+            for j in stride(from: 1, through: b.count, by: 1) {
+                let cur = row[j]
+                row[j] = a[i - 1] == b[j - 1] ? prev : min(prev, row[j], row[j - 1]) + 1
+                prev = cur
+            }
+        }
+        return row[b.count]
+    }
+}

@@ -120,7 +120,7 @@ struct SuggestionBar: View {
                     .disabled(!model.canSaveNote)
                     .opacity(model.canSaveNote ? 1 : 0.3)
             } else if model.writeOpen {
-                Text("Refine").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, Theme.Space.s)
+                Text("Rewrite").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, Theme.Space.s)
                 Spacer()
             } else {
                 HStack(spacing: 0) {
@@ -134,20 +134,22 @@ struct SuggestionBar: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            if showsFix {
+            if showsFix, let plan = model.fixPlan {
                 Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
                 Button(action: model.fix) {
-                    Text("Fix").font(M.prediction.weight(.medium)).foregroundStyle(palette.accent)
-                        .frame(width: 48).frame(maxHeight: .infinity).contentShape(Rectangle())
+                    Text(plan.title).font(M.prediction.weight(.medium)).foregroundStyle(palette.accent)
+                        .lineLimit(1).fixedSize()
+                        .padding(.horizontal, Theme.Space.xs)
+                        .frame(maxHeight: .infinity).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Fix spelling and grammar")
+                .accessibilityLabel(plan.title)
                 .accessibilityIdentifier("chip.fix")
                 .transition(.opacity)
             }
             if model.paired && !model.notesOpen && !confirming {
                 Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
-                barButton(model.writeOpen ? "keyboard" : "wand.and.stars", id: "write.toggle", label: model.writeOpen ? "Keyboard" : "Refine", action: model.toggleWrite)
+                barButton(model.writeOpen ? "keyboard" : "wand.and.stars", id: "write.toggle", label: model.writeOpen ? "Keyboard" : "Rewrite", action: model.toggleWrite)
             }
             // Notes live in the App Group, which the keyboard reaches only with Full Access.
             if model.hasFullAccess && !model.writeOpen && !confirming {
@@ -281,7 +283,7 @@ struct NotesPanel: View {
     }
 }
 
-/// Refine, in place of the keys: four one-tap rewrites and a tone check. The result shows first; a tap puts it in the message.
+/// Rewrite, in place of the keys: five one-tap rewrites and a tone check. The result shows first; a tap puts it in the message.
 struct WritePanelView: View {
     @ObservedObject var model: KeyboardModel
     let palette: Theme.SystemKeyboard.Palette
@@ -304,16 +306,20 @@ struct WritePanelView: View {
     private var menu: some View {
         VStack(spacing: M.rowGap) {
             if model.canWrite {
-                ForEach([[RefineTone.professional, .friendly], [.shorter, .firmer]], id: \.first) { row in
-                    HStack(spacing: M.keyGap) {
-                        ForEach(row) { tone in wide(tone.title, id: "write.\(tone.rawValue)") { model.refine(tone) } }
-                    }
+                HStack(spacing: M.keyGap) { option(.polite); option(.shorter) }
+                HStack(spacing: M.keyGap) { option(.professional); option(.friendly) }
+                HStack(spacing: M.keyGap) {
+                    option(.firmer)
+                    wide("Check the tone", id: "write.tone", action: model.checkTone)
                 }
-                wide("Tone check", id: "write.tone", action: model.checkTone)
             } else {
-                note("Type a message first. Then pick how it should sound.")
+                note("Type a message first. Then pick how to rewrite it.")
             }
         }
+    }
+
+    private func option(_ tone: RefineTone) -> some View {
+        wide(tone.title, id: "write.\(tone.rawValue)") { model.refine(tone) }
     }
 
     private func preview(_ p: WritePreview) -> some View {
