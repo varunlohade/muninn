@@ -6,12 +6,15 @@ export type Intent = (typeof INTENTS)[number];
 export const ASK_GROUPS = ['money', 'writing', 'info', 'device', 'none'] as const;
 export type AskGroup = (typeof ASK_GROUPS)[number];
 export const ASK_ROUTES = {
-  money: ['invoice', 'paylink', 'remind', 'refund', 'none'],
+  money: ['invoice', 'paylink', 'subscribe', 'remind', 'refund', 'none'],
   writing: ['fix', 'refine', 'tone', 'reply', 'none'],
   info: ['who_paid', 'brief', 'clients', 'disputes', 'none'],
   device: ['add_note', 'today_calendar', 'none'],
 } as const;
 export type AskRoute = (typeof ASK_ROUTES)[Exclude<AskGroup, 'none'>][number];
+// How often a repeat bill charges. PayPal plans take the same units in capitals.
+export const INTERVALS = ['week', 'month', 'year'] as const;
+export type Interval = (typeof INTERVALS)[number];
 export const TONES = ['professional', 'friendly', 'shorter', 'firmer'] as const;
 export type Tone = (typeof TONES)[number];
 

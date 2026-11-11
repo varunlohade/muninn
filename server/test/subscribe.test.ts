@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createCipher } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
 import { createPayPalProvider, PayPalError } from '../src/paypal.ts';
+import { setup } from './helpers.ts';
 
 type Sent = { method: string; path: string; body: any; requestId: string | null };
 
@@ -96,4 +97,93 @@ test('subscriptions table: client fields are encrypted per user, rows are per us
   assert.deepEqual({ ...db.getBillingPlan(a, 'USD:4000:month') }, { product_id: 'PROD-1', plan_id: 'P-1' });
   assert.equal(db.anyBillingProduct(a), 'PROD-1');
   assert.equal(db.getBillingPlan(b, 'USD:4000:month'), undefined);
+});
+
+const ok = { amount: 40, currency: 'USD', interval: 'month', item: 'Haircut', client_name: 'Sam', client_email: 'sam@example.com' };
+const confirmed = { ...ok, confirm_amount: 40, confirm_currency: 'USD', confirm_interval: 'month', confirm_recipient: 'sam@example.com' };
+
+test('subscribe: 409 until amount, currency, interval and the emailed recipient are confirmed; nothing reaches PayPal', async () => {
+  const s = setup();
+  const { token } = s.device();
+  const bad: Record<string, unknown>[] = [
+    ok,
+    { ...confirmed, confirm_amount: 4 },
+    { ...confirmed, confirm_currency: 'EUR' },
+    { ...confirmed, confirm_interval: 'week' },
+    { ...confirmed, confirm_recipient: 'eve@evil.test' },
+    { ...confirmed, confirm_recipient: undefined },
+    { amount: 40, interval: 'week', confirm_amount: 40, confirm_interval: 'week' },
+  ];
+  for (const b of bad) {
+    const r = await s.call(token, 'POST', '/v1/actions/subscribe', b);
+    assert.equal(r.status, 409, JSON.stringify(b));
+    const j = await r.json() as any;
+    assert.equal(j.needs_confirm, true);
+    assert.equal(j.currency, (b.currency as string | undefined) ?? 'USD');
+  }
+  assert.equal(s.calls.length, 0);
+  assert.equal((await s.call(token, 'POST', '/v1/actions/subscribe', { ...confirmed, interval: 'day', confirm_interval: 'day' })).status, 400);
+  assert.equal((await s.call(token, 'POST', '/v1/actions/subscribe', confirmed, { 'X-User-Action': '' })).status, 428);
+  assert.equal(s.calls.length, 0);
+});
+
+test('subscribe: a confirmed repeat bill returns the approve link; the row is stored encrypted for this user only', async () => {
+  const s = setup();
+  const a = s.device(), b = s.device();
+  const r = await s.call(a.token, 'POST', '/v1/actions/subscribe', confirmed);
+  assert.equal(r.status, 200);
+  const j = await r.json() as any;
+  assert.deepEqual({ ...j, paypal_ms: 0 }, {
+    id: 'I-TEST1', status: 'APPROVAL_PENDING', approve_link: 'https://paypal.test/sub/1', amount: '40.00', currency: 'USD', interval: 'month', item: 'Haircut', paypal_ms: 0,
+  });
+  const [call] = s.calls;
+  assert.equal(call.fn, 'subscribe');
+  assert.deepEqual((call.args[0] as any), {
+    value: '40.00', currency: 'USD', interval: 'month', clientEmail: 'sam@example.com', productId: null, planId: null,
+    productRequestId: (call.args[0] as any).productRequestId, planRequestId: (call.args[0] as any).planRequestId,
+  });
+  const row = s.db.getSubscription(a.userId, 'I-TEST1')!;
+  assert.equal(s.cipher.decrypt(a.userId, row.client_email_enc!), 'sam@example.com');
+  assert.equal(s.db.getSubscription(b.userId, 'I-TEST1'), undefined);
+
+  // No email: the recipient needs no confirm, the amount, currency and interval still do.
+  const noEmail = { amount: 25, interval: 'week', confirm_amount: 25, confirm_currency: 'USD', confirm_interval: 'week' };
+  assert.equal((await s.call(a.token, 'POST', '/v1/actions/subscribe', noEmail)).status, 200);
+});
+
+test('subscribe: one product per user, one plan per amount, interval and currency', async () => {
+  const s = setup();
+  const a = s.device(), b = s.device();
+  const sub = async (token: string, amount: number, interval = 'month') =>
+    (await s.call(token, 'POST', '/v1/actions/subscribe', { amount, interval, confirm_amount: amount, confirm_currency: 'USD', confirm_interval: interval })).status;
+  assert.equal(await sub(a.token, 40), 200);
+  assert.equal(await sub(a.token, 40), 200);
+  assert.equal(await sub(a.token, 40, 'week'), 200);
+  assert.equal(await sub(b.token, 40), 200);
+  const ids = s.calls.map((c) => { const i = c.args[0] as any; return [i.productId, i.planId]; });
+  assert.deepEqual(ids, [[null, null], ['PROD-TEST-1', 'P-TEST-1'], ['PROD-TEST-1', null], [null, null]]);
+  const reqIds = s.calls.map((c) => (c.args[0] as any).productRequestId);
+  assert.equal(reqIds[0], reqIds[2]);
+  assert.notEqual(reqIds[0], reqIds[3]);
+});
+
+test('subscribe: the same key replays the stored answer with one PayPal call; lookup-only never runs it', async () => {
+  const s = setup();
+  const { token } = s.device();
+  const h = { 'Idempotency-Key': 'sub-key-0001' };
+  const first = await (await s.call(token, 'POST', '/v1/actions/subscribe', confirmed, h)).json();
+  const again = await s.call(token, 'POST', '/v1/actions/subscribe', confirmed, h);
+  assert.equal(again.status, 200);
+  assert.deepEqual(await again.json(), first);
+  assert.equal(s.calls.length, 1);
+  const look = await s.call(token, 'POST', '/v1/actions/subscribe', confirmed, { ...h, 'X-User-Action': '', 'Idempotency-Lookup': '1' });
+  assert.deepEqual(await look.json(), first);
+  const unknown = await s.call(token, 'POST', '/v1/actions/subscribe', confirmed, { 'Idempotency-Key': 'sub-key-0002', 'X-User-Action': '', 'Idempotency-Lookup': '1' });
+  assert.equal(unknown.status, 404);
+  assert.equal((await s.call(token, 'POST', '/v1/actions/subscribe', { ...confirmed, amount: 41, confirm_amount: 41 }, h)).status, 409);
+  assert.equal(s.calls.length, 1);
+  // A 409 confirm answer is not stored: the same key works once the owner confirms.
+  const k = { 'Idempotency-Key': 'sub-key-0003' };
+  assert.equal((await s.call(token, 'POST', '/v1/actions/subscribe', ok, k)).status, 409);
+  assert.equal((await s.call(token, 'POST', '/v1/actions/subscribe', confirmed, k)).status, 200);
 });

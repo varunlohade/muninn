@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import type { Extraction } from '../src/ai.ts';
 import type { AskGroup, AskRoute } from '../src/config.ts';
 import { askQuick, noteText } from '../src/quick.ts';
 import { paidEvent, setup, webhookHeaders } from './helpers.ts';
@@ -32,6 +33,10 @@ const TABLE: Row[] = [
   { text: 'invoice $45 for the haircut, sam@example.com', route: 'invoice', want: 'invoice', paid: 1, calls: ['askRoute'] },
   { text: 'bill Sam for the haircut', group: 'money', route: 'invoice', want: 'invoice', paid: 3, calls: ['askGroup', 'askRoute', 'extract'] },
   { text: 'pay link for the haircut, $45', route: 'paylink', want: 'paylink', paid: 1, calls: ['askRoute'] },
+  { text: 'bill Sam $40 monthly', route: 'subscribe', want: 'subscribe', paid: 2, calls: ['askRoute', 'extract'] },
+  { text: 'charge ana 90 every month', group: 'money', route: 'subscribe', want: 'subscribe', paid: 3, calls: ['askGroup', 'askRoute', 'extract'] },
+  { text: 'bill Ana $40 weekly', route: 'subscribe', want: 'subscribe', paid: 1, calls: ['askRoute'] },
+  { text: 'bill Sam $40 again', route: 'subscribe', want: 'none', paid: 1, calls: ['askRoute'] },
   { text: 'remind Ana', group: 'money', route: 'remind', want: 'remind', paid: 2, calls: ['askGroup', 'askRoute'] },
   { text: 'nudge her about the invoice', group: 'money', route: 'remind', want: 'remind', paid: 3, calls: ['askGroup', 'askRoute', 'extract'] },
   { text: 'refund Bo', group: 'money', route: 'refund', want: 'refund', paid: 2, calls: ['askGroup', 'askRoute'] },
@@ -143,6 +148,36 @@ test('ask: money routes return the same chips as /v1/suggest, with the confirm r
   const refund = (await ok.ask('refund Bo')).result.chips;
   assert.deepEqual(refund.map((c: any) => [c.kind, c.label]), [['refund', 'Refund $60 · Bo']]);
   assert.equal(ok.s.calls.length, 0);
+});
+
+test('ask: a repeat bill chip names the amount, interval and only a client the owner typed, and always confirms', async () => {
+  const chipsFor = async (text: string, ext: Partial<Extraction> | undefined, group?: AskGroup) => {
+    const w = await world({ group: { group }, route: { route: 'subscribe' }, ext });
+    const out = await w.ask(text);
+    assert.equal(out.route, 'subscribe', text);
+    assert.deepEqual(w.s.calls, [], `ask never moves money: ${text}`);
+    return out.result.chips as any[];
+  };
+  // The model's email is not one the owner typed, so it is dropped; the typed $40 beats the model's 45.
+  const [sam] = await chipsFor('bill Sam $40 monthly', undefined);
+  assert.deepEqual([sam.kind, sam.label, sam.needs_confirm], ['subscribe', 'Repeat $40 monthly · Sam', true]);
+  assert.deepEqual(sam.payload, { amount: '40.00', currency: 'USD', interval: 'month', item: 'Haircut', client_name: 'Sam', client_email: null });
+
+  const [ana] = await chipsFor('charge ana 90 every month', { client_name: 'Ana', client_email: null, amount: 90, currency: null, item: null }, 'money');
+  assert.deepEqual([ana.label, ana.payload.interval, ana.payload.amount, ana.needs_confirm], ['Repeat $90 monthly · Ana', 'month', '90.00', true]);
+
+  // A name the owner did not type never becomes the recipient.
+  const [nobody] = await chipsFor('bill €40 every week', { client_name: 'Maya', client_email: 'maya@x.test', amount: 40, currency: 'EUR', item: null });
+  assert.deepEqual([nobody.label, nobody.payload.client_name, nobody.payload.client_email, nobody.payload.currency], ['Repeat €40 weekly', null, null, 'EUR']);
+
+  const [typed] = await chipsFor('bill jo@example.com $25 every year', { client_name: null, client_email: 'jo@example.com', amount: 25, currency: null, item: 'plan' });
+  assert.deepEqual([typed.label, typed.payload.client_email, typed.payload.interval], ['Repeat $25 yearly · jo@example.com', 'jo@example.com', 'year']);
+
+  // Two intervals: no chip guesses one, and the owner is asked how often.
+  const two = await world({ route: { route: 'subscribe' } });
+  const out = await two.ask('bill Sam $40 weekly or monthly');
+  assert.equal(out.route, 'none');
+  assert.match(out.result.line, /how often/);
 });
 
 test('ask: writing, info and device results', async () => {

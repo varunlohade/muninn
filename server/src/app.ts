@@ -4,7 +4,7 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { config, TONES, type AskGroup, type AskRoute, type Intent, type Tone } from './config.ts';
+import { config, INTERVALS, TONES, type AskGroup, type Interval, type AskRoute, type Intent, type Tone } from './config.ts';
 import { randomToken, sha256, type Cipher } from './crypto.ts';
 import type { CatalogItem, Db, InvoiceRow, OrderRow } from './db.ts';
 import type { Ai, Extraction } from './ai.ts';
@@ -12,7 +12,7 @@ import { PayPalError, type PayPalProvider } from './paypal.ts';
 import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './money.ts';
 import { log } from './log.ts';
 import { clean } from './text.ts';
-import { askQuick, mentions, noteText, onlyKnownWords, quick, typedEmails, type Quick } from './quick.ts';
+import { askQuick, intervalOf, mentions, noteText, onlyKnownWords, quick, typedEmails, withoutInterval, type Quick } from './quick.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { RANGES, createBusiness } from './business.ts';
@@ -108,6 +108,11 @@ const InvoiceBody = z.object({
   amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName, client_email: ClientEmail,
   // Set by the owner's confirm tap, which shows both. An invoice that emails someone needs both to match.
   confirm_recipient: ClientEmail, confirm_amount: Amount.optional(), confirm_currency: Currency.optional(),
+}).strict();
+// A repeat bill always confirms amount, currency and interval on the server, and the recipient when PayPal gets an email.
+const SubscribeBody = z.object({
+  amount: Amount, currency: Currency.optional(), interval: z.enum(INTERVALS), item: Item.optional(), client_name: ClientName, client_email: ClientEmail,
+  confirm_amount: Amount.optional(), confirm_currency: Currency.optional(), confirm_interval: z.enum(INTERVALS).optional(), confirm_recipient: ClientEmail,
 }).strict();
 const PayLinkBody = z.object({ amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName }).strict();
 // confirm_client: set by the owner's confirm tap, which shows the client. It must name the invoice's client.
@@ -467,6 +472,46 @@ export function createApp(deps: Deps) {
     return [];
   }
 
+  const EVERY: Record<Interval, string> = { week: 'weekly', month: 'monthly', year: 'yearly' };
+  /**
+   * The repeat bill chip. The interval comes only from the regex. The amount is the regex amount when every other
+   * word is known, else the model reads it too. The client is named in the owner's text or left out; the email is
+   * one the owner typed or the one on record for that client. Always needs a confirm.
+   */
+  async function subscribeChips(userId: string, text: string, extract: () => Promise<Extraction | null>): Promise<Chip[]> {
+    const interval = intervalOf(text);
+    if (!interval) return [];
+    const plain = withoutInterval(text);
+    const q = quick(plain);
+    const items = db.listItems(userId);
+    const clients = clientNames(userId);
+    const known = new Set(clients.filter((n) => mentions(text, n)));
+    let ext: Extraction | null = q.amount !== null && onlyKnownWords(plain, [...items.map((i) => i.name), ...clients])
+      ? { client_name: known.size === 1 ? [...known][0] : null, client_email: q.email, amount: q.amount, currency: q.currency, item: null }
+      : null;
+    if (!ext) {
+      const model = await extract();
+      if (!model) return [];
+      ext = { ...model, client_email: q.email ?? model.client_email, amount: q.amount ?? model.amount, currency: q.amount !== null ? q.currency : model.currency };
+    }
+    const match = catalogMatch(items, text.toLowerCase(), ext.item);
+    const cents = ext.amount != null ? amountToCents(ext.amount) : match?.price_cents ?? null;
+    if (cents === null) return [];
+    const defaultCurrency = profileOf(userId).currency;
+    const typedCurrency = (config.money.currencies as readonly string[]).includes(ext.currency ?? '') ? ext.currency! : null;
+    const currency = typedCurrency ?? (ext.amount != null ? defaultCurrency : match?.currency ?? defaultCurrency);
+    const rawName = cleanOrNull(ext.client_name, 100);
+    const name = rawName && (mentions(text, rawName) || mentions(text, rawName.split(/\s+/)[0])) ? rawName : null;
+    const emails = typedEmails(text);
+    const typed = ext.client_email && emails.length === 1 && emails[0] === ext.client_email.toLowerCase() ? emails[0] : null;
+    const email = emails.length > 1 ? null : typed ?? recordEmail(userId, name, text);
+    const itemName = cleanOrNull(ext.item, 120);
+    const item = itemName ? itemName.charAt(0).toUpperCase() + itemName.slice(1) : match?.name ?? 'Repeat payment';
+    const who = name ?? email;
+    return [chip('subscribe', `Repeat ${formatMoney(cents, currency)} ${EVERY[interval]}${who ? ` · ${who}` : ''}`,
+      { amount: centsToValue(cents), currency, interval, item, client_name: name, client_email: email }, true)];
+  }
+
   // ---- money actions
   app.post('/v1/actions/invoice', async (c) => {
     const userId = c.get('userId');
@@ -506,6 +551,39 @@ export function createApp(deps: Deps) {
     const ms = Math.round(performance.now() - t);
     log('order_created', { user_id: userId, order_id: o.id, status: o.status, paypal_ms: ms });
     return c.json({ id: o.id, status: o.status, approve_link: o.approveLink, amount: centsToValue(b.amount), currency, paypal_ms: ms });
+  });
+
+  app.post('/v1/actions/subscribe', async (c) => {
+    const userId = c.get('userId');
+    const b = await body(c, SubscribeBody);
+    const profile = db.getProfile(userId);
+    const currency = b.currency ?? profile?.currency ?? 'USD';
+    if (b.confirm_amount !== b.amount || b.confirm_currency !== currency || b.confirm_interval !== b.interval
+      || (b.client_email && b.confirm_recipient !== b.client_email)) {
+      c.set('idemSkip', true);
+      return c.json({
+        error: 'confirm the amount, currency, interval and recipient', needs_confirm: true,
+        recipient: b.client_email ?? b.client_name ?? null, amount: centsToValue(b.amount), currency, interval: b.interval,
+      }, 409);
+    }
+    const item = b.item ?? 'Repeat payment';
+    const planKey = `${currency}:${b.amount}:${b.interval}`;
+    const cached = db.getBillingPlan(userId, planKey);
+    const t = performance.now();
+    const sub = await paypal.forUser(userId).createSubscription({
+      value: centsToValue(b.amount), currency, interval: b.interval, clientEmail: b.client_email ?? null,
+      productId: cached?.product_id ?? db.anyBillingProduct(userId), planId: cached?.plan_id ?? null,
+      productRequestId: requestIdFor(userId, 'billing-product'), planRequestId: requestIdFor(userId, `billing-plan:${planKey}`),
+    }, idemKey(c));
+    db.putBillingPlan(userId, planKey, sub.productId, sub.planId);
+    db.insertSubscription({
+      id: sub.id, user_id: userId, status: sub.status, amount_cents: b.amount, currency, interval: b.interval, item,
+      client_name_enc: enc(userId, b.client_name), client_email_enc: enc(userId, b.client_email), approve_link: sub.approveLink,
+      plan_id: sub.planId, created_at: now(),
+    });
+    const ms = Math.round(performance.now() - t);
+    log('subscription_created', { user_id: userId, subscription_id: sub.id, status: sub.status, paypal_ms: ms });
+    return c.json({ id: sub.id, status: sub.status, approve_link: sub.approveLink, amount: centsToValue(b.amount), currency, interval: b.interval, item, paypal_ms: ms });
   });
 
   app.post('/v1/actions/remind', async (c) => {
@@ -735,14 +813,19 @@ export function createApp(deps: Deps) {
       return none(0, 'Could not read that right now. Try again.', (e as Error).message);
     }
 
+    const items = db.listItems(userId);
+    const extract = () => {
+      paid++;
+      return ai.extract(text, catalogText(items)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
+    };
+    if (route === 'subscribe') {
+      if (!intervalOf(text)) return none(confidence, 'Say how often, like "bill Sam $40 monthly".');
+      return done(route, confidence, { chips: await subscribeChips(userId, text, extract) });
+    }
+
     const intent = ROUTE_INTENT[route];
     if (intent) {
       const q = quick(text);
-      const items = db.listItems(userId);
-      const extract = () => {
-        paid++;
-        return ai.extract(text, catalogText(items)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
-      };
       const filled = { text, context: '', q, known: regexFields(userId, q, text, text, items), items, currency: profileOf(userId).currency };
       return done(route, confidence, { chips: (await moneyChips(userId, intent, filled, null, extract)) ?? [] });
     }

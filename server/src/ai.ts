@@ -56,6 +56,7 @@ const NO_ROUTE = 'None of the other options fits.';
 const ROUTE_CRITERIA: Record<AskRoute, string> = {
   invoice: 'Send a client an invoice or a bill for a job or an item.',
   paylink: 'Make a quick link the client can pay with now.',
+  subscribe: 'Bill a client the same amount again and again: every week, every month or every year.',
   remind: 'Remind or nudge a client about an unpaid or late invoice.',
   refund: 'Give a client money back.',
   fix: 'Fix spelling and grammar only, with no change of tone or words.',

@@ -132,5 +132,17 @@ export function askQuick(text: string): AskQuick {
   return { none: false, group: amountsIn(t).length > 0 && MONEY_ACTION.test(t) ? 'money' : null };
 }
 
+// A repeat bill: "every month", "monthly", "weekly", "every year". "every 2 weeks" is not read, so no chip guesses it.
+const INTERVAL = /\b(?:every\s+(week|month|year)|(week|month|year)ly|annually)\b/gi;
+
+/** The one repeat interval in the text, or null when there is none or more than one. */
+export function intervalOf(text: string): 'week' | 'month' | 'year' | null {
+  const found = new Set([...text.matchAll(INTERVAL)].map((m) => (m[1] ?? m[2] ?? 'year').toLowerCase() as 'week' | 'month' | 'year'));
+  return found.size === 1 ? [...found][0] : null;
+}
+
+/** The text with its interval words removed, so "$40 every month" reads as one plain amount. */
+export const withoutInterval = (text: string) => text.replace(INTERVAL, ' ');
+
 /** "add a note: buy shampoo" gives "buy shampoo". Text with no note prefix comes back whole. */
 export const noteText = (text: string) => text.trim().replace(NOTE_PREFIX, '').trim();

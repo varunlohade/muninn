@@ -1,5 +1,5 @@
 import { PayPalAgentToolkit } from '@paypal/agent-toolkit/ai-sdk';
-import { config } from './config.ts';
+import { config, type Interval } from './config.ts';
 
 export type InvoiceInput = {
   value: string; currency: string; item: string; clientName: string | null; clientEmail: string | null; businessName: string | null;
@@ -25,7 +25,6 @@ export type PayPal = {
 // invoiceNumber is unique per merchant, so a re-run finds the invoice a crashed run left behind instead of making a second one.
 export type DatedInvoiceInput = InvoiceInput & { invoiceDate: string; dueDate: string; reference: string; invoiceNumber: string };
 export type Money = { value: string; currency: string };
-export type Interval = 'week' | 'month' | 'year';
 // productId / planId: the ones made before for this user and this amount, interval and currency, or null to make new ones.
 export type SubscriptionInput = {
   value: string; currency: string; interval: Interval; clientEmail: string | null;
