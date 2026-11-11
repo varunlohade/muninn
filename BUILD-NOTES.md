@@ -3,20 +3,16 @@
 ## 0.1 (3) — 2026-11-11
 
 What to test:
-- New intro. Delete the app and install it again. Watch the eight short scenes. Tap to go to the next one, or tap Skip.
-- The intro ends at "Turn on the keyboard", then one "Get started" button, then Home. There is no sign-in.
-- Save your details. Home shows a card: "To save your details, continue with Apple". Tap it and finish with Apple. The card goes away.
-- Then delete the app and install it again. Tap Get started, then the Apple card. You see "Welcome back" and your clients are there again.
-- If you skip the Apple card and delete the app, a new install starts a new, empty account.
-- The same Apple button is in Integrations.
-- Who hasn't paid. On Home, ask "who hasn't paid". You see the total and one card per client. Try Remind and Copy link.
-- The same list is at the bottom of Home.
-- Who paid in the keyboard. Type ;late and a space. A short list opens above the keys. Tap Remind, read the confirm, then tap it or Cancel.
-- Repeat billing. Ask "bill Sam $40 monthly". Check the confirm line: amount, how often, and who. Tap it to get the approve link.
-- Contacts. Ask "invoice $45 for a haircut" with no email. Tap "Add email from Contacts" and pick a client. Check the email in the confirm.
-- Review link. Open Integrations, then Google reviews. Paste your review link and save. Tap "Ask for a review".
+- New intro. Delete the app and install it again. Short scenes show Muninn in iMessage, WhatsApp, Telegram, Instagram and more. Tap to go on, or tap Skip.
+- Get started. There is no login. Turn on the keyboard, tap Get started, and you are on Home. This makes a test account with no real money.
+- Save your details. Home shows "To save your details, continue with Apple". Tap it and finish with Apple. Delete the app, install it again, tap Get started, then the same card. Your clients come back.
+- Who hasn't paid. On Home, ask "who hasn't paid". You see the total and one card per client. Tap Remind, read the confirm, then tap it or Cancel.
+- Repeat billing. Ask "bill Sam $40 monthly". Check the amount, how often and who, then tap it to get the link.
+- Contacts. Ask "invoice $45 for a haircut" with no email. Tap "Add email from Contacts" and pick someone. Check the email in the confirm.
+- Review link. Open Integrations, then Google reviews. Paste your review link and save. Then tap "Ask for a review".
 - Slack alerts. Open Integrations, then Slack. Follow the three steps and paste the webhook link.
-- Integrations now shows what each one does. Stripe and Square are gone.
+- Smart chips. In any chat, type "meeting with Ana tomorrow 3pm", "remind me at 5pm to call mom" or "note: gate code is 4521". A chip offers a calendar event, a reminder or a note.
+- Ready chips. Open the keyboard with nothing typed. The bar offers things like "Who paid?", your next appointment and Notes. The "Who paid?" count now matches the list.
 
 ## 0.1 (2) — 2026-11-11
 
