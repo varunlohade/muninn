@@ -383,23 +383,29 @@ export function detectLookup(text: string, now: number): Lookup | null {
 const NOT_A_NAME = new Set([
   'me', 'you', 'a', 'an', 'the', 'them', 'it', 'him', 'her', 'us', 'back', 'over', 'out', 'to', 'my', 'your', 'this', 'that', 'money', 'now', 'later', 'for',
 ]);
-const PAY_ROLE = String.raw`(?:my\s+(?:supplier|vendor|contractor|freelancer|assistant|cleaner|landlord|guy)\s+)?`;
+const PAY_ROLE = String.raw`(?:my\s+(?:supplier|vendor|contractor|freelancer|assistant|cleaner|landlord|staff|guy)\s+)?`;
 const PAY_NAME = String.raw`(?<name>\p{L}[\p{L}'’-]*)`;
-const PAY_TO_NAME = new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_ROLE}${PAY_NAME}`, 'iu');
-const PAY_AMOUNT_TO = new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+\S+\s+to\s+${PAY_ROLE}${PAY_NAME}`, 'iu');
+// One money token: "$200", "200 usd", "usd 200", "€45.50". quick() then checks it is one real amount with a currency.
+const PAY_MONEY = String.raw`(?:(?:usd|eur|gbp|cad|aud)\s?)?\S*\d\S*(?:\s(?:usd|eur|gbp|cad|aud|dollars?|bucks|euros?))?`;
+const PAY_EMAIL = String.raw`(?:\s+\S+@\S+)?`;
+// The whole sentence is the payout and nothing else, so a time, a date or an address word never reads as one.
+const PAYOUT_SHAPES = [
+  new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_ROLE}${PAY_NAME}\s+${PAY_MONEY}${PAY_EMAIL}[.!]?$`, 'iu'),
+  new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_MONEY}\s+to\s+${PAY_ROLE}${PAY_NAME}${PAY_EMAIL}[.!]?$`, 'iu'),
+];
 // A request for the client to pay, not a payment to someone.
 const NOT_PAYOUT = /\b(?:invoice|bill|link|reminder|receipt|quote|request)\b/i;
 
-export type PayoutAsk = { name: string; amount: number | null; currency: string | null; email: string | null };
+export type PayoutAsk = { name: string; amount: number; currency: string | null; email: string | null };
 
-/** "pay joe $200", "send my supplier joe $200 joe@x.com", "send $200 to joe". Null when the sentence is not a payout. */
+/** "pay joe $200", "send my supplier joe $200 joe@x.com", "send $200 to joe". Null when the sentence is not exactly a payout with one amount. */
 export function payoutAsk(text: string): PayoutAsk | null {
   const s = lastSentence(text);
-  if (NOT_PAYOUT.test(s) || !/\d/.test(s)) return null;
-  const m = s.match(PAY_TO_NAME) ?? s.match(PAY_AMOUNT_TO);
-  const raw = m?.groups?.name;
+  if (NOT_PAYOUT.test(s) || amountsIn(s).length === 0) return null;
+  const raw = PAYOUT_SHAPES.map((re) => s.match(re)?.groups?.name).find(Boolean);
   if (!raw || NOT_A_NAME.has(raw.toLowerCase())) return null;
   const q = quick(s);
+  if (q.amount === null) return null;
   return { name: raw[0].toUpperCase() + raw.slice(1).toLowerCase(), amount: q.amount, currency: q.currency, email: q.email };
 }
 

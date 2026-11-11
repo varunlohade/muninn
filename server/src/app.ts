@@ -332,7 +332,10 @@ export function createApp(deps: Deps) {
     let parallel = false;
     // One jev question when a lookup is likely but not sure ("invoice sam"); the rest of suggest may still run after it.
     let lookupPaid = 0;
-    const done = (chips: Chip[], intent: string, confidence: number) => {
+    // "pay joe $200" is a payout, never a pay link. Its chip sits beside the other regex chips instead of ending suggest.
+    const pay = more.payout(userId, text) ?? [];
+    const done = (found: Chip[], intent: string, confidence: number) => {
+      const chips = [...pay, ...found];
       timings.total_ms = Math.round(performance.now() - t0);
       const paid_calls = lookupPaid + (path === 'regex_none' || path === 'regex_lookup' ? 0 : path === 'jev_only' || path === 'jev_device' ? 1 : path === 'jev_lookup' ? 0 : 2);
       log('suggest', { user_id: userId, path, paid_calls, parallel, intent, confidence, chips: chips.length, ...timings });
@@ -358,6 +361,9 @@ export function createApp(deps: Deps) {
       }
       path = 'regex_none';
     }
+
+    // A payout sentence needs no model: it is never a pay link or an invoice.
+    if (pay.length) return done([], 'payout', 1);
 
     const q = quick(text, context ?? '');
     if (q.none) {
@@ -927,7 +933,7 @@ export function createApp(deps: Deps) {
       return c.json({ route, confidence, result });
     };
     const none = (confidence: number, line = NOT_SURE, err?: string) => done('none', confidence, { line }, err);
-    const extra = await more.suggest(userId, text, 'ask');
+    const extra = more.payout(userId, text) ?? await more.suggest(userId, text, 'ask');
     if (extra) return done('action' as AskRoute, 1, { chips: extra });
 
     const aq = askQuick(text);

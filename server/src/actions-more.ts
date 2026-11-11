@@ -353,7 +353,6 @@ export function createMore(d: MoreDeps) {
   function payoutChips(userId: string, ask: PayoutAsk): Chip[] {
     const { name } = ask;
     const currency = ask.currency ?? db.getProfile(userId)?.currency ?? 'USD';
-    if (ask.amount === null) return [lineChip(`Type the amount for ${name}`, `Type the amount for ${name}, like "pay ${name.toLowerCase()} $200".`)];
     const cents = Math.round(ask.amount * 100);
     const money = formatMoney(cents, currency);
     const { email, several } = payoutEmail(userId, ask);
@@ -550,14 +549,17 @@ export function createMore(d: MoreDeps) {
     return money ? `PayPal didn't share the balance. Net this week ${money}` : "PayPal didn't share the balance. Nothing came in this week.";
   }
 
+  /** The payout chip for "pay joe $200", or null. Regex and local rows only: no model, no PayPal call. */
+  function payoutSuggest(userId: string, text: string): Chip[] | null {
+    const ask = payoutAsk(text);
+    return ask ? payoutChips(userId, ask) : null;
+  }
+
   /**
-   * The chips for a more-verb, or null when the text is not one. No model call.
+   * The chips for a more-verb other than a payout, or null when the text is not one. No model call.
    * `from: 'ask'`: the Ask bar already answers a disputes list itself (its disputes route), so that one is left to it.
    */
   async function suggest(userId: string, text: string, from: 'suggest' | 'ask' = 'suggest'): Promise<Chip[] | null> {
-    // "pay joe $200" is a payout, never a pay link.
-    const pay = payoutAsk(text);
-    if (pay) return payoutChips(userId, pay);
     if (balanceAsk(text)) return [chip('balance', 'Balance', {}, false)];
     const plan = planVerb(text);
     if (plan) {
@@ -610,5 +612,5 @@ export function createMore(d: MoreDeps) {
     });
   }
 
-  return { suggest, mount };
+  return { payout: payoutSuggest, suggest, mount };
 }

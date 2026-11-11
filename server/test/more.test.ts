@@ -26,6 +26,20 @@ test('copy: payoutAsk reads name, amount and typed email; requests to be paid ar
   assert.deepEqual(payoutAsk('pay my supplier joe $200 joe@x.com'), { name: 'Joe', amount: 200, currency: null, email: 'joe@x.com' });
   assert.deepEqual(payoutAsk('send $200 to joe'), { name: 'Joe', amount: 200, currency: null, email: null });
   for (const t of ['pay me $45', 'send sam a $45 invoice', 'send you the $45 link', 'pay joe', 'can you pay $45 by friday']) assert.equal(payoutAsk(t), null, t);
+  assert.deepEqual(payoutAsk('pay my staff ana 60 usd'), { name: 'Ana', amount: 60, currency: 'USD', email: null });
+});
+
+test('payouts: ordinary chat is never a payout and never ends suggest', async () => {
+  const chat = ['send ana the address at 5pm', 'pay rent 1200 tomorrow', 'send me 2 photos', "i'll pay sam tomorrow",
+    'pay sam $45 tomorrow', 'send joe $20 and $30', 'pay joe 200'];
+  for (const t of chat) assert.equal(payoutAsk(t), null, t);
+  const s = setup({ cls: { intent: 'create_invoice' } });
+  const { token } = s.device();
+  for (const text of chat) {
+    const out = await suggest(s, token, text);
+    assert.equal(out.chips.some((c) => c.kind === 'payout' || /^(Type the amount|Add .* email)/.test(c.label)), false, text);
+  }
+  assert.ok(s.aiCalls.length > 0, 'the money path still runs');
 });
 
 test('copy: reminder chip says Nudge and owed; who-owes chip; refund confirm says it cannot be undone', async () => {
