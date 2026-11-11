@@ -14,8 +14,9 @@ import { log } from './log.ts';
 import { clean } from './text.ts';
 import {
   askQuick, deviceSignal, deviceTitle, deviceTrigger, intervalOf, lastSentence, mentions, moneyTrigger, nameIn, noteText, onlyKnownWords, quick, repeatEnds,
-  typedEmails, withoutInterval, type Quick,
+  typedEmails, withoutInterval, detectLookup, type Quick,
 } from './quick.ts';
+import { ASK_AT, SHOW_AT, chipLabel, createSearch, importance, invoiceState, orderState } from './search.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { createSlack, SlackWebhookUrl } from './slack.ts';
@@ -185,6 +186,7 @@ export function createApp(deps: Deps) {
   const integrations = createIntegrations(db, cipher, now);
   const slack = createSlack(db, cipher, now);
   const biz = createBusiness({ db, ai, paypal, integrations, dec, now });
+  const search = createSearch({ db, dec, namer: biz.namer });
 
   app.use('*', secureHeaders());
   app.use('*', cors({ origin: (origin) => (config.corsOrigins.includes(origin) ? origin : null), allowMethods: ['GET', 'POST', 'PUT', 'DELETE'] }));
@@ -323,12 +325,32 @@ export function createApp(deps: Deps) {
     const timings: Record<string, number> = {};
     let path = 'regex_none';
     let parallel = false;
+    // One jev question when a lookup is likely but not sure ("invoice sam"); the rest of suggest may still run after it.
+    let lookupPaid = 0;
     const done = (chips: Chip[], intent: string, confidence: number) => {
       timings.total_ms = Math.round(performance.now() - t0);
-      const paid_calls = path === 'regex_none' ? 0 : path === 'jev_only' || path === 'jev_device' ? 1 : 2;
+      const paid_calls = lookupPaid + (path === 'regex_none' || path === 'regex_lookup' ? 0 : path === 'jev_only' || path === 'jev_device' ? 1 : path === 'jev_lookup' ? 0 : 2);
       log('suggest', { user_id: userId, path, paid_calls, parallel, intent, confidence, chips: chips.length, ...timings });
       return c.json({ chips, intent, confidence, timings });
     };
+
+    // A lookup of the owner's own records: regex settles it with no paid call when the phrase and the name are clear.
+    const look = context ? null : lookupChip(userId, text);
+    if (look && look.score >= SHOW_AT) {
+      path = 'regex_lookup';
+      return done([look.chip], 'lookup', look.score);
+    }
+    if (look && look.score >= ASK_AT) {
+      path = 'jev_lookup';
+      lookupPaid = 1;
+      try {
+        const r = await ai.askRoute(text, 'info');
+        if (r.route === 'lookup' && r.confidence >= config.jev.minConfidence) return done([look.chip], 'lookup', r.confidence);
+      } catch (e) {
+        log('lookup_route_failed', { err: (e as Error).message });
+      }
+      path = 'regex_none';
+    }
 
     const q = quick(text, context ?? '');
     if (q.none) {
@@ -377,6 +399,14 @@ export function createApp(deps: Deps) {
     const chips = await moneyChips(userId, cls.intent, { text, context: context ?? '', q, known, items, currency: profile.currency }, extracting, extract);
     return done(chips ?? [], cls.intent, cls.confidence);
   });
+
+  /** The lookup chip for typed text, with how much it is worth showing. Null for no lookup phrase or a name that is no client. */
+  function lookupChip(userId: string, text: string): { chip: Chip; score: number } | null {
+    const l = detectLookup(text, now());
+    const r = l && search.find(userId, l);
+    if (!l || !r || r.match === 'none') return null;
+    return { chip: { kind: 'lookup', label: clean(chipLabel(r)), payload: r, needs_confirm: false, trigger: l.trigger }, score: importance(l.sure, r.match) };
+  }
 
   /**
    * A device chip runs on the phone (calendar, reminders, notes), never here. The server gives the kind and a title;
@@ -738,8 +768,6 @@ export function createApp(deps: Deps) {
   });
 
   // ---- read views
-  const invoiceState = (s: string) => (['PAID', 'MARKED_AS_PAID'].includes(s) ? 'paid' : ['REFUNDED', 'PARTIALLY_REFUNDED', 'MARKED_AS_REFUNDED'].includes(s) ? 'refunded' : s === 'CANCELLED' ? 'cancelled' : 'unpaid');
-  const orderState = (s: string) => (s === 'COMPLETED' ? 'paid' : ['REFUNDED', 'PARTIALLY_REFUNDED'].includes(s) ? 'refunded' : 'unpaid');
 
   app.get('/v1/payments', async (c) => {
     const userId = c.get('userId');
@@ -890,6 +918,10 @@ export function createApp(deps: Deps) {
 
     const aq = askQuick(text);
     if (aq.none) return none(1, 'Ask for an invoice, a reminder, a rewrite, who paid, or a note.');
+    // A clear lookup phrase needs no router. An unknown name still answers: "No invoices for Sam yet".
+    const look = detectLookup(text, now());
+    const found = look?.sure ? search.find(userId, look) : null;
+    if (found) return done('lookup', 1, found);
     let group: AskGroup | null = aq.group;
     let confidence = 1;
     let route: AskRoute;
@@ -963,6 +995,10 @@ export function createApp(deps: Deps) {
     if (route === 'who_paid') return done(route, confidence, { payments: paymentsOf(userId) });
     if (route === 'brief') return done(route, confidence, await biz.brief(userId, () => paid++));
     if (route === 'clients') return done(route, confidence, await biz.clients(userId));
+    if (route === 'lookup') {
+      const r = look && search.find(userId, look);
+      return r ? done(route, confidence, r) : none(confidence, 'Say whose record, like "invoice for Sam" or "did Ana pay".');
+    }
     if (route === 'disputes') return done(route, confidence, { disputes: await biz.disputes(userId) });
     if (route === 'add_note') {
       const note = clean(noteText(text));

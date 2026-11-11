@@ -59,7 +59,7 @@ const CRITERIA: Record<Intent, string> = {
 const GROUP_CRITERIA: Record<AskGroup, string> = {
   money: 'The owner wants to bill, invoice or charge a client, make a pay link, remind a client about an unpaid invoice, or refund a client.',
   writing: 'The owner wants a piece of text fixed, rewritten, made nicer, shorter or firmer, checked for tone, or wants a reply written to a client message.',
-  info: 'The owner asks a question about the business: who paid or still owes, how the day or week went, the clients, or disputes.',
+  info: "The owner asks a question about the business: who paid or still owes, how the day or week went, the clients, a client's latest invoice, order or booking, or disputes.",
   device: 'The owner wants to save a note, or asks what is on the calendar or schedule today.',
   none: 'A greeting, small talk, or anything else that none of the other options covers.',
 };
@@ -78,6 +78,7 @@ const ROUTE_CRITERIA: Record<AskRoute, string> = {
   who_paid: 'Who paid, who has not paid, what is still owed or late.',
   brief: 'A short summary of how the business did today or this week: money earned, what needs attention.',
   clients: 'A list of the clients, or facts about a client.',
+  lookup: "Find one client's latest invoice, payment, receipt, order, booking or other record, or what one client owes.",
   disputes: 'Disputes, chargebacks or payment claims from clients.',
   add_note: 'Save a note or something to remember.',
   today_calendar: 'What is on the calendar or schedule today, the appointments, who is next.',

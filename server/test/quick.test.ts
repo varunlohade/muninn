@@ -51,7 +51,9 @@ const TABLE: Row[] = [
   { text: 'running 5 min late sorry', intent: 'none', path: 'jev+extract' },
   { text: 'ok', intent: 'none', path: 'regex_none' },
   { text: 'lol yes', intent: 'none', path: 'regex_none' },
-  { text: 'did ana pay yet?', intent: 'payment_status', path: 'jev_only' },
+  // A lookup of a known client: the regex answers with Ana's latest invoice, no paid call.
+  { text: 'did ana pay yet?', intent: 'payment_status', path: 'regex_none' },
+  { text: 'did someone pay yet?', intent: 'payment_status', path: 'jev+extract' },
   { text: 'who still owes me?', intent: 'payment_status', path: 'jev+extract' },
   { text: '', context: 'how much is a haircut?', intent: 'catalog_reply', path: 'jev+extract' },
   { text: 'what are your prices', intent: 'catalog_reply', path: 'jev+extract' },
