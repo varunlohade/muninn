@@ -81,6 +81,9 @@ export const config = {
     refundConfirmTtlMs: 2 * 60 * 1000,
     // Payouts send the owner's own money out. All payouts in one UTC day, in any currency, stay at or under this.
     payoutDailyCap: 1000,
+    // The shared demo merchant sends real sandbox money for everyone not connected: a small cap per user and one for all of them.
+    demoPayoutDailyCap: 50,
+    demoPayoutPlatformDailyCap: 200,
   },
 
   rateLimit: {
