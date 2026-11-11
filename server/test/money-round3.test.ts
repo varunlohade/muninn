@@ -62,7 +62,7 @@ test('a reminder whose client name came only from copied text needs a confirm', 
   const fromContext = await (await s.call(token, 'POST', '/v1/suggest', { text: 'send a reminder', context: 'hey, Ana here' })).json();
   assert.deepEqual(fromContext.chips.map((c: C) => [c.kind, c.needs_confirm]), [['remind', true]]);
   const typed = await (await s.call(token, 'POST', '/v1/suggest', { text: 'send Ana a reminder', context: 'hey, Ana here' })).json();
-  assert.deepEqual(typed.chips.map((c: C) => [c.kind, c.needs_confirm]), [['remind', false]]);
+  assert.deepEqual(typed.chips.map((c: C) => [c.kind, c.needs_confirm]), [['remind', true]], 'every reminder confirms');
 });
 
 async function knownClients(rows: [string, string | null][], ext: Record<string, unknown>) {

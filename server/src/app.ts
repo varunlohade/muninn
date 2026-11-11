@@ -107,10 +107,11 @@ const ToneBody = z.object({ text: OptionalWriteText, context: OptionalWriteText 
 const InvoiceBody = z.object({
   amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName, client_email: ClientEmail,
   // Set by the owner's confirm tap, which shows both. An invoice that emails someone needs both to match.
-  confirm_recipient: ClientEmail, confirm_amount: Amount.optional(),
+  confirm_recipient: ClientEmail, confirm_amount: Amount.optional(), confirm_currency: Currency.optional(),
 }).strict();
 const PayLinkBody = z.object({ amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName }).strict();
-const RemindBody = z.object({ invoice_id: z.string().min(1).max(64) }).strict();
+// confirm_client: set by the owner's confirm tap, which shows the client. It must name the invoice's client.
+const RemindBody = z.object({ invoice_id: z.string().min(1).max(64), confirm_client: z.string().trim().max(100).optional() }).strict();
 const RefundBody = z.union([
   z.object({ confirm_token: z.string().min(10).max(100) }).strict(),
   z.object({ id: z.string().min(1).max(64), amount: Amount.optional() }).strict(),
@@ -322,14 +323,18 @@ export function createApp(deps: Deps) {
       } else {
         const model = await (extracting ??= extract());
         if (!model) return null;
-        unsure = q.clientAmountOnly || (model.amount !== null && model.amount !== q.amount);
+        // The model read no amount but the text has more than amount, item and name words ("half off", "waived"):
+        // the amount comes from the regex or the catalog, so the owner confirms it.
+        const extraWords = !onlyKnownWords(f.text, [...f.items.map((i) => i.name), ...clientNames(userId)]);
+        unsure = q.clientAmountOnly || (model.amount !== null && model.amount !== q.amount) || (model.amount === null && extraWords);
         // What the regex read beats a model guess. Email comes only from the owner's own text (see buildChips).
         ext = {
           ...model,
           client_name: model.client_name ?? fill?.client_name ?? null,
           client_email: q.email ?? model.client_email,
           amount: q.amount ?? model.amount,
-          currency: q.amount !== null && q.currency ? q.currency : model.currency,
+          // A typed amount keeps its typed currency; a bare $ stays null, so the profile currency applies.
+          currency: q.amount !== null ? q.currency : model.currency,
         };
       }
     }
@@ -346,11 +351,14 @@ export function createApp(deps: Deps) {
    * named and, if the text has digits, the amount. A regex amount counts only when every other word the owner
    * typed is a money word, a catalog item or a known client; else the model reads it too (rule B).
    */
+  const clientNames = (userId: string) =>
+    [...db.listInvoices(userId), ...db.listOrders(userId)].map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n);
+
   function regexFields(userId: string, q: Quick, text: string, seen: string, items: CatalogItem[]) {
     const hasItem = !!catalogMatch(items, seen.toLowerCase());
     const invoices = db.listInvoices(userId);
     const orders = db.listOrders(userId);
-    const clients = [...invoices, ...orders].map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n);
+    const clients = clientNames(userId);
     const named = (rows: (InvoiceRow | OrderRow)[]) => {
       const names = new Set(rows.map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n && mentions(seen, n)));
       return names.size === 1 ? [...names][0] : null;
@@ -374,9 +382,9 @@ export function createApp(deps: Deps) {
   const cleanOrNull = (v: string | null | undefined, max: number) => (v ? clean(v).slice(0, max) || null : null);
 
 
-  /** True when `want` is the client's full name or first name (case-insensitive). No want matches everyone. */
+  /** True when `want` is the client's full name or first name (case-insensitive). No want matches no one. */
   const sameClient = (userId: string, r: InvoiceRow | OrderRow, want: string | undefined) => {
-    if (!want) return true;
+    if (!want) return false;
     const name = (dec(userId, r.client_name_enc) ?? '').trim().toLowerCase();
     return name === want || name.split(/\s+/)[0] === want;
   };
@@ -400,7 +408,11 @@ export function createApp(deps: Deps) {
     const lower = text.toLowerCase();
     const seen = `${lower} ${context.toLowerCase()}`;
     const match = catalogMatch(items, seen, ext?.item);
-    const currency = (config.money.currencies as readonly string[]).includes(ext?.currency ?? '') ? ext!.currency! : match?.currency ?? defaultCurrency;
+    // A typed currency wins; a typed amount with a bare $ is in the profile currency; only a catalog price keeps the item's.
+    const typedCurrency = (config.money.currencies as readonly string[]).includes(ext?.currency ?? '') ? ext!.currency! : null;
+    const currency = typedCurrency ?? (ext?.amount != null ? defaultCurrency : match?.currency ?? defaultCurrency);
+    // Copied or typed text names a client: true when that text holds the client's full or first name.
+    const namedIn = (t: string, client: string) => !!client && (mentions(t, client) || mentions(t, client.split(/\s+/)[0]));
 
     if (intent === 'create_invoice' || intent === 'pay_link') {
       const cents = ext?.amount != null ? amountToCents(ext.amount) : match?.price_cents ?? null;
@@ -410,12 +422,15 @@ export function createApp(deps: Deps) {
       const base = { amount: centsToValue(cents), currency, item, client_name: ext?.client_name ?? null };
       // An email the owner typed, else the one email the owner's records hold for the client named in the owner's
       // text. Never an email the model read from copied client text or made up.
-      const typed = ext?.client_email && typedEmails(text).includes(ext.client_email.toLowerCase()) ? ext.client_email : null;
-      const email = typed ?? recordEmail(userId, ext?.client_name ?? null, text);
+      // Two or more typed emails: the owner picks on the confirm, never the model.
+      const emails = typedEmails(text);
+      const typed = ext?.client_email && emails.length === 1 && emails[0] === ext.client_email.toLowerCase() ? ext.client_email : null;
+      const email = emails.length > 1 ? null : typed ?? recordEmail(userId, ext?.client_name ?? null, text);
       const recipient = email ?? ext?.client_name ?? null;
       // Every invoice gets one confirm tap that shows the amount and the recipient; the server checks both.
       const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`, { ...base, client_email: email }, true);
-      const link = chip('paylink', `Pay link ${money} · ${item}`, base, unsure);
+      const currencyClash = !!match && ext?.amount != null && match.currency !== currency;
+      const link = chip('paylink', `Pay link ${money} · ${item}`, base, unsure || currencyClash);
       return intent === 'create_invoice' ? [invoice, link] : [link, invoice];
     }
     if (intent === 'payment_status') {
@@ -426,13 +441,13 @@ export function createApp(deps: Deps) {
       const want = ext?.client_name?.trim().toLowerCase();
       const unpaid = db.listInvoices(userId).filter((r) => !r.paid_at && r.status !== 'CANCELLED');
       const hit = onlyOne(unpaid.filter((r) => sameClient(userId, r, want)));
-      if (!hit) return [];
-      const name = biz.namer(userId)(hit) ?? 'client';
-      // A client named only in copied text takes one confirm tap: that text could name anyone.
-      const client = dec(userId, hit.client_name_enc) ?? '';
-      const namedIn = (t: string) => mentions(t, client) || mentions(t, client.split(/\s+/)[0]);
-      const fromCopied = !namedIn(text) && namedIn(context);
-      return [chip('remind', `Remind ${name} · ${formatMoney(hit.amount_cents, hit.currency)}`, { invoice_id: hit.id }, fromCopied)];
+      // The client must be named in the text, never only guessed by the model ("remind her").
+      const client = hit ? dec(userId, hit.client_name_enc) ?? '' : '';
+      if (!hit || !(namedIn(text, client) || namedIn(context, client))) return [];
+      const name = biz.namer(userId)(hit) ?? client;
+      // Every reminder takes one confirm tap; the server checks the client it names (confirm_client).
+      return [chip('remind', `Remind ${name} · ${formatMoney(hit.amount_cents, hit.currency)}`,
+        { invoice_id: hit.id, client_name: name, amount: centsToValue(hit.amount_cents), currency: hit.currency }, true)];
     }
     if (intent === 'refund') {
       const want = ext?.client_name?.trim().toLowerCase();
@@ -440,7 +455,8 @@ export function createApp(deps: Deps) {
       const left = (r: InvoiceRow | OrderRow) => r.amount_cents - db.refundState(userId, r.id).doneCents;
       const paid = [...db.listInvoices(userId), ...db.listOrders(userId)].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED' && left(r) > 0);
       const hit = onlyOne(paid.filter((r) => sameClient(userId, r, want) && (cents === null || cents <= left(r))));
-      if (!hit) return [];
+      const client = hit ? dec(userId, hit.client_name_enc) ?? '' : '';
+      if (!hit || !(namedIn(text, client) || namedIn(context, client))) return [];
       const refundCents = cents ?? left(hit);
       const who = biz.namer(userId)(hit) ?? hit.item;
       return [chip('refund', `Refund ${formatMoney(refundCents, hit.currency)} · ${who}`, { id: hit.id, amount: centsToValue(refundCents) })];
@@ -457,7 +473,7 @@ export function createApp(deps: Deps) {
     const b = await body(c, InvoiceBody);
     const profile = db.getProfile(userId);
     const currency = b.currency ?? profile?.currency ?? 'USD';
-    if (b.client_email && (b.confirm_recipient !== b.client_email || b.confirm_amount !== b.amount)) {
+    if (b.client_email && (b.confirm_recipient !== b.client_email || b.confirm_amount !== b.amount || b.confirm_currency !== b.currency)) {
       c.set('idemSkip', true);
       return c.json({ error: 'confirm the amount and recipient', needs_confirm: true, recipient: b.client_email, amount: centsToValue(b.amount), currency }, 409);
     }
@@ -494,10 +510,17 @@ export function createApp(deps: Deps) {
 
   app.post('/v1/actions/remind', async (c) => {
     const userId = c.get('userId');
-    const { invoice_id } = await body(c, RemindBody);
+    const { invoice_id, confirm_client } = await body(c, RemindBody);
     const inv = db.getInvoice(userId, invoice_id);
     if (!inv) throw new HttpError(404, 'invoice not found');
     if (inv.paid_at) throw new HttpError(409, 'invoice is already paid');
+    // The confirm tap showed the client's display name; it must match that name or the invoice's own.
+    const shown = biz.namer(userId)(inv);
+    const names = [shown, dec(userId, inv.client_name_enc)].filter((n): n is string => !!n).map((n) => n.trim().toLowerCase());
+    if (!confirm_client || !names.includes(confirm_client.toLowerCase())) {
+      c.set('idemSkip', true);
+      return c.json({ error: 'confirm the client', needs_confirm: true, recipient: shown ?? 'the client', amount: centsToValue(inv.amount_cents), currency: inv.currency }, 409);
+    }
     await paypal.forUser(userId).remind(inv.id, idemKey(c));
     db.addReminder(userId, inv.id);
     log('reminder_sent', { user_id: userId, invoice_id: inv.id });

@@ -30,7 +30,7 @@ test('fake server: suggest, invoice, remind, refund and /_paid work with the fix
   const invoice = s.json.chips.find((c: any) => c.kind === 'invoice');
   assert.ok(invoice, JSON.stringify(s.json));
   assert.equal(invoice.needs_confirm, true);
-  const inv = await call('/v1/actions/invoice', { ...invoice.payload, confirm_recipient: invoice.payload.client_email, confirm_amount: invoice.payload.amount }, true);
+  const inv = await call('/v1/actions/invoice', { ...invoice.payload, confirm_recipient: invoice.payload.client_email, confirm_amount: invoice.payload.amount, confirm_currency: invoice.payload.currency }, true);
   assert.equal(inv.status, 200);
   assert.match(inv.json.pay_link, /^https:\/\/paypal\.test\//);
 
@@ -38,7 +38,8 @@ test('fake server: suggest, invoice, remind, refund and /_paid work with the fix
   const r = await call('/v1/suggest', { text: 'remind Jordan Ray about the color' });
   const remind = r.json.chips.find((c: any) => c.kind === 'remind');
   assert.ok(remind, JSON.stringify(r.json));
-  assert.equal((await call('/v1/actions/remind', remind.payload, true)).json.ok, true);
+  assert.equal(remind.needs_confirm, true);
+  assert.equal((await call('/v1/actions/remind', { invoice_id: remind.payload.invoice_id, confirm_client: remind.payload.client_name }, true)).json.ok, true);
 
   await call('/_next', { cls: { intent: 'refund' } });
   const f = await call('/v1/suggest', { text: 'refund Maya Lopez for the haircut' });
