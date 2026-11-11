@@ -12,7 +12,7 @@ final class AskModelTests: XCTestCase {
     override func setUp() async throws {
         api = FakeAPI()
         store = FakeStore()
-        model = AskModel(api: { [api] in api! }, store: store, now: { [unowned self] in self.now })
+        model = AskModel(api: { [api] in api! }, store: store, now: { [unowned self] in self.now }, sleep: { _ in })
     }
 
     private var invoice: Chip {
@@ -34,18 +34,28 @@ final class AskModelTests: XCTestCase {
         await model.task?.value
     }
 
-    func testAReTapOnTheSameChipSendsTheSameKey() async {
+    func testATimeoutIsOnlyLookedUpThenARetryTapSendsTheSameKey() async {
         let invoice = invoice
         await ask("invoice Sam $45 for a haircut sam@example.com", "invoice", .chips([invoice]))
         XCTAssertEqual(model.state, .chips([invoice]))
         api.failures = [URLError(.timedOut)]
         await tap(invoice, confirmed: "sam@example.com")
-        XCTAssertEqual(model.state, .error("Took too long. Try again."))
+        XCTAssertEqual(model.state, .retry(invoice, "sam@example.com"))
+        XCTAssertEqual(api.calls, ["ask", "invoice"] + Array(repeating: "lookup:invoice", count: ChipActions.checkTries))
         now += PendingAction.ttl + 1
         await tap(invoice, confirmed: "sam@example.com")
-        XCTAssertEqual(api.calls, ["ask", "invoice", "invoice"])
-        XCTAssertEqual(api.keys.count, 2)
-        XCTAssertEqual(api.keys[0], api.keys[1], "the second tap replays the first call")
+        XCTAssertEqual(api.calls.filter { $0 == "invoice" }.count, 2)
+        XCTAssertEqual(Set(api.keys).count, 1, "every call and lookup of this chip uses its one key")
+        guard case .result(let r) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(r.link, "https://fake.pay/INV-1")
+    }
+
+    func testALostReplyIsFoundByTheLookupAndNeverSentTwice() async {
+        let invoice = invoice
+        await ask("invoice Sam $45 for a haircut sam@example.com", "invoice", .chips([invoice]))
+        api.lostReplies = 1
+        await tap(invoice, confirmed: "sam@example.com")
+        XCTAssertEqual(api.calls, ["ask", "invoice", "lookup:invoice"])
         guard case .result(let r) = model.state else { return XCTFail("\(model.state)") }
         XCTAssertEqual(r.link, "https://fake.pay/INV-1")
     }

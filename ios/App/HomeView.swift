@@ -393,6 +393,8 @@ extension APIClient: AskAPI {}
 final class AskModel: ObservableObject {
     enum State: Equatable {
         case idle, loading, chips([Chip]), clients([Client]), confirm(Chip, String), ask(Chip, String), working, result(ActionResult), line(String), error(String)
+        /// A money call that may not have run and no lookup found. A tap sends it again with the same key.
+        case retry(Chip, String?)
     }
     @Published var text = ""
     @Published var state: State = .idle
@@ -403,12 +405,15 @@ final class AskModel: ObservableObject {
     private let api: () -> AskAPI
     private let store: KeyboardStore
     private let now: () -> Date
+    private let sleep: @Sendable (Duration) async throws -> Void
     private(set) var task: Task<Void, Never>?
 
-    init(api: @escaping () -> AskAPI = { APIClient.shared() }, store: KeyboardStore = SharedKeyboardStore(), now: @escaping () -> Date = Date.init) {
+    init(api: @escaping () -> AskAPI = { APIClient.shared() }, store: KeyboardStore = SharedKeyboardStore(), now: @escaping () -> Date = Date.init,
+         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.api = api
         self.store = store
         self.now = now
+        self.sleep = sleep
     }
 
     /// Starts the invoice flow with the client filled in. Nothing is sent until the owner submits.
@@ -464,9 +469,22 @@ final class AskModel: ObservableObject {
         state = .working
         // The key belongs to this chip: a second tap on it replays the first call on the server.
         let key = chip.key
+        let api = api()
+        let sendsMoney = ChipActions.sendsMoney.contains(chip.kind)
         task = Task {
             do {
-                switch try await ChipActions.run(chip, confirmed: confirmed, source: text, api: api(), key: key) {
+                let outcome: ChipOutcome
+                do {
+                    outcome = try await ChipActions.run(chip, confirmed: confirmed, source: text, api: api, key: key, sleep: sleep)
+                } catch where sendsMoney && ChipActions.mayHaveRun(error) {
+                    // It may have run on the server. Keep the chip and its key, and only look it up.
+                    guard let found = try await ChipActions.check(chip, confirmed: confirmed, api: api, key: key, sleep: sleep) else {
+                        state = .retry(chip, confirmed)
+                        return
+                    }
+                    outcome = found
+                }
+                switch outcome {
                 case .sent(let r): state = .result(r)
                 case .insert(let line), .line(let line): state = .line(line)
                 case .ask(let question, let next): state = .ask(next, question)
@@ -552,6 +570,13 @@ struct AskBar: View {
         case .ask(let chip, let question):
             HStack(spacing: 8) {
                 AskChip(title: question, detail: nil) { model.run(chip) }
+                AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+            }
+            .padding(.horizontal, 10).padding(.bottom, 6)
+        case .retry(let chip, let confirmed):
+            HStack(spacing: 8) {
+                AskChip(title: "It didn't go through. Tap to try again.", detail: nil) { model.run(chip, confirmed: confirmed) }
+                    .accessibilityIdentifier("ask.retry")
                 AskChip(title: "Cancel", detail: nil) { model.state = .idle }
             }
             .padding(.horizontal, 10).padding(.bottom, 6)
