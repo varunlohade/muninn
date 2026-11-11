@@ -12,6 +12,7 @@ import { PayPalError, type PayPalProvider } from './paypal.ts';
 import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './money.ts';
 import { log } from './log.ts';
 import { clean } from './text.ts';
+import { mentions, quick, type Quick } from './quick.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { RANGES, createBusiness } from './business.ts';
@@ -241,26 +242,40 @@ export function createApp(deps: Deps) {
   const idemKey = (c: Context<Env>) => requestIdFor(c.get('userId'), c.req.header('idempotency-key')!);
 
   // ---- suggest
+  // Regex first: it ends ordinary chat with no paid call and fills amount, currency and email.
+  // jev picks the intent. The LLM extract runs only for fields the regex and the owner's own data cannot fill.
   app.post('/v1/suggest', async (c) => {
     const userId = c.get('userId');
     const { text, context } = await body(c, SuggestBody);
     const prompt = context ? `Client said: ${context}\nOwner is typing: ${text}` : text;
     const t0 = performance.now();
     const timings: Record<string, number> = {};
+    let path = 'regex_none';
     const done = (chips: Chip[], intent: string, confidence: number) => {
       timings.total_ms = Math.round(performance.now() - t0);
-      log('suggest', { user_id: userId, intent, confidence, chips: chips.length, ...timings });
+      log('suggest', { user_id: userId, path, paid_calls: path === 'regex_none' ? 0 : path === 'jev_only' ? 1 : 2, intent, confidence, chips: chips.length, ...timings });
       return c.json({ chips, intent, confidence, timings });
     };
 
+    const q = quick(text, context ?? '');
+    if (q.none) return done([], 'none', 1);
+
     const items = db.listItems(userId);
     const profile = profileOf(userId);
-    // Speculative: extraction runs alongside jev, so the total is about max(jev, extract), not the sum.
-    const extracting = ai.extract(prompt, catalogText(items)).then(
-      (ext) => { timings.extract_ms = Math.round(performance.now() - t0); return ext; },
-      (e) => { timings.extract_ms = Math.round(performance.now() - t0); log('extract_failed', { err: (e as Error).message }); return null; },
-    );
+    const seen = `${text} ${context ?? ''}`;
+    const known = regexFields(userId, q, seen, items);
+    const extract = () => {
+      path = 'jev+extract';
+      return ai.extract(prompt, catalogText(items)).then(
+        (ext) => { timings.extract_ms = Math.round(performance.now() - t0); return ext; },
+        (e) => { timings.extract_ms = Math.round(performance.now() - t0); log('extract_failed', { err: (e as Error).message }); return null; },
+      );
+    };
+    // A stated amount almost always means a money action, so extraction starts alongside jev
+    // (total about max(jev, extract)) unless the regex already fills a pay link (amount and item) or a refund.
+    let extracting = q.amount !== null && !known.pay_link && !known.refund ? extract() : null;
 
+    path = extracting ? 'jev+extract' : 'jev_only';
     let cls;
     try {
       cls = await ai.classify(prompt);
@@ -273,14 +288,55 @@ export function createApp(deps: Deps) {
     if (cls.intent === 'none' || cls.confidence < config.jev.minConfidence) return done([], cls.intent, cls.confidence);
 
     let ext: Extraction | null = null;
-    if (['create_invoice', 'pay_link', 'send_reminder', 'refund'].includes(cls.intent)) {
-      ext = await extracting;
-      if (!ext) return done([], cls.intent, cls.confidence);
+    const fill = known[cls.intent as keyof typeof known];
+    if (fill !== undefined) {
+      if (fill && !extracting) {
+        ext = fill;
+      } else {
+        const model = await (extracting ??= extract());
+        if (!model) return done([], cls.intent, cls.confidence);
+        // What the regex read beats a model guess. Email comes only from the owner's own text (see buildChips).
+        ext = {
+          ...model,
+          client_name: model.client_name ?? fill?.client_name ?? null,
+          client_email: q.email ?? model.client_email,
+          amount: q.amount ?? model.amount,
+          currency: q.amount !== null && q.currency ? q.currency : model.currency,
+        };
+      }
     }
 
     const chips = buildChips(userId, cls.intent, ext, text, context ?? '', items, profile.currency);
     return done(chips, cls.intent, cls.confidence);
   });
+
+  const catalogMatch = (items: CatalogItem[], seen: string, extItem?: string | null) =>
+    items.find((i) => seen.includes(i.name.toLowerCase()) || (extItem && extItem.toLowerCase().includes(i.name.toLowerCase())));
+
+  /**
+   * For each intent that needs fields: the fields when the regex and the owner's own records give all of them
+   * (then no extract call), else null. An invoice needs amount, a catalog item and a typed email; a pay link
+   * needs amount and item; a reminder needs one known unpaid client named; a refund needs one paid client
+   * named and, if the text has digits, the amount.
+   */
+  function regexFields(userId: string, q: Quick, seen: string, items: CatalogItem[]) {
+    const base: Extraction = { client_name: null, client_email: q.email, amount: q.amount, currency: q.currency, item: null };
+    const hasItem = !!catalogMatch(items, seen.toLowerCase());
+    const named = (rows: (InvoiceRow | OrderRow)[]) => {
+      const names = new Set(rows.map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n && mentions(seen, n)));
+      return names.size === 1 ? [...names][0] : null;
+    };
+    const unpaid = db.listInvoices(userId).filter((r) => !r.paid_at && r.status !== 'CANCELLED');
+    const paid = [...db.listInvoices(userId), ...db.listOrders(userId)].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED');
+    const remindName = named(unpaid);
+    const refundName = named(paid);
+    return {
+      create_invoice: q.amount !== null && hasItem && q.email ? base : null,
+      pay_link: q.amount !== null && hasItem ? base : null,
+      send_reminder: remindName ? { ...base, client_name: remindName } : null,
+      refund: refundName && (q.amount !== null || !/\d/.test(seen)) ? { ...base, client_name: refundName } : null,
+    };
+  }
 
   const chip = (kind: string, label: string, payload: Record<string, unknown>, needsConfirm = false): Chip =>
     ({ kind, label: clean(label), payload, needs_confirm: needsConfirm });
@@ -293,7 +349,7 @@ export function createApp(deps: Deps) {
     // Only the owner's own typing pre-confirms an email. Copied client text may only help match the catalog.
     const lower = text.toLowerCase();
     const seen = `${lower} ${context.toLowerCase()}`;
-    const match = items.find((i) => seen.includes(i.name.toLowerCase()) || (ext?.item && ext.item.toLowerCase().includes(i.name.toLowerCase())));
+    const match = catalogMatch(items, seen, ext?.item);
     const currency = (config.money.currencies as readonly string[]).includes(ext?.currency ?? '') ? ext!.currency! : match?.currency ?? defaultCurrency;
 
     if (intent === 'create_invoice' || intent === 'pay_link') {

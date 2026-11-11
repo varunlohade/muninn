@@ -41,6 +41,13 @@ const CRITERIA: Record<Intent, string> = {
   none: 'Ordinary chat with no payment, pricing or invoice action.',
 };
 
+const TONE_LABELS = ['upset', 'blunt', 'ok'] as const;
+const TONE_CRITERIA = [
+  'The client message is angry or upset.',
+  'The owner draft is rude, blunt or angry.',
+  'Neither: the client is not upset and the owner draft is polite, or there is no draft.',
+];
+
 async function postJson(url: string, key: string, body: unknown, timeoutMs: number, signal?: AbortSignal): Promise<any> {
   const timeout = AbortSignal.timeout(timeoutMs);
   const res = await fetch(url, {
@@ -74,6 +81,7 @@ export const ToneSchema = z.object({
   tone: z.enum(['upset', 'blunt', 'ok']),
   calm: z.preprocess(nullish, cleaned(config.maxWriteChars).nullable()).catch(null),
 }).transform((v): ToneCheck => (v.tone === 'ok' || !v.calm ? { tone: 'ok', calm: null } : v));
+const CalmSchema = z.object({ calm: cleaned(config.maxWriteChars) });
 
 export function parseModelJson(content: string): unknown {
   const s = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
@@ -161,6 +169,17 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
     return hedge(attempt(config.llm.primary), attempt(config.llm.fallback), config.llm.writeHedgeMs);
   }
 
+  // One jev choice question: which criterion (0-based index) fits the context best.
+  async function choose(context: string, question: string, criteria: string[]): Promise<{ index: number; confidence: number }> {
+    const body = {
+      model: config.jev.model,
+      state: { context },
+      questions: { q: { type: 'choice', criteria: Object.fromEntries(criteria.map((c, i) => [String(i + 1), c])), instructions: { question } } },
+    };
+    const ans = (await postJson(config.jev.url, env.typesafeKey, body, config.jev.timeoutMs))?.answers?.q;
+    return { index: Number(ans?.choice) - 1, confidence: Number(ans?.confidence ?? 0) };
+  }
+
   return {
     async fix(text) {
       return (await write('fix', WRITER +
@@ -174,34 +193,24 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
         'Reply with one JSON object only: {"text": string}.', text, rewriteSchema(text))).text;
     },
 
+    // jev picks the label; the LLM writes only when there is something to calm.
     async toneCheck(draft, client) {
       const input = [client && `CLIENT MESSAGE: ${client}`, draft && `OWNER DRAFT: ${draft}`].filter(Boolean).join('\n');
-      return write('tone', WRITER +
-        'You get a client message, an owner draft, or both. Judge the tone. ' +
-        '"upset": the client message is angry or upset. "blunt": the owner draft is rude, blunt or angry. "ok": neither. ' +
-        'If the client is upset, calm is a calm, professional reply from the owner: say sorry for the trouble, offer to make it right, promise nothing specific. ' +
-        'Base it on the owner draft if there is one. If the owner draft is blunt, calm is the draft rewritten calm and professional. If ok, calm is null. ' +
-        'Reply with one JSON object only: {"tone": "upset"|"blunt"|"ok", "calm": string|null}.', input, ToneSchema);
+      const { index, confidence } = await choose(input, 'Judge the tone of this chat between a small business owner and a client.', TONE_CRITERIA);
+      const tone = TONE_LABELS[index] ?? 'ok';
+      if (tone === 'ok' || confidence < config.jev.minConfidence) return { tone: 'ok', calm: null };
+      const { calm } = await write('tone', WRITER + (tone === 'upset'
+        ? 'The client is upset. Write a calm, professional reply from the owner: say sorry for the trouble, offer to make it right, promise nothing specific. Base it on the owner draft if there is one. '
+        : 'The owner draft is blunt. Rewrite the owner draft calm and professional. ') +
+        'Reply with one JSON object only: {"calm": string}.', input, CalmSchema);
+      return ToneSchema.parse({ tone, calm });
     },
 
     async classify(text) {
       const t = performance.now();
-      const body = {
-        model: config.jev.model,
-        state: { context: text.slice(0, config.maxTextChars) },
-        questions: {
-          q: {
-            type: 'choice',
-            criteria: Object.fromEntries(INTENTS.map((k, i) => [String(i + 1), CRITERIA[k]])),
-            instructions: { question: 'A small business owner is typing this chat message. Which payment action fits it best?' },
-          },
-        },
-      };
-      const res = await postJson(config.jev.url, env.typesafeKey, body, config.jev.timeoutMs);
-      const ans = res?.answers?.q;
-      const idx = Number(ans?.choice) - 1;
-      const intent = INTENTS[idx] ?? 'none';
-      return { intent, confidence: Number(ans?.confidence ?? 0), ms: Math.round(performance.now() - t) };
+      const { index, confidence } = await choose(text.slice(0, config.maxTextChars),
+        'A small business owner is typing this chat message. Which payment action fits it best?', INTENTS.map((k) => CRITERIA[k]));
+      return { intent: INTENTS[index] ?? 'none', confidence, ms: Math.round(performance.now() - t) };
     },
 
     async extract(text, catalog) {

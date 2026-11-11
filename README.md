@@ -13,8 +13,10 @@ iOS keyboard + iOS app
         ▼
 Hono server (Node 24, SQLite, per-user encryption)
         ├── PayPal APIs: Invoicing, Orders, Payments, Transaction Search, Disputes, Webhooks
-        ├── TypeSafe jev: sorts the typed message into an intent
-        └── OpenRouter: Llama 3.3 70B, with Gemini 2.5 Flash as the backup, fills in the details and writes the daily brief
+        ├── Regex first: drops plain chat with no model call, reads amounts, currencies and emails
+        ├── TypeSafe jev: sorts the typed message into an intent, and labels tone (upset, blunt, ok)
+        └── OpenRouter: Llama 3.3 70B, with Gemini 2.5 Flash as the backup, fills in only the details regex
+            cannot read, and writes text (fixes, rewrites, calm replies, the daily brief)
 ```
 
 - The keyboard sends the typed text to `/v1/suggest`. The server returns chips. It never moves money on its own.
