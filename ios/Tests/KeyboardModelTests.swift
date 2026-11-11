@@ -142,6 +142,3 @@ final class KeyboardModelTests: XCTestCase {
     }
 }
 
-private extension Duration {
-    var seconds: TimeInterval { Double(components.seconds) + Double(components.attoseconds) * 1e-18 }
-}

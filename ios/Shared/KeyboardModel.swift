@@ -47,6 +47,8 @@ enum BarState: Equatable {
     case chips([Chip], fromCopied: Bool)
     case working(String)
     case confirm(Chip, recipient: String)
+    /// A second tap the server asked for, such as "Refund $45 to Sam?". `chip` runs it.
+    case ask(Chip, question: String)
     case done(String)
     case error(String)
 }
@@ -130,6 +132,9 @@ final class KeyboardModel: ObservableObject {
     private let deps: KeyboardDeps
     private var suggestTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
+    private var actionTask: Task<Void, Never>?
+    /// The message the shown chips came from. A reply chip answers it.
+    private var chipSource: String?
     private var lastSent = ""
     private var suggest = SuggestPolicy()
     private var actions: [ActionShortcut] = ActionShortcut.defaults
@@ -323,6 +328,8 @@ final class KeyboardModel: ObservableObject {
         notesOpen = false
         resetWriting()
         pollTask?.cancel()
+        actionTask?.cancel()
+        if case .working = bar { bar = .idle }
         if watch?.paid == true { watch = nil }
     }
 
@@ -368,6 +375,7 @@ final class KeyboardModel: ObservableObject {
         guard paired, suggestsWhileTyping else { return }
         if case .working = bar { return }
         if case .confirm = bar { return }
+        if case .ask = bar { return }
         let text = typed
         suggest.observe(text)
         switch SuggestPolicy.ask(text, lastAsked: lastSent, prefix: billing?.invoicePrefix) {
@@ -463,12 +471,13 @@ final class KeyboardModel: ObservableObject {
                 } else {
                     self.bar = chips.isEmpty ? .idle : .chips(chips, fromCopied: context != nil)
                 }
+                self.chipSource = context ?? text
             } catch is CancellationError {
             } catch let e as URLError where e.code == .cancelled {
             } catch {
                 guard !Task.isCancelled else { return }
                 self.lastSent = ""
-                self.bar = .error(error.localizedDescription)
+                self.bar = .error(plainLine(error))
             }
         }
     }
@@ -705,7 +714,7 @@ final class KeyboardModel: ObservableObject {
     }
 
     /// "Ana $90 · 2d late, Sam $45 +1 more"
-    static func lateLine(_ payments: [Payment]) -> String {
+    nonisolated static func lateLine(_ payments: [Payment]) -> String {
         let unpaid = payments.filter { $0.kind == "invoice" && $0.state == "unpaid" }.sorted { $0.days_overdue > $1.days_overdue }
         guard !unpaid.isEmpty else { return "Nobody owes you \u{2713}" }
         let shown = unpaid.prefix(2).map { p in
@@ -736,6 +745,10 @@ final class KeyboardModel: ObservableObject {
     // MARK: actions
 
     func tapChip(_ chip: Chip) {
+        if chip.kind == Self.insertKind, case .string(let text)? = chip.payload["text"] {
+            place(text, gap: " ", readAt: host?.contextBeforeInput ?? "")
+            return
+        }
         if chip.kind == "invoice", chip.needs_confirm, case .string(let email)? = chip.payload["client_email"] {
             bar = .confirm(chip, recipient: email)
             return
@@ -748,31 +761,75 @@ final class KeyboardModel: ObservableObject {
     /// Cancel turns the chip away: it stays off the bar until the text changes.
     func cancelConfirm() {
         if case .confirm(let chip, _) = bar { suggest.dismiss(chip, on: typed) }
+        if case .ask(let chip, _) = bar { suggest.dismiss(chip, on: typed) }
         bar = .idle
         lastSent = ""
     }
 
     private func run(_ chip: Chip, confirmed: String?) {
         suggestTask?.cancel()
-        bar = .working(chip.kind == "invoice" ? "Creating invoice…" : "Creating link…")
-        Task {
+        actionTask?.cancel()
+        bar = .working(Self.workingLine(chip))
+        // What the field held at the tap. The result goes in only if the field still holds it.
+        let before = host?.contextBeforeInput ?? ""
+        let source = chipSource
+        let api = deps.api()
+        let sleep = deps.sleep
+        actionTask = Task { [weak self] in
             do {
-                let r = try await ChipActions.run(chip, confirmed: confirmed, api: deps.api())
-                let before = host?.contextBeforeInput ?? ""
-                let needsGap = !(before.last?.isWhitespace ?? true)
-                host?.insert((needsGap ? (r.kind == "invoice" ? "\n" : " ") : "") + r.message)
-                lastSent = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                bar = .idle
-                watch = Watch(id: r.id, who: r.who, money: r.money)
-                if let billing { billedHere.insert(billing.id) }
-                billing = nil
-                startPolling()
+                let outcome = try await ChipActions.run(chip, confirmed: confirmed, source: source, api: api, sleep: sleep)
+                guard let self, !Task.isCancelled else { return }
+                switch outcome {
+                case .sent(let r):
+                    self.place(r.message, gap: r.kind == "invoice" ? "\n" : " ", readAt: before)
+                    self.watch = Watch(id: r.id, who: r.who, money: r.money)
+                    if let billing = self.billing { self.billedHere.insert(billing.id) }
+                    self.billing = nil
+                    self.startPolling()
+                case .insert(let text):
+                    self.place(text, gap: " ", readAt: before)
+                case .line(let text):
+                    self.bar = .done(text)
+                case .ask(let question, let next):
+                    self.bar = .ask(next, question: question)
+                }
+            } catch is CancellationError {
+            } catch let e as URLError where e.code == .cancelled {
             } catch APIError.needsConfirm(let recipient) {
-                bar = .confirm(chip, recipient: recipient)
+                guard let self, !Task.isCancelled else { return }
+                self.bar = .confirm(chip, recipient: recipient)
             } catch {
-                bar = .error(error.localizedDescription)
+                guard let self, !Task.isCancelled else { return }
+                self.bar = .error(plainLine(error))
             }
         }
+    }
+
+    static let insertKind = "insert"
+
+    private static func workingLine(_ chip: Chip) -> String {
+        switch chip.kind {
+        case "invoice": "Creating invoice\u{2026}"
+        case "paylink": "Creating link\u{2026}"
+        case "remind": "Sending reminder\u{2026}"
+        case "refund": chip.payload["confirm_token"] == nil ? "Checking refund\u{2026}" : "Refunding\u{2026}"
+        case "payments": "Checking who owes you\u{2026}"
+        case "reply": "Writing reply\u{2026}"
+        default: "One moment\u{2026}"
+        }
+    }
+
+    /// Types `text` if the field still ends as it did at the tap. If the owner moved on, the text waits as a chip.
+    private func place(_ text: String, gap: String, readAt before: String) {
+        guard let host, (host.contextBeforeInput ?? "") == before else {
+            bar = .chips([Chip(kind: Self.insertKind, label: "Tap to add", payload: ["text": .string(text)], needs_confirm: false)],
+                         fromCopied: false)
+            return
+        }
+        let needsGap = !(before.last?.isWhitespace ?? true)
+        host.insert((needsGap ? gap : "") + text)
+        lastSent = typed
+        bar = .idle
     }
 
     /// Light polling, only while the keyboard is visible: at most one /v1/payments call every 10 s.

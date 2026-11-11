@@ -7,6 +7,8 @@ import Foundation
 struct SuggestPolicy {
     /// Fewer words than this is still typing, not a message. Nothing leaves the phone.
     static let minWords = 3
+    /// With an amount or a money word, two words are already a request: "$45 haircut".
+    static let minMoneyWords = 2
     static let debounce = AppConfig.suggestDebounce
 
     enum Ask: Equatable {
@@ -28,8 +30,16 @@ struct SuggestPolicy {
         guard typed != lastAsked else { return .keep }
         guard !typed.isEmpty, SecretScan.scan(typed) == .clean else { return .skip }
         let text = prefix.map { $0 + " " + typed } ?? typed
-        guard text.split(whereSeparator: \.isWhitespace).count >= minWords else { return .skip }
+        let words = text.split(whereSeparator: \.isWhitespace).count
+        guard words >= (hasMoneySignal(text) ? minMoneyWords : minWords) else { return .skip }
         return .ask(text, after: debounce)
+    }
+
+    /// "$45", "45 usd", "€45.50", or a word such as invoice, pay, owe, refund, remind, paid.
+    static func hasMoneySignal(_ text: String) -> Bool {
+        let amount = #"[$€£]\s?\d|\d(?:[.,]\d{1,2})?\s?(?:usd|eur|gbp|cad|aud|dollars?|bucks|euros?|pounds?)\b"#
+        let word = #"\b(?:invoice|pay|paid|owe|owes|owed|refund|remind)\b"#
+        return text.range(of: amount + "|" + word, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     /// The reply's chips to show, or nil when the text moved on since the ask (a stale reply).

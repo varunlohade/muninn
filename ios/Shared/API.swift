@@ -43,6 +43,10 @@ struct SuggestResponse: Decodable {
 
 struct InvoiceResponse: Decodable { let id: String; let status: String; let pay_link: String?; let amount: String; let currency: String }
 struct PayLinkResponse: Decodable { let id: String; let status: String; let approve_link: String?; let amount: String?; let currency: String? }
+struct RemindResponse: Decodable { let invoice_id: String }
+/// A refund runs in two calls. The first gives `confirm_token` and `summary`; the second, with the token, gives `refund_id`.
+struct RefundResponse: Decodable { let confirm_token: String?; let summary: String?; let refund_id: String?; let amount: String?; let currency: String? }
+struct ReplyResponse: Decodable { let reply: String }
 struct WriteResponse: Decodable { let text: String; let changed: Bool? }
 /// tone is "upset" (the client), "blunt" (the owner's draft) or "ok". calm is set unless tone is "ok".
 struct ToneResponse: Decodable { let tone: String; let calm: String? }
@@ -108,14 +112,38 @@ enum APIError: Error, LocalizedError {
     case notPaired
     case needsConfirm(recipient: String)
     case http(Int, String)
+    /// A plain line for the owner, made on the phone.
+    case message(String)
 
-    var errorDescription: String? {
-        switch self {
-        case .notPaired: "Not paired"
-        case .needsConfirm(let r): "Confirm \(r)"
-        case .http(let code, let body): "HTTP \(code): \(body.prefix(120))"
+    var errorDescription: String? { plainLine(self) }
+}
+
+/// One short line for the bar. Never a status code or raw JSON.
+func plainLine(_ error: Error) -> String {
+    let again = "Something went wrong. Try again."
+    switch error {
+    case APIError.notPaired: return "Open \(AppConfig.displayName) to pair"
+    case APIError.needsConfirm(let r): return "Confirm \(r) first"
+    case APIError.message(let s): return s
+    case APIError.http(let code, let body):
+        switch code {
+        case 401: return "Open \(AppConfig.displayName) to pair"
+        case 429: return "Too many tries. Wait a minute."
+        case 502: return "PayPal did not answer. Try again."
+        case 400..<500: return serverWords(body) ?? again
+        default: return again
         }
+    case let e as URLError: return e.code == .timedOut ? "Took too long. Try again." : "No connection. Try again."
+    default: return again
     }
+}
+
+/// The server's own short `error` text, as a sentence. Nil for internal wording such as the idempotency key.
+private func serverWords(_ body: String) -> String? {
+    struct Body: Decodable { let error: String }
+    guard let e = try? JSONDecoder().decode(Body.self, from: Data(body.utf8)).error, !e.isEmpty, e.count <= 80,
+          !e.localizedCaseInsensitiveContains("idempotency") else { return nil }
+    return e.prefix(1).uppercased() + e.dropFirst()
 }
 
 struct APIClient {
@@ -140,9 +168,10 @@ struct APIClient {
         return try JSONDecoder().decode(AppleAuthResponse.self, from: data).device_token
     }
 
-    private func request(_ method: String, _ path: String, body: Encodable? = nil, tap: Bool = false) throws -> URLRequest {
+    /// `key` is the Idempotency-Key of a money call. A retry passes the same key, so the server runs the action once.
+    private func request(_ method: String, _ path: String, body: Encodable? = nil, tap: Bool = false, key: String? = nil) throws -> URLRequest {
         guard let token else { throw APIError.notPaired }
-        guard let url = URL(string: baseURL + path) else { throw APIError.http(0, "bad server URL") }
+        guard let url = URL(string: baseURL + path) else { throw APIError.message("Server address is wrong") }
         var r = URLRequest(url: url, timeoutInterval: 20)
         r.httpMethod = method
         r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -152,7 +181,7 @@ struct APIClient {
         }
         if tap {
             r.setValue("tap", forHTTPHeaderField: "X-User-Action")
-            r.setValue(UUID().uuidString, forHTTPHeaderField: "Idempotency-Key")
+            r.setValue(key ?? UUID().uuidString, forHTTPHeaderField: "Idempotency-Key")
         }
         return r
     }
@@ -173,15 +202,28 @@ struct APIClient {
         return try await send(request("POST", "/v1/suggest", body: body), as: SuggestResponse.self)
     }
 
-    func invoice(_ payload: [String: JSONValue]) async throws -> InvoiceResponse {
-        try await send(request("POST", "/v1/actions/invoice", body: payload, tap: true), as: InvoiceResponse.self)
+    func invoice(_ payload: [String: JSONValue], key: String) async throws -> InvoiceResponse {
+        try await send(request("POST", "/v1/actions/invoice", body: payload, tap: true, key: key), as: InvoiceResponse.self)
     }
 
-    func payLink(_ payload: [String: JSONValue]) async throws -> PayLinkResponse {
+    func payLink(_ payload: [String: JSONValue], key: String) async throws -> PayLinkResponse {
         // The paylink route is strict: send only the fields it accepts.
         let keys: Set = ["amount", "currency", "item", "client_name"]
         let body = payload.filter { keys.contains($0.key) && $0.value != .null }
-        return try await send(request("POST", "/v1/actions/paylink", body: body, tap: true), as: PayLinkResponse.self)
+        return try await send(request("POST", "/v1/actions/paylink", body: body, tap: true, key: key), as: PayLinkResponse.self)
+    }
+
+    func remind(invoiceID: String, key: String) async throws -> RemindResponse {
+        try await send(request("POST", "/v1/actions/remind", body: ["invoice_id": invoiceID], tap: true, key: key), as: RemindResponse.self)
+    }
+
+    /// `body` is {id, amount} to get a confirm token, or {confirm_token} to run the refund.
+    func refund(_ body: [String: JSONValue], key: String) async throws -> RefundResponse {
+        try await send(request("POST", "/v1/actions/refund", body: body, tap: true, key: key), as: RefundResponse.self)
+    }
+
+    func reply(_ text: String) async throws -> ReplyResponse {
+        try await send(request("POST", "/v1/reply", body: ["text": text]), as: ReplyResponse.self)
     }
 
     // Writing help. Each call starts from a tap, and the server refuses it without the tap header.

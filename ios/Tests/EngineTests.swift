@@ -10,7 +10,25 @@ final class SuggestPolicyTests: XCTestCase {
     }
 
     func testTwoWordsAskNothing() {
-        XCTAssertEqual(SuggestPolicy.ask("$45 haircut", lastAsked: ""), .skip)
+        XCTAssertEqual(SuggestPolicy.ask("see you", lastAsked: ""), .skip)
+        XCTAssertEqual(SuggestPolicy.ask("ok", lastAsked: ""), .skip)
+    }
+
+    func testTwoWordsWithMoneyAsk() {
+        for text in ["$45 haircut", "45 usd", "€45.50 color", "invoice Sam", "Sam paid", "refund Ana", "you owe"] {
+            XCTAssertEqual(SuggestPolicy.ask(text, lastAsked: ""), .ask(text, after: AppConfig.suggestDebounce), text)
+        }
+    }
+
+    func testOneWordWithMoneyAsksNothing() {
+        for text in ["$", "$45", "invoice"] {
+            XCTAssertEqual(SuggestPolicy.ask(text, lastAsked: ""), .skip, text)
+        }
+    }
+
+    func testMoneyNeverOverridesTheSecretScan() {
+        XCTAssertEqual(SuggestPolicy.ask("pay 482913", lastAsked: ""), .skip)
+        XCTAssertEqual(SuggestPolicy.ask("pay 4242424242424242", lastAsked: ""), .skip)
     }
 
     func testEmptyAsksNothing() {

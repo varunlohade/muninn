@@ -29,12 +29,22 @@ final class FakeAPI: KeyboardAPI {
     var writeReply = WriteResponse(text: "", changed: nil)
     var toneReply = ToneResponse(tone: "ok", calm: nil)
     var paymentsReply: [Payment] = []
+    var remindReply = RemindResponse(invoice_id: "INV-1")
+    var refundAskReply = RefundResponse(confirm_token: "rf_token_123", summary: "Refund $45 to Sam?", refund_id: nil, amount: nil, currency: nil)
+    var refundDoneReply = RefundResponse(confirm_token: nil, summary: nil, refund_id: "RF-1", amount: "45.00", currency: "USD")
+    var replyReply = ReplyResponse(reply: "A haircut is $45. Want a slot tomorrow?")
+    /// Thrown one by one, first in line, by the next calls that would answer.
+    var failures: [Error] = []
     /// When set, invoice() throws needsConfirm unless the payload carries this confirm_recipient.
     var requireConfirm: String?
 
     private(set) var calls: [String] = []
     private(set) var suggested: [(text: String, context: String?)] = []
     private(set) var invoiced: [[String: JSONValue]] = []
+    private(set) var refunded: [[String: JSONValue]] = []
+    private(set) var replied: [String] = []
+    /// The Idempotency-Key of each money call, in order.
+    private(set) var keys: [String] = []
     /// When set, suggest() runs this before it answers, so a test can change the text mid-request.
     var duringSuggest: (() -> Void)?
 
@@ -46,17 +56,33 @@ final class FakeAPI: KeyboardAPI {
         return suggestReply
     }
 
-    func invoice(_ payload: [String: JSONValue]) async throws -> InvoiceResponse {
-        calls.append("invoice"); invoiced.append(payload)
+    private func fail() throws { if !failures.isEmpty { throw failures.removeFirst() } }
+
+    func invoice(_ payload: [String: JSONValue], key: String) async throws -> InvoiceResponse {
+        calls.append("invoice"); invoiced.append(payload); keys.append(key)
+        try fail()
         if let r = requireConfirm, payload["confirm_recipient"] != .string(r) { throw APIError.needsConfirm(recipient: r) }
         return invoiceReply
     }
 
-    func payLink(_ payload: [String: JSONValue]) async throws -> PayLinkResponse { calls.append("paylink"); return payLinkReply }
+    func payLink(_ payload: [String: JSONValue], key: String) async throws -> PayLinkResponse {
+        calls.append("paylink"); keys.append(key); try fail(); return payLinkReply
+    }
+
+    func remind(invoiceID: String, key: String) async throws -> RemindResponse {
+        calls.append("remind:\(invoiceID)"); keys.append(key); try fail(); return remindReply
+    }
+
+    func refund(_ body: [String: JSONValue], key: String) async throws -> RefundResponse {
+        calls.append("refund"); refunded.append(body); keys.append(key); try fail()
+        return body["confirm_token"] == nil ? refundAskReply : refundDoneReply
+    }
+
+    func reply(_ text: String) async throws -> ReplyResponse { calls.append("reply"); replied.append(text); try fail(); return replyReply }
     func fix(_ text: String) async throws -> WriteResponse { calls.append("fix"); return writeReply }
     func refine(_ text: String, tone: String) async throws -> WriteResponse { calls.append("refine"); return writeReply }
     func toneCheck(draft: String, client: String?) async throws -> ToneResponse { calls.append("tone"); return toneReply }
-    func payments() async throws -> [Payment] { calls.append("payments"); return paymentsReply }
+    func payments() async throws -> [Payment] { calls.append("payments"); try fail(); return paymentsReply }
 }
 
 /// In-memory stand-in for the App Group files and the Keychain token. Paired by default.
@@ -127,4 +153,8 @@ extension KeyboardDeps {
                      now: { MainActor.assumeIsolated { clock.now } },
                      sleep: { d in try await clock.sleep(d) })
     }
+}
+
+extension Duration {
+    var seconds: TimeInterval { Double(components.seconds) + Double(components.attoseconds) * 1e-18 }
 }

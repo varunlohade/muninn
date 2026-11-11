@@ -64,6 +64,9 @@ enum BarItems {
         case .confirm(let chip, let recipient):
             out.append(Item(id: "confirm", title: "Send to \(recipient)", tone: .accent, action: .confirm(chip, recipient: recipient)))
             out.append(Item(id: "cancel", title: "Cancel", action: .cancelConfirm))
+        case .ask(let chip, let question):
+            out.append(Item(id: "confirm", title: question, tone: .accent, action: .chip(chip)))
+            out.append(Item(id: "cancel", title: "Cancel", action: .cancelConfirm))
         case .done(let text):
             out.append(Item(id: "done", title: text, tone: .secondary))
         case .error(let text):

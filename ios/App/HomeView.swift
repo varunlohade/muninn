@@ -385,7 +385,7 @@ struct PaymentRow: View {
 @MainActor
 final class AskModel: ObservableObject {
     enum State: Equatable {
-        case idle, loading, chips([Chip]), confirm(Chip, String), working, result(ActionResult), error(String)
+        case idle, loading, chips([Chip]), confirm(Chip, String), ask(Chip, String), working, result(ActionResult), line(String), error(String)
     }
     @Published var text = ""
     @Published var state: State = .idle
@@ -409,7 +409,7 @@ final class AskModel: ObservableObject {
             do {
                 let chips = try await APIClient.shared().suggest(t).chips
                 state = chips.isEmpty ? .error("No action for that yet. Try \"invoice Sam $45 for a haircut\".") : .chips(chips)
-            } catch { state = .error(error.localizedDescription) }
+            } catch { state = .error(plainLine(error)) }
         }
     }
 
@@ -421,11 +421,15 @@ final class AskModel: ObservableObject {
         state = .working
         Task {
             do {
-                state = .result(try await ChipActions.run(chip, confirmed: confirmed, api: APIClient.shared()))
+                switch try await ChipActions.run(chip, confirmed: confirmed, source: text, api: APIClient.shared()) {
+                case .sent(let r): state = .result(r)
+                case .insert(let line), .line(let line): state = .line(line)
+                case .ask(let question, let next): state = .ask(next, question)
+                }
                 text = ""
             } catch APIError.needsConfirm(let r) {
                 state = .confirm(chip, r)
-            } catch { state = .error(error.localizedDescription) }
+            } catch { state = .error(plainLine(error)) }
         }
     }
 
@@ -488,6 +492,15 @@ struct AskBar: View {
                 AskChip(title: "Cancel", detail: nil) { model.state = .idle }
             }
             .padding(.horizontal, 10).padding(.bottom, 6)
+        case .ask(let chip, let question):
+            HStack(spacing: 8) {
+                AskChip(title: question, detail: nil) { model.run(chip) }
+                AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+            }
+            .padding(.horizontal, 10).padding(.bottom, 6)
+        case .line(let line):
+            Text(line).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, 16).padding(.bottom, 8)
+                .textSelection(.enabled)
         case .working:
             Text("Creating…").font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, 16).padding(.bottom, 8)
         case .result(let r):

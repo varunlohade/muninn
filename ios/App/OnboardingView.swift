@@ -250,7 +250,7 @@ struct OnboardingView: View {
     private var tryLine: String {
         if sceneDone { return scene.result }
         switch typing.model.bar {
-        case .chips, .confirm: return "Now tap the chip on the keyboard."
+        case .chips, .confirm, .ask: return "Now tap the chip on the keyboard."
         case .working: return "One moment\u{2026}"
         case .error: return "That did not work. Try again."
         default:
@@ -267,7 +267,7 @@ struct OnboardingView: View {
     private var tryBusy: Bool {
         if sceneDone { return true }
         switch typing.model.bar {
-        case .chips, .confirm, .working: return true
+        case .chips, .confirm, .ask, .working: return true
         default: return false
         }
     }
