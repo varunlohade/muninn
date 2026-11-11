@@ -135,10 +135,12 @@ struct DisputesView: View {
                 }
             }
         case .confirm(let chip):
-            ScrollView(.horizontal, showsIndicators: false) {
+            // The question can quote a long reply, so it wraps above the two chips.
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                Text(BarItems.confirmTitle(chip, recipient: d.name)).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: Theme.Space.xs) {
-                    AskChip(title: BarItems.confirmTitle(chip, recipient: d.name), detail: nil) { model.send(chip, to: d) }
-                        .accessibilityIdentifier("dispute.confirm")
+                    AskChip(title: "Send", detail: nil) { model.send(chip, to: d) }.accessibilityIdentifier("dispute.confirm")
                     AskChip(title: "Cancel", detail: nil) { model.close() }
                 }
             }

@@ -1,6 +1,7 @@
 // A local stand-in Muninn server for the iOS app and UI tests: fake AI, fake PayPal, in-memory DB, no network.
 // usage: npm run fake   (PORT=0 picks a free port; the first line printed names it)
-// Debug routes: GET /_log, POST /_reset, POST /_paid/:id (invoice, order or subscription id), POST /_next {"cls": {...}, "ext": {...}, "group": {...}, "route": {...}}
+// Debug routes: GET /_log, POST /_reset, POST /_paid/:id (invoice, order or subscription id), POST /_next {"cls": {...}, "ext": {...}, "group": {...}, "route": {...}},
+// POST /_paypal-extras (an active repeat bill for Ana Diaz and an open dispute from Maya Lopez, for the PayPal action shots)
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Classification, Extraction } from '../src/ai.ts';
@@ -61,7 +62,7 @@ function build() {
     id: 'ORDER-FAKE-OPEN', user_id: userId, status: 'CREATED', amount_cents: 3500, currency: 'USD', item: 'Blowout',
     client_name_enc: enc('Ava Chen'), approve_link: 'https://paypal.test/approve/open', created_at: t - 2 * 3600_000,
   });
-  return { ...env, next, log: [] as LogEntry[] };
+  return { ...env, next, log: [] as LogEntry[], userId };
 }
 
 let state = build();
@@ -95,6 +96,25 @@ fake.post('/_paid/:id', async (c) => {
     handled &&= !!((await res.json()) as { handled?: boolean }).handled;
   }
   return c.json({ ok: handled, id }, handled ? 200 : 404);
+});
+
+fake.post('/_paypal-extras', (c) => {
+  const { db, cipher, userId, ppData } = state;
+  const t = Date.now();
+  if (!db.getSubscription(userId, 'I-FAKEANA1')) {
+    db.insertSubscription({
+      id: 'I-FAKEANA1', user_id: userId, status: 'APPROVAL_PENDING', amount_cents: 4000, currency: 'USD', interval: 'month', item: 'Monthly color',
+      client_name_enc: cipher.encrypt(userId, 'Ana Diaz'), client_email_enc: cipher.encrypt(userId, 'ana.diaz@example.com'), approve_link: null,
+      plan_id: 'P-FAKE', created_at: t - 20 * DAY,
+    });
+    db.setSubscriptionActive(userId, 'I-FAKEANA1', t - 19 * DAY);
+  }
+  ppData.set(userId, { ...ppData.get(userId), disputes: [{
+    id: 'PP-D-FAKE1', status: 'WAITING_FOR_SELLER_RESPONSE', reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', amount: { value: '45.00', currency: 'USD' },
+    due_date: new Date(t + 2 * DAY).toISOString(), created_at: new Date(t - DAY).toISOString(), stage: 'INQUIRY', buyer_name: 'Maya Lopez',
+    transaction_id: 'CAP-FAKE-1', messages: [],
+  }] });
+  return c.json({ ok: true });
 });
 
 // "Get started" in the app: the fake signs every device in as the one seeded user, so Home shows the demo data.
