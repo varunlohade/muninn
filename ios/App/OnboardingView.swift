@@ -3,7 +3,7 @@ import SwiftUI
 /// One short flow: the intro, turn on the keyboard, allow Calendar & Reminders, Get started, Home. There is no sign-in.
 /// After the intro, each step fits one screen and has one main button.
 struct OnboardingView: View {
-    enum Step: Int, CaseIterable { case intro, keyboard, calendar, start }
+    enum Step: Int, CaseIterable { case intro, keyboard, calendar, start, paypal }
 
     @EnvironmentObject var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -14,6 +14,7 @@ struct OnboardingView: View {
     @State private var step: Step = UserDefaults.standard.bool(forKey: introSeenKey) ? (keyboardAdded ? afterKeyboard : .keyboard) : .intro
     @State private var checked = false
     @State private var busy = false
+    @ObservedObject private var paypal = PayPalConnector.shared
     #if DEBUG
     @State private var showDevPairing = false
     #endif
@@ -24,6 +25,7 @@ struct OnboardingView: View {
         case .keyboard: "Turn on the keyboard"
         case .calendar: "Allow Calendar & Reminders"
         case .start: "Get paid from any chat"
+        case .paypal: "Connect PayPal"
         }
     }
     private var line: String {
@@ -32,6 +34,7 @@ struct OnboardingView: View {
         case .keyboard: "Three taps in Settings. Then come back."
         case .calendar: "The keyboard adds the events and reminders you type. They stay on this phone."
         case .start: "\(AppConfig.displayName) suggests the invoice while you type."
+        case .paypal: paypal.note ?? "Invoices and pay links go to your own PayPal. Or try the demo account first."
         }
     }
     private var stepMotion: Animation { reduceMotion ? Theme.Motion.crossfade : Theme.Motion.onboardingStep }
@@ -156,6 +159,15 @@ struct OnboardingView: View {
                     .accessibilityIdentifier("onboarding.calendar")
                 quietButton("Not now") { Task { await advance(from: .calendar) } }
                     .accessibilityIdentifier("onboarding.calendar.later")
+            case .paypal:
+                // Skippable: the demo account works, and Home offers Connect again.
+                Button(paypal.busy ? "One moment\u{2026}" : "Connect PayPal") { Task { if await paypal.connect() { await complete(.paypal) } } }
+                    .buttonStyle(PrimaryButton())
+                    .opacity(paypal.busy ? 0.5 : 1)
+                    .disabled(paypal.busy)
+                    .accessibilityIdentifier("onboarding.paypal")
+                quietButton("Use demo account") { Task { await advance(from: .paypal) } }
+                    .accessibilityIdentifier("onboarding.paypal.demo")
             case .intro:
                 EmptyView()
             }
@@ -202,7 +214,8 @@ struct OnboardingView: View {
         case .intro: Self.keyboardAdded ? Self.afterKeyboard : .keyboard
         case .keyboard: Self.afterKeyboard
         case .calendar: .start
-        case .start: nil
+        case .start: .paypal
+        case .paypal: nil
         }
     }
 
