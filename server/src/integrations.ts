@@ -3,14 +3,18 @@ import type { Db } from './db.ts';
 import { config } from './config.ts';
 
 export type Capability =
-  | 'invoices' | 'pay_links' | 'reminders' | 'refunds' | 'transactions' | 'disputes'
-  | 'payments' | 'pos_payments' | 'bookings' | 'client_email' | 'store_orders';
+  | 'invoices' | 'pay_links' | 'reminders' | 'subscriptions' | 'refunds' | 'transactions' | 'disputes'
+  | 'contacts' | 'review_link' | 'payment_alerts'
+  | 'device_reminders' | 'supplier_payouts' | 'bookings' | 'store_orders';
 
+// server: the server holds the connection. device: the phone does the work and the server stores nothing.
 export type Provider = {
   id: string;
   name: string;
+  description: string | null;
   capabilities: Capability[];
   available: boolean;
+  where: 'server' | 'device';
   // Returns the config to store (encrypted) for this user. PayPal connects to the one sandbox merchant.
   connect?(userId: string): Record<string, unknown>;
 };
@@ -19,19 +23,25 @@ export const PROVIDERS: Provider[] = [
   {
     id: 'paypal',
     name: 'PayPal',
-    capabilities: ['invoices', 'pay_links', 'reminders', 'refunds', 'transactions', 'disputes'],
+    description: 'Connected. Invoices, pay links, repeat billing, refunds, disputes.',
+    capabilities: ['invoices', 'pay_links', 'reminders', 'subscriptions', 'refunds', 'transactions', 'disputes'],
     available: true,
+    where: 'server',
     connect: () => ({ account: 'platform_merchant', environment: config.paypal.sandbox ? 'sandbox' : 'live' }),
   },
-  { id: 'stripe', name: 'Stripe', capabilities: ['payments'], available: false },
-  { id: 'square', name: 'Square', capabilities: ['pos_payments'], available: false },
-  { id: 'google_calendar', name: 'Google Calendar', capabilities: ['bookings'], available: false },
-  { id: 'gmail', name: 'Gmail', capabilities: ['client_email'], available: false },
-  { id: 'shopify', name: 'Shopify', capabilities: ['store_orders'], available: false },
+  { id: 'contacts', name: 'Contacts', description: "Pick a client's email from your contacts. Stays on this phone.", capabilities: ['contacts'], available: true, where: 'device' },
+  { id: 'google_reviews', name: 'Google reviews', description: 'Paste your review link. Muninn adds it to thank-you messages.', capabilities: ['review_link'], available: true, where: 'server' },
+  { id: 'slack', name: 'Slack', description: 'Get a message when a client pays.', capabilities: ['payment_alerts'], available: true, where: 'server' },
+  { id: 'reminders', name: 'Reminders', description: null, capabilities: ['device_reminders'], available: false, where: 'device' },
+  { id: 'paypal_payouts', name: 'Supplier payouts (PayPal)', description: null, capabilities: ['supplier_payouts'], available: false, where: 'server' },
+  { id: 'calendly', name: 'Calendly', description: null, capabilities: ['bookings'], available: false, where: 'server' },
+  { id: 'google_calendar', name: 'Google Calendar', description: null, capabilities: ['bookings'], available: false, where: 'server' },
+  { id: 'shopify', name: 'Shopify orders', description: null, capabilities: ['store_orders'], available: false, where: 'server' },
 ];
 
 export type IntegrationView = {
-  id: string; name: string; capabilities: Capability[]; status: 'connected' | 'not_connected' | 'coming_soon'; connected_at: string | null;
+  id: string; name: string; description: string | null; capabilities: Capability[];
+  status: 'connected' | 'not_connected' | 'on_device' | 'coming_soon'; connected_at: string | null;
 };
 
 export function createIntegrations(db: Db, cipher: Cipher, now: () => number) {
@@ -57,8 +67,8 @@ export function createIntegrations(db: Db, cipher: Cipher, now: () => number) {
     return PROVIDERS.map((p) => {
       const r = rows.get(p.id);
       return {
-        id: p.id, name: p.name, capabilities: p.capabilities,
-        status: !p.available ? 'coming_soon' : r?.status === 'connected' ? 'connected' : 'not_connected',
+        id: p.id, name: p.name, description: p.description, capabilities: p.capabilities,
+        status: !p.available ? 'coming_soon' : p.where === 'device' ? 'on_device' : r?.status === 'connected' ? 'connected' : 'not_connected',
         connected_at: p.available && r?.connected_at ? new Date(r.connected_at).toISOString() : null,
       };
     });

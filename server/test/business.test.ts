@@ -33,7 +33,12 @@ test('integrations: PayPal connected with encrypted config, others coming soon; 
   const byId = Object.fromEntries(json.integrations.map((i: any) => [i.id, i]));
   assert.equal(byId.paypal.status, 'connected');
   assert.ok(byId.paypal.capabilities.includes('transactions'));
-  for (const id of ['stripe', 'square', 'google_calendar', 'gmail', 'shopify']) {
+  assert.equal(byId.paypal.description, 'Connected. Invoices, pay links, repeat billing, refunds, disputes.');
+  for (const id of ['stripe', 'square', 'gmail']) assert.equal(byId[id], undefined);
+  assert.equal(byId.contacts.status, 'on_device');
+  assert.equal(byId.contacts.description, "Pick a client's email from your contacts. Stays on this phone.");
+  for (const id of ['slack', 'google_reviews']) assert.equal(byId[id].status, 'not_connected');
+  for (const id of ['reminders', 'paypal_payouts', 'calendly', 'google_calendar', 'shopify']) {
     assert.equal(byId[id].status, 'coming_soon');
     assert.equal(byId[id].connected_at, null);
   }
