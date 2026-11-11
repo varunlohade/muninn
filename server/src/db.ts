@@ -241,6 +241,9 @@ export function openDb(path: string) {
       if (ins.changes > 0) return null;
       return q('SELECT route, body_hash, status, response FROM idempotency WHERE user_id = ? AND key = ?').get(userId, key) as unknown as IdemRow;
     },
+    getIdem(userId: string, key: string): IdemRow | null {
+      return (q('SELECT route, body_hash, status, response FROM idempotency WHERE user_id = ? AND key = ?').get(userId, key) as unknown as IdemRow) ?? null;
+    },
     completeIdem(userId: string, key: string, response: string) {
       q(`UPDATE idempotency SET status = 'done', response = ? WHERE user_id = ? AND key = ?`).run(response, userId, key);
     },

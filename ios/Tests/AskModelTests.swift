@@ -38,9 +38,9 @@ final class AskModelTests: XCTestCase {
         await ask("invoice Sam $45 for a haircut sam@example.com", "invoice", .chips([invoice]))
         XCTAssertEqual(model.state, .chips([invoice]))
         api.failures = [URLError(.timedOut)]
-        await tap(invoice)
+        await tap(invoice, confirmed: "sam@example.com")
         XCTAssertEqual(model.state, .error("Took too long. Try again."))
-        await tap(invoice)
+        await tap(invoice, confirmed: "sam@example.com")
         XCTAssertEqual(api.calls, ["ask", "invoice", "invoice"])
         XCTAssertEqual(api.keys.count, 2)
         XCTAssertEqual(api.keys[0], api.keys[1], "the second tap replays the first call")
@@ -50,15 +50,15 @@ final class AskModelTests: XCTestCase {
 
     func testTheSameRequestAskedAgainKeepsItsKeyAndAnotherChipGetsItsOwn() async {
         await ask("invoice Sam $45", "invoice", .chips([invoice]))
-        await tap(invoice)
+        await tap(invoice, confirmed: "sam@example.com")
         await ask("invoice Sam $45", "invoice", .chips([invoice]))
-        await tap(invoice)
+        await tap(invoice, confirmed: "sam@example.com")
         let other = Chip(kind: "paylink", label: "Pay link $45 · Haircut", payload: ["amount": .string("45.00"), "item": .string("Haircut")], needs_confirm: false)
         await tap(other)
         XCTAssertEqual(api.keys[0], api.keys[1])
         XCTAssertNotEqual(api.keys[1], api.keys[2])
         now += ChipKeys.ttl + 1
-        await tap(invoice)
+        await tap(invoice, confirmed: "sam@example.com")
         XCTAssertNotEqual(api.keys[3], api.keys[0], "after the key expires the chip is a new request")
     }
 

@@ -53,7 +53,7 @@ test('M2: invoice chip shows the recipient and flags an unknown email', async ()
   const ok = setup();
   const t2 = ok.device().token;
   const chip2 = (await (await ok.call(t2, 'POST', '/v1/suggest', { text: "that'll be $45 for the haircut, sam@example.com" })).json()).chips[0];
-  assert.equal(chip2.needs_confirm, false);
+  assert.equal(chip2.needs_confirm, true, 'a typed email still gets the one confirm tap');
   assert.match(chip2.label, /→ sam@example\.com$/);
 });
 

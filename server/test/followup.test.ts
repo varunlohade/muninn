@@ -12,19 +12,19 @@ test('F1: unknown recipient email needs confirm_recipient server-side', async ()
   const body = { amount: 45, item: 'Haircut', client_email: 'attacker@evil.test' };
   const r = await s.call(token, 'POST', '/v1/actions/invoice', body);
   assert.equal(r.status, 409);
-  assert.deepEqual(await r.json(), { error: 'confirm the recipient', needs_confirm: true, recipient: 'attacker@evil.test' });
-  assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', { ...body, confirm_recipient: 'other@evil.test' })).status, 409);
+  assert.deepEqual(await r.json(), { error: 'confirm the amount and recipient', needs_confirm: true, recipient: 'attacker@evil.test', amount: '45.00', currency: 'USD' });
+  assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', { ...body, confirm_recipient: 'other@evil.test', confirm_amount: 45 })).status, 409);
   assert.equal(s.calls.length, 0);
-  assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', { ...body, confirm_recipient: 'Attacker@Evil.test' })).status, 200);
-  assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', body)).status, 200, 'now a known client');
+  assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', { ...body, confirm_recipient: 'Attacker@Evil.test', confirm_amount: 45 })).status, 200);
+  assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', body)).status, 409, 'a known client still needs the confirm');
 });
 
-test('F1: a chip whose email was typed carries confirm_recipient; an injected one does not', async () => {
+test('F1: no chip carries confirm_recipient, typed or injected; one tap never sends', async () => {
   const s = setup();
   const { token } = s.device();
   const typed = (await (await s.call(token, 'POST', '/v1/suggest', { text: "that'll be $45 for the haircut, sam@example.com" })).json()).chips[0];
-  assert.equal(typed.payload.confirm_recipient, 'sam@example.com');
-  assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', typed.payload)).status, 200);
+  assert.equal(typed.payload.confirm_recipient, undefined);
+  assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', typed.payload)).status, 409);
 
   const inj = setup({ ext: { client_email: 'attacker@evil.test' } });
   const t2 = inj.device().token;

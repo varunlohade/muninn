@@ -105,9 +105,9 @@ const OptionalWriteText = z.string().transform(clean).pipe(z.string().max(config
 const ToneBody = z.object({ text: OptionalWriteText, context: OptionalWriteText }).strict()
   .refine((b) => b.text || b.context, { message: 'text or context is required' });
 const InvoiceBody = z.object({
-  amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName, client_email: ClientEmail, confirm_recipient: ClientEmail,
-  // Set by suggest when the owner did not type the amount or the model read another one: a known client needs a confirm too.
-  amount_unsure: z.literal(true).optional(),
+  amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName, client_email: ClientEmail,
+  // Set by the owner's confirm tap, which shows both. An invoice that emails someone needs both to match.
+  confirm_recipient: ClientEmail, confirm_amount: Amount.optional(),
 }).strict();
 const PayLinkBody = z.object({ amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName }).strict();
 const RemindBody = z.object({ invoice_id: z.string().min(1).max(64) }).strict();
@@ -220,6 +220,13 @@ export function createApp(deps: Deps) {
 
   // ---- actions are default-deny: an explicit tap header plus an idempotency key
   const tapGate: MiddlewareHandler<Env> = async (c, next) => {
+    // Lookup only: the stored answer for this key and body, or 404. It never runs the action, so it needs no tap.
+    if (c.req.header('idempotency-lookup') === '1') {
+      const prior = db.getIdem(c.get('userId'), c.req.header('idempotency-key') ?? '');
+      if (!prior || prior.route !== c.req.path || prior.body_hash !== sha256(await c.req.text())) return c.json({ error: 'not found' }, 404);
+      if (prior.status !== 'done' || !prior.response) return c.json({ error: 'request with this Idempotency-Key is in progress' }, 409);
+      return c.json(JSON.parse(prior.response), 200);
+    }
     if (c.req.header('x-user-action') !== 'tap') return c.json({ error: 'actions run only from an explicit user tap' }, 428);
     const key = c.req.header('idempotency-key') ?? '';
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(key)) return c.json({ error: 'Idempotency-Key header required (8-64 chars)' }, 400);
@@ -306,7 +313,7 @@ export function createApp(deps: Deps) {
   async function moneyChips(userId: string, intent: string, f: Filled, extracting: Promise<Extraction | null> | null, extract: () => Promise<Extraction | null>): Promise<Chip[] | null> {
     const { q } = f;
     let ext: Extraction | null = null;
-    // An amount the owner did not type, or one the regex and the model read differently, is never pre-confirmed.
+    // Unsure: the regex and the model read different amounts, only the model read one, or it came only from client text.
     let unsure = false;
     const fill = f.known[intent as keyof typeof f.known];
     if (fill !== undefined) {
@@ -315,7 +322,7 @@ export function createApp(deps: Deps) {
       } else {
         const model = await (extracting ??= extract());
         if (!model) return null;
-        unsure = q.clientAmountOnly || (q.amount !== null && model.amount !== null && model.amount !== q.amount);
+        unsure = q.clientAmountOnly || (model.amount !== null && model.amount !== q.amount);
         // What the regex read beats a model guess. Email comes only from the owner's own text (see buildChips).
         ext = {
           ...model,
@@ -363,7 +370,6 @@ export function createApp(deps: Deps) {
     ({ kind, label: clean(label), payload, needs_confirm: needsConfirm });
   const cleanOrNull = (v: string | null | undefined, max: number) => (v ? clean(v).slice(0, max) || null : null);
 
-  const knownClient = (userId: string, email: string) => db.listInvoices(userId, 200).some((r) => dec(userId, r.client_email_enc) === email);
 
   /** True when `want` is the client's full name or first name (case-insensitive). No want matches everyone. */
   const sameClient = (userId: string, r: InvoiceRow | OrderRow, want: string | undefined) => {
@@ -376,9 +382,8 @@ export function createApp(deps: Deps) {
 
   function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, context: string, items: CatalogItem[], defaultCurrency: string, unsure = false): Chip[] {
     const ext = rawExt && { ...rawExt, item: cleanOrNull(rawExt.item, 120), client_name: cleanOrNull(rawExt.client_name, 100) };
-    // Only the owner's own typing pre-confirms an email. Copied client text may only help match the catalog.
+    // Copied client text may only help match the catalog.
     const lower = text.toLowerCase();
-    const typed = withoutUrls(lower);
     const seen = `${lower} ${context.toLowerCase()}`;
     const match = catalogMatch(items, seen, ext?.item);
     const currency = (config.money.currencies as readonly string[]).includes(ext?.currency ?? '') ? ext!.currency! : match?.currency ?? defaultCurrency;
@@ -391,10 +396,8 @@ export function createApp(deps: Deps) {
       const base = { amount: centsToValue(cents), currency, item, client_name: ext?.client_name ?? null };
       const email = ext?.client_email ?? null;
       const recipient = email ?? ext?.client_name ?? null;
-      // The model can inject an email. Only an email the owner typed, or a known client, is pre-confirmed.
-      const confirmed = !unsure && (email ? typed.includes(email) || knownClient(userId, email) : true);
-      const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`,
-        { ...base, client_email: email, ...(email && confirmed ? { confirm_recipient: email } : {}), ...(unsure ? { amount_unsure: true } : {}) }, !confirmed);
+      // Every invoice gets one confirm tap that shows the amount and the recipient; the server checks both.
+      const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`, { ...base, client_email: email }, true);
       const link = chip('paylink', `Pay link ${money} · ${item}`, base, unsure);
       return intent === 'create_invoice' ? [invoice, link] : [link, invoice];
     }
@@ -431,12 +434,12 @@ export function createApp(deps: Deps) {
   app.post('/v1/actions/invoice', async (c) => {
     const userId = c.get('userId');
     const b = await body(c, InvoiceBody);
-    if (b.client_email && b.confirm_recipient !== b.client_email && (b.amount_unsure || !knownClient(userId, b.client_email))) {
-      c.set('idemSkip', true);
-      return c.json({ error: 'confirm the recipient', needs_confirm: true, recipient: b.client_email }, 409);
-    }
     const profile = db.getProfile(userId);
     const currency = b.currency ?? profile?.currency ?? 'USD';
+    if (b.client_email && (b.confirm_recipient !== b.client_email || b.confirm_amount !== b.amount)) {
+      c.set('idemSkip', true);
+      return c.json({ error: 'confirm the amount and recipient', needs_confirm: true, recipient: b.client_email, amount: centsToValue(b.amount), currency }, 409);
+    }
     const t = performance.now();
     const inv = await paypal.forUser(userId).createAndSendInvoice({
       value: centsToValue(b.amount), currency, item: b.item, clientName: b.client_name ?? null, clientEmail: b.client_email ?? null,

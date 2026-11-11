@@ -113,8 +113,8 @@ test('suggest: regex-only invoice keeps the typed-email rule and the catalog ite
   const r = await suggest('$45 for the haircut, sam@example.com');
   assert.deepEqual(s.aiCalls.map((c) => c.fn), ['classify']);
   assert.equal(r.chips[0].label, 'Invoice $45 · Haircut → sam@example.com');
-  assert.deepEqual(r.chips[0].payload, { amount: '45.00', currency: 'USD', item: 'Haircut', client_name: null, client_email: 'sam@example.com', confirm_recipient: 'sam@example.com' });
-  assert.equal(r.chips[0].needs_confirm, false);
+  assert.deepEqual(r.chips[0].payload, { amount: '45.00', currency: 'USD', item: 'Haircut', client_name: null, client_email: 'sam@example.com' });
+  assert.equal(r.chips[0].needs_confirm, true);
   assert.deepEqual(Object.keys(r).sort(), ['chips', 'confidence', 'intent', 'timings']);
 });
 
@@ -231,17 +231,16 @@ test('review fix 5: the regex invoice keeps a known client name; tone logs its p
 
 test('review fix 1b: an unsure amount needs a server-side confirm even for a known client', async () => {
   const { suggest, post } = await world({ ext: { amount: 99, client_email: 'ana@example.com', item: 'beard trim' } });
-  const first = { amount: 45, item: 'Haircut', client_name: 'Ana', client_email: 'ana@example.com', confirm_recipient: 'ana@example.com' };
+  const first = { amount: 45, item: 'Haircut', client_name: 'Ana', client_email: 'ana@example.com', confirm_recipient: 'ana@example.com', confirm_amount: 45 };
   assert.equal((await post('/v1/actions/invoice', first)).status, 200);
-  const sure = (await suggest('$99 for the beard trim, ana@example.com')).chips[0];
-  assert.equal(sure.needs_confirm, false);
-  assert.equal(sure.payload.amount_unsure, undefined, 'a sure chip keeps its old payload');
+  const sure = (await suggest('$99 for the beard trim, ana@example.com')).chips;
+  assert.equal(sure[1].needs_confirm, false, 'the pay link of a sure amount needs no confirm');
   const r = await suggest('$50 for the beard trim, ana@example.com');
   const chip = r.chips[0];
   assert.equal(chip.needs_confirm, true);
   const tap = await post('/v1/actions/invoice', chip.payload);
   assert.equal(tap.status, 409, 'one tap on an unsure amount must not send, known client or not');
-  assert.deepEqual(await tap.json(), { error: 'confirm the recipient', needs_confirm: true, recipient: 'ana@example.com' });
-  assert.equal((await post('/v1/actions/invoice', { ...chip.payload, confirm_recipient: 'ana@example.com' })).status, 200);
+  assert.deepEqual(await tap.json(), { error: 'confirm the amount and recipient', needs_confirm: true, recipient: 'ana@example.com', amount: '50.00', currency: 'USD' });
+  assert.equal((await post('/v1/actions/invoice', { ...chip.payload, confirm_recipient: 'ana@example.com', confirm_amount: chip.payload.amount })).status, 200);
   assert.equal((await post('/v1/actions/paylink', r.chips[1].payload)).status, 200, 'a pay link sends nothing, so it needs no confirm');
 });

@@ -83,7 +83,7 @@ test('transactions: PayPal rows normalized, non-payments dropped, linked invoice
 
 test('transactions: empty or failing PayPal search falls back to our paid invoices, marked local', async () => {
   const s = world();
-  const inv = (await (await s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: '45.50', item: 'Haircut', client_name: 'Sam', client_email: 'sam@example.com', confirm_recipient: 'sam@example.com' })).json()).id;
+  const inv = (await (await s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: '45.50', item: 'Haircut', client_name: 'Sam', client_email: 'sam@example.com', confirm_recipient: 'sam@example.com', confirm_amount: '45.50' })).json()).id;
   await s.call(null, 'POST', '/webhooks/paypal', paidEvent(inv), webhookHeaders);
   const r = (await get(s, s.A.token, '/v1/transactions?range=today')).json;
   assert.equal(r.source, 'local');
@@ -112,7 +112,7 @@ test('transactions: cross-user, B never sees A PayPal rows or A local fallback',
 async function seededA() {
   const s = world();
   s.clock.set(T0 - 11 * DAY);
-  await s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 80, item: 'Color', client_name: 'Jordan Ray', client_email: 'jordan@example.com', confirm_recipient: 'jordan@example.com' });
+  await s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 80, item: 'Color', client_name: 'Jordan Ray', client_email: 'jordan@example.com', confirm_recipient: 'jordan@example.com', confirm_amount: 80 });
   s.clock.set(T0);
   await s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 40, item: 'Trim', client_name: 'Sam' });
   s.ppData.set(s.A.userId, {
@@ -220,7 +220,7 @@ test('checkBrief: digits and number words must appear in the facts', () => {
 
 test('clients: aggregate invoices and unlinked PayPal payers; B sees none of A clients', async () => {
   const s = await seededA();
-  const inv = (await (await s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 60, item: 'Cut', client_name: 'Maya Lopez', client_email: 'maya@example.com', confirm_recipient: 'maya@example.com' })).json()).id;
+  const inv = (await (await s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 60, item: 'Cut', client_name: 'Maya Lopez', client_email: 'maya@example.com', confirm_recipient: 'maya@example.com', confirm_amount: 60 })).json()).id;
   await s.call(null, 'POST', '/webhooks/paypal', paidEvent(inv), webhookHeaders);
   const { clients, source } = (await get(s, s.A.token, '/v1/clients')).json;
   assert.equal(source, 'paypal');
@@ -290,7 +290,7 @@ test('ensureDemoUser: token only on creation, stored as a hash', () => {
 
 test('clients: one person per email, best name wins, name-only rows attach; plus aliases stay apart; B sees none', async () => {
   const s = world();
-  const inv = (b: Record<string, unknown>) => s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', ...b });
+  const inv = (b: Record<string, unknown>) => s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', confirm_amount: 45, ...b });
   await inv({ client_name: 'Sam' });
   await inv({ client_name: 'Sam Okafor', client_email: 'Sam.Okafor@Example.com', confirm_recipient: 'Sam.Okafor@Example.com' });
   await inv({ client_name: 'Sam', client_email: 'sam.okafor@example.com', confirm_recipient: 'sam.okafor@example.com' });
@@ -306,7 +306,7 @@ test('clients: one person per email, best name wins, name-only rows attach; plus
 
 test('payments: missing name falls back to the known client, then the email local part, never the item', async () => {
   const s = world();
-  const inv = (b: Record<string, unknown>) => s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', ...b });
+  const inv = (b: Record<string, unknown>) => s.call(s.A.token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', confirm_amount: 45, ...b });
   await inv({ client_name: 'Maya Lopez', client_email: 'maya@example.com', confirm_recipient: 'maya@example.com' });
   await inv({ client_email: 'maya@example.com', confirm_recipient: 'maya@example.com' });
   await inv({ client_email: 'lee@example.com', confirm_recipient: 'lee@example.com' });

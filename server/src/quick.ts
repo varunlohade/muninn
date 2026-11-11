@@ -30,6 +30,9 @@ const NOT_TOTAL_AFTER = /^\s?(?:k|m|x|each|per|ea)\b/i;
 const QUANTITY_BEFORE = /\b\d+\s*(?:x|@|[\p{L}-]+\s+(?:at|@))\s*$/iu;
 // A number that reads like a price with no currency or money word: "do 45 for the cut", "€1.200".
 const PRICE_SHAPE = /[$€£]\s?\d|\d\s?[$€£]|\b\d+(?:[.,]\d+)*\s+for\b|\b(?:do|for)\s+\d/i;
+// Rule A: a regex amount needs exactly one number in the owner's text and no rate or multiplier.
+const NUMBER = /\d+(?:[.,]\d+)*|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|dozens?|half)\b/gi;
+const RATE = /[×*]|\d\s*x|\bx\s*\d|\b(?:x|times|each|per|ea|hours?|hrs?|months?|people|pax)\b|\/\s*(?:hr|h|mo)\b/i;
 const URL = /\S*\/\S*/g;
 /** Text with every URL-like token (anything with a slash) removed, so an email inside a link never counts as typed. */
 export const withoutUrls = (text: string) => text.replace(URL, ' ');
@@ -71,7 +74,8 @@ export function quick(text: string, context = ''): Quick {
   const all = `${context}\n${text}`;
   const typed = amountsIn(text);
   const copied = amountsIn(context);
-  const amt = single(typed);
+  const plain = text.replace(EMAIL, ' ');
+  const amt = (plain.match(NUMBER) ?? []).length === 1 && !RATE.test(plain) ? single(typed) : null;
   const currency = one(typed.map((a) => a.currency).filter((c) => c !== null), (c) => c);
   const emails = [...withoutUrls(text).matchAll(EMAIL)].map((m) => m[0].toLowerCase());
   const none = typed.length + copied.length === 0 && !MONEY_WORDS.test(all) && !PRICE_SHAPE.test(all) && !OTHER_SCRIPT.test(all);

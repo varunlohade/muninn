@@ -127,7 +127,7 @@ test('ask: money routes return the same chips as /v1/suggest, with the confirm r
   const unsure = (await u.ask('invoice jordan $120 for the logo')).result.chips[0];
   assert.equal(unsure.payload.amount, '120.00');
   assert.equal(unsure.needs_confirm, true);
-  assert.equal(unsure.payload.amount_unsure, true);
+  assert.equal(unsure.payload.confirm_amount, undefined); // round 2: every emailed invoice confirms amount + recipient on the server
   assert.equal(unsure.payload.confirm_recipient, undefined);
 
   // An email the owner did not type needs a confirm, as in suggest.

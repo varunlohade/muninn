@@ -29,7 +29,8 @@ test('fake server: suggest, invoice, remind, refund and /_paid work with the fix
   assert.equal(s.status, 200);
   const invoice = s.json.chips.find((c: any) => c.kind === 'invoice');
   assert.ok(invoice, JSON.stringify(s.json));
-  const inv = await call('/v1/actions/invoice', invoice.payload, true);
+  assert.equal(invoice.needs_confirm, true);
+  const inv = await call('/v1/actions/invoice', { ...invoice.payload, confirm_recipient: invoice.payload.client_email, confirm_amount: invoice.payload.amount }, true);
   assert.equal(inv.status, 200);
   assert.match(inv.json.pay_link, /^https:\/\/paypal\.test\//);
 
