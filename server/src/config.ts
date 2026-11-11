@@ -79,6 +79,8 @@ export const config = {
     currencies: ['USD', 'EUR', 'GBP', 'CAD', 'AUD'] as const,
     invoiceDueDays: 7,
     refundConfirmTtlMs: 2 * 60 * 1000,
+    // Payouts send the owner's own money out. All payouts in one UTC day, in any currency, stay at or under this.
+    payoutDailyCap: 1000,
   },
 
   rateLimit: {

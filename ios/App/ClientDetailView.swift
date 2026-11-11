@@ -60,23 +60,3 @@ struct ClientDetailView: View {
         rowsIn = true
     }
 }
-
-struct DisputesView: View {
-    @State private var items: [Dispute] = []
-
-    var body: some View {
-        List(items) { d in
-            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(d.reason.replacingOccurrences(of: "_", with: " ").capitalized).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
-                Text(d.status.replacingOccurrences(of: "_", with: " ").capitalized).font(Theme.Font.label).foregroundStyle(Theme.Color.due)
-                if let a = d.amount { Text(formatMoney(a.value, a.currency_code)).font(Theme.Font.label).foregroundStyle(Theme.Color.text2) }
-            }
-            .listRowBackground(Theme.Color.bg)
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(Theme.Color.bg.ignoresSafeArea())
-        .navigationTitle("Disputes")
-        .task { items = (try? await APIClient.shared().disputes()) ?? [] }
-    }
-}

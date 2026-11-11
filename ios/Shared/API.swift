@@ -108,7 +108,7 @@ extension AskResponse: Decodable {
         confidence = try c.decode(Double.self, forKey: .confidence)
         func get<T: Decodable>(_ type: T.Type) throws -> T { try c.decode(T.self, forKey: .result) }
         switch route {
-        case "invoice", "paylink", "subscribe", "remind", "refund": result = .chips(try get(Chips.self).chips)
+        case "invoice", "paylink", "subscribe", "remind", "refund", "action": result = .chips(try get(Chips.self).chips)
         case "fix", "refine": result = .text(try get(WriteResponse.self).text)
         case "reply": result = .text(try get(ReplyResponse.self).reply)
         case "review_ask": result = .review(try get(WriteResponse.self).text)
@@ -133,6 +133,8 @@ struct RemindResponse: Decodable { let invoice_id: String }
 /// A refund runs in two calls. The first gives `confirm_token` and `summary`; the second, with the token, gives `refund_id`.
 struct RefundResponse: Decodable { let confirm_token: String?; let summary: String?; let refund_id: String?; let amount: String?; let currency: String? }
 struct ReplyResponse: Decodable { let reply: String }
+/// A PayPal action from server/src/actions-more.ts, or one of its reads: one line for the bar, and Undo when PayPal can undo it.
+struct MoreResponse: Decodable { let line: String; let undo: Chip? }
 struct WriteResponse: Decodable { let text: String; let changed: Bool? }
 /// tone is "upset" (the client), "blunt" (the owner's draft) or "ok". calm is set unless tone is "ok".
 struct ToneResponse: Decodable { let tone: String; let calm: String? }
@@ -349,6 +351,16 @@ struct APIClient {
         try await send(request("POST", "/v1/actions/refund", body: body, tap: true, key: key, lookup: lookup), as: RefundResponse.self)
     }
 
+    /// A PayPal action under /v1/actions/<path>. The body is the chip's own, plus its confirm values after the confirm tap.
+    func more(_ path: String, _ body: [String: JSONValue], key: String, lookup: Bool) async throws -> MoreResponse {
+        try await send(request("POST", "/v1/actions/" + path, body: body, tap: true, key: key, lookup: lookup), as: MoreResponse.self)
+    }
+
+    /// A read for the bar, such as one repeat bill's status. Never moves money.
+    func moreRead(_ path: String) async throws -> MoreResponse {
+        try await send(request("GET", "/v1/" + path), as: MoreResponse.self)
+    }
+
     func reply(_ text: String) async throws -> ReplyResponse {
         try await send(request("POST", "/v1/reply", body: ["text": text]), as: ReplyResponse.self)
     }
@@ -383,6 +395,8 @@ struct APIClient {
         try await send(request("GET", "/v1/transactions?range=\(range)"), as: TransactionsResponse.self)
     }
     func disputes() async throws -> [Dispute] { try await send(request("GET", "/v1/disputes"), as: DisputesResponse.self).disputes }
+    /// Open disputes with the buyer's name and a "reply by" line, for the Disputes page.
+    func openDisputes() async throws -> [OpenDispute] { try await send(request("GET", "/v1/disputes-open"), as: OpenDisputesResponse.self).disputes }
     func integrations() async throws -> [Integration] {
         try await send(request("GET", "/v1/integrations"), as: IntegrationsResponse.self).integrations
     }

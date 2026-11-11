@@ -23,6 +23,7 @@ import { createSlack, SlackWebhookUrl } from './slack.ts';
 import { RANGES, createBusiness } from './business.ts';
 import { createAppleVerifier, type AppleVerifier } from './apple.ts';
 import { createPayPalConnect } from './connect.ts';
+import { createMore } from './actions-more.ts';
 
 export type Deps = {
   db: Db; cipher: Cipher; ai: Ai; paypal: PayPalProvider; now?: () => number;
@@ -30,8 +31,8 @@ export type Deps = {
   /** Runs once for each user that Sign in with Apple creates. The demo server seeds the demo business here. */
   onNewUser?: (userId: string) => void;
 };
-type Env = { Variables: { userId: string; idemSkip?: boolean } };
-type Chip = { kind: string; label: string; payload: Record<string, unknown>; needs_confirm: boolean; trigger?: string };
+export type Env = { Variables: { userId: string; idemSkip?: boolean } };
+export type Chip = { kind: string; label: string; payload: Record<string, unknown>; needs_confirm: boolean; trigger?: string };
 
 const DAY = 86_400_000;
 const DEFAULT_PROFILE = { business_name: 'my shop', tone: 'friendly and short', currency: 'USD' };
@@ -189,6 +190,8 @@ export function createApp(deps: Deps) {
   const slack = createSlack(db, cipher, now);
   const biz = createBusiness({ db, ai, paypal, integrations, dec, now });
   const search = createSearch({ db, dec, namer: biz.namer });
+  const more = createMore({ db, paypal, biz, now, dec, enc, body, requestIdFor, accountOf: connect.account,
+    fail: (status, message) => new HttpError(status, message) });
 
   app.use('*', secureHeaders());
   app.use('*', cors({ origin: (origin) => (config.corsOrigins.includes(origin) ? origin : null), allowMethods: ['GET', 'POST', 'PUT', 'DELETE'] }));
@@ -335,6 +338,8 @@ export function createApp(deps: Deps) {
       log('suggest', { user_id: userId, path, paid_calls, parallel, intent, confidence, chips: chips.length, ...timings });
       return c.json({ chips, intent, confidence, timings });
     };
+    const extra = await more.suggest(userId, text);
+    if (extra) return done(extra, 'more', 1);
 
     // A lookup of the owner's own records: regex settles it with no paid call when the phrase and the name are clear.
     const look = context ? null : lookupChip(userId, text);
@@ -559,7 +564,7 @@ export function createApp(deps: Deps) {
     }
     if (intent === 'payment_status') {
       const unpaid = db.unpaidCount(userId);
-      return [chip('payments', `Who paid? · ${unpaid} unpaid`, {})];
+      return [chip('payments', `Who owes you · ${unpaid} unpaid`, {})];
     }
     if (intent === 'send_reminder') {
       const want = ext?.client_name?.trim().toLowerCase();
@@ -570,7 +575,7 @@ export function createApp(deps: Deps) {
       if (!hit || !(namedIn(text, client) || namedIn(context, client))) return [];
       const name = biz.namer(userId)(hit) ?? client;
       // Every reminder takes one confirm tap; the server checks the client it names (confirm_client).
-      return [chip('remind', `Remind ${name} · ${formatMoney(hit.amount_cents, hit.currency)}`,
+      return [chip('remind', `Nudge ${name} · ${formatMoney(hit.amount_cents, hit.currency)} owed`,
         { invoice_id: hit.id, client_name: name, amount: centsToValue(hit.amount_cents), currency: hit.currency }, true)];
     }
     if (intent === 'refund') {
@@ -771,7 +776,7 @@ export function createApp(deps: Deps) {
       capture_id: target.capture_id, token_hash: sha256(token), expires_at: now() + config.money.refundConfirmTtlMs, status: 'pending',
     });
     const who = biz.namer(userId)(target) ?? 'the client';
-    return c.json({ confirm_token: token, expires_in_s: config.money.refundConfirmTtlMs / 1000, summary: `Refund ${formatMoney(cents, target.currency)} to ${who}?` });
+    return c.json({ confirm_token: token, expires_in_s: config.money.refundConfirmTtlMs / 1000, summary: `Refund ${formatMoney(cents, target.currency)} to ${who}? Can't undo.` });
   });
 
   // ---- read views
@@ -905,7 +910,7 @@ export function createApp(deps: Deps) {
   // The router never moves money: a money route returns the same chips as /v1/suggest, and each chip
   // still needs its own tap on /v1/actions/*. Device routes return an instruction; the phone does the work.
   const ROUTE_INTENT: Partial<Record<AskRoute, Intent>> = { invoice: 'create_invoice', paylink: 'pay_link', remind: 'send_reminder', refund: 'refund' };
-  const NOT_SURE = 'Not sure what you need. Try "invoice Sam $45 for a haircut" or "who has not paid".';
+  const NOT_SURE = 'Try: invoice Sam $45 · nudge Ana · refund Sam $20 · who owes me';
   const refineTone = (words: string): Tone =>
     /\b(?:short|brief|concise)/i.test(words) ? 'shorter' : /\b(?:firm|strict|stern)/i.test(words) ? 'firmer'
       : /\b(?:professional|formal|polite)/i.test(words) ? 'professional' : 'friendly';
@@ -922,9 +927,11 @@ export function createApp(deps: Deps) {
       return c.json({ route, confidence, result });
     };
     const none = (confidence: number, line = NOT_SURE, err?: string) => done('none', confidence, { line }, err);
+    const extra = await more.suggest(userId, text, 'ask');
+    if (extra) return done('action' as AskRoute, 1, { chips: extra });
 
     const aq = askQuick(text);
-    if (aq.none) return none(1, 'Ask for an invoice, a reminder, a rewrite, who paid, or a note.');
+    if (aq.none) return none(1, NOT_SURE);
     // A clear lookup phrase needs no router. An unknown name still answers: "No invoices for Sam yet".
     const look = detectLookup(text, now());
     const found = look ? search.find(userId, look) : null;
@@ -1142,5 +1149,6 @@ export function createApp(deps: Deps) {
     return c.json({ ok: true, handled });
   });
 
+  more.mount(app);
   return app;
 }

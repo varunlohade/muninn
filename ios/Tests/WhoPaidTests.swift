@@ -54,7 +54,7 @@ final class WhoPaidTests: XCTestCase {
         XCTAssertEqual(jordan.remind?.payload["invoice_id"], .string("OLD"))
         XCTAssertEqual(jordan.remind?.payload["client_name"], .string("Jordan"))
         XCTAssertTrue(jordan.remind?.needs_confirm ?? false)
-        XCTAssertEqual(BarItems.confirmTitle(jordan.remind!, recipient: BarItems.recipient(jordan.remind!)), "Remind Jordan about $45?")
+        XCTAssertEqual(BarItems.confirmTitle(jordan.remind!, recipient: BarItems.recipient(jordan.remind!)), "Email Jordan a reminder for $45?")
         XCTAssertEqual(WhoPaid.header(clients), "$195 unpaid \u{00B7} 2 clients")
     }
 

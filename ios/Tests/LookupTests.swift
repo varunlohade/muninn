@@ -93,7 +93,7 @@ final class LookupTests: XCTestCase {
         model.remindFromLookup(remind)
         guard case .confirm(let c, let who) = model.bar else { return XCTFail("expected the confirm, got \(model.bar)") }
         XCTAssertEqual(who, "Sam Lee")
-        XCTAssertEqual(BarItems.confirmTitle(c, recipient: who), "Remind Sam Lee about $120?")
+        XCTAssertEqual(BarItems.confirmTitle(c, recipient: who), "Email Sam Lee a reminder for $120?")
         XCTAssertFalse(api.calls.contains("remind"), "nothing is sent before the confirm tap")
         model.confirm(c, recipient: who)
         await until("reminded") { api.reminded == ["Sam Lee"] }

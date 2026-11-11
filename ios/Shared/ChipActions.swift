@@ -9,6 +9,8 @@ struct ActionResult: Equatable {
     let who: String
     /// "Here's your invoice for Haircut ($45): <link>" for an invoice, the bare link for a pay link.
     let message: String
+    /// An invoice PayPal emailed to the client. Without an email it is only a link.
+    var emailed = false
 }
 
 /// A money call that has not answered yet. `before` is what the field held at the tap.
@@ -33,6 +35,8 @@ enum ChipOutcome: Equatable {
     case line(String)
     /// The server wants one more tap. `chip` does the second step.
     case ask(String, chip: Chip)
+    /// Done, and PayPal can undo it: the line, then an Undo chip.
+    case undoable(String, undo: Chip)
 }
 
 /// One place that runs a chip's action, for the keyboard and the app's Ask bar.
@@ -42,8 +46,25 @@ enum ChipActions {
     static let retryDelay: Duration = .milliseconds(1200)
     static let inProgressDelay: Duration = .seconds(2)
     static let inProgressTries = 3
+    /// The PayPal actions that share one shape (server/src/actions-more.ts): kind → route under /v1/actions/.
+    /// The chip's payload is {body, confirm, question}; the server answers {line, undo}.
+    static let moreActions = [
+        "plan_pause": "plan/pause", "plan_resume": "plan/resume", "plan_cancel": "plan/cancel",
+        "invoice_mark_paid": "invoice/mark-paid", "invoice_unmark": "invoice/unmark-paid", "invoice_cancel": "invoice/cancel",
+        "invoice_refund": "invoice/record-refund",
+        "payout": "payout", "payout_cancel": "payout/cancel",
+        "dispute_reply": "dispute/reply", "dispute_accept": "dispute/accept", "dispute_offer": "dispute/offer",
+    ]
+    /// What the bar says while each of them runs.
+    static let working = [
+        "plan_pause": "Pausing\u{2026}", "plan_resume": "Restarting\u{2026}", "plan_cancel": "Ending\u{2026}", "plan_status": "Checking\u{2026}", "balance": "Checking balance\u{2026}",
+        "invoice_mark_paid": "Marking paid\u{2026}", "invoice_unmark": "Taking it back\u{2026}", "invoice_cancel": "Cancelling invoice\u{2026}",
+        "invoice_refund": "Recording refund\u{2026}",
+        "payout": "Sending\u{2026}", "payout_cancel": "Cancelling\u{2026}",
+        "dispute_reply": "Sending message\u{2026}", "dispute_accept": "Accepting claim\u{2026}", "dispute_offer": "Sending offer\u{2026}",
+    ]
     /// Chips whose call moves money or messages a client. Only these keep a key and a pending call.
-    static let sendsMoney: Set = ["invoice", "paylink", "subscribe", "remind", "refund"]
+    static let sendsMoney = Set(["invoice", "paylink", "subscribe", "remind", "refund"]).union(moreActions.keys)
     private static let networkFailures: Set<URLError.Code> = [
         .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
     ]
@@ -106,7 +127,8 @@ enum ChipActions {
             let item = string(chip, "item") ?? "your order"
             let money = formatMoney(res.amount, res.currency)
             return .sent(ActionResult(id: res.id, kind: "invoice", link: link, money: money, who: who,
-                                      message: "Here's your invoice for \(item) (\(money)): \(link)"))
+                                      message: "Here's your invoice for \(item) (\(money)): \(link)",
+                                      emailed: BarItems.string(chip, "client_email") != nil))
         case "paylink":
             let res = try await call { try await api.payLink(chip.payload, key: key, lookup: lookup) }
             guard let link = res.approve_link else { throw APIError.message("No link came back. Try again.") }
@@ -130,7 +152,8 @@ enum ChipActions {
         case "remind":
             guard let id = string(chip, "invoice_id") else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
             _ = try await call { try await api.remind(invoiceID: id, confirmClient: confirmed, key: key, lookup: lookup) }
-            return .line("Reminder sent \u{2713}")
+            let name = string(chip, "client_name") ?? confirmed.flatMap { $0.isEmpty ? nil : $0 } ?? "the client"
+            return .line("Reminder emailed to \(name) \u{2713}")
         case "refund":
             if let token = string(chip, "confirm_token") {
                 let res = try await call { try await api.refund(["confirm_token": .string(token)], key: key, lookup: lookup) }
@@ -142,6 +165,19 @@ enum ChipActions {
             guard let token = res.confirm_token else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
             let question = res.summary ?? chip.label
             return .ask(question, chip: Chip(kind: "refund", label: question, payload: ["confirm_token": .string(token)], needs_confirm: false))
+        case let kind where moreActions[kind] != nil:
+            var body = object(chip, "body")
+            // The confirm tap showed these values; the server checks each one against its own records.
+            if confirmed != nil { body.merge(object(chip, "confirm")) { _, shown in shown } }
+            let res = try await call { try await api.more(moreActions[kind]!, body, key: key, lookup: lookup) }
+            return res.undo.map { .undoable(res.line, undo: $0) } ?? .line(res.line)
+        case "show":
+            return .line(string(chip, "line") ?? chip.label)
+        case "balance":
+            return .line(try await call { try await api.moreRead("balance") }.line)
+        case "plan_status":
+            guard let id = string(chip, "id") else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
+            return .line(try await call { try await api.moreRead("plans/" + id) }.line)
         case "payments":
             return .line(KeyboardModel.lateLine(try await call { try await api.payments() }))
         case "reply":
@@ -150,6 +186,10 @@ enum ChipActions {
         default:
             throw APIError.message("Open \(AppConfig.displayName) for this one")
         }
+    }
+
+    private static func object(_ chip: Chip, _ key: String) -> [String: JSONValue] {
+        if case .object(let v)? = chip.payload[key] { v } else { [:] }
     }
 
     private static func string(_ chip: Chip, _ key: String) -> String? {

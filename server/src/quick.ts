@@ -377,3 +377,90 @@ export function detectLookup(text: string, now: number): Lookup | null {
   }
   return null;
 }
+
+// ---- More PayPal verbs (payouts, plans, invoices, balance, disputes). Regex only: no model reads these.
+// Each one reads the last sentence the owner typed, never copied client text.
+const NOT_A_NAME = new Set([
+  'me', 'you', 'a', 'an', 'the', 'them', 'it', 'him', 'her', 'us', 'back', 'over', 'out', 'to', 'my', 'your', 'this', 'that', 'money', 'now', 'later', 'for',
+]);
+const PAY_ROLE = String.raw`(?:my\s+(?:supplier|vendor|contractor|freelancer|assistant|cleaner|landlord|guy)\s+)?`;
+const PAY_NAME = String.raw`(?<name>\p{L}[\p{L}'’-]*)`;
+const PAY_TO_NAME = new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_ROLE}${PAY_NAME}`, 'iu');
+const PAY_AMOUNT_TO = new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+\S+\s+to\s+${PAY_ROLE}${PAY_NAME}`, 'iu');
+// A request for the client to pay, not a payment to someone.
+const NOT_PAYOUT = /\b(?:invoice|bill|link|reminder|receipt|quote|request)\b/i;
+
+export type PayoutAsk = { name: string; amount: number | null; currency: string | null; email: string | null };
+
+/** "pay joe $200", "send my supplier joe $200 joe@x.com", "send $200 to joe". Null when the sentence is not a payout. */
+export function payoutAsk(text: string): PayoutAsk | null {
+  const s = lastSentence(text);
+  if (NOT_PAYOUT.test(s) || !/\d/.test(s)) return null;
+  const m = s.match(PAY_TO_NAME) ?? s.match(PAY_AMOUNT_TO);
+  const raw = m?.groups?.name;
+  if (!raw || NOT_A_NAME.has(raw.toLowerCase())) return null;
+  const q = quick(s);
+  return { name: raw[0].toUpperCase() + raw.slice(1).toLowerCase(), amount: q.amount, currency: q.currency, email: q.email };
+}
+
+// Repeat bills (PayPal subscriptions). Pause and resume are clear verbs alone; stop, end and cancel need a plan word,
+// so "cancel sam's invoice" or "stop by at 3" never touch a plan.
+const PLAN_WORD = /\b(?:plans?|repeat (?:bills?|billing)|subscriptions?|monthly|weekly|yearly|membership)\b/i;
+const PLANS_LIST = /^(?:(?:what|which|show(?: me)?|list|see|any)\b.*\b(?:plans|repeat bills|subscriptions)\b|(?:my\s+)?(?:plans|repeat bills|subscriptions)\??$)/i;
+
+export type PlanVerb = 'list' | 'pause' | 'resume' | 'cancel' | 'status';
+
+/** "what plans do I have", "pause ana's plan", "restart ana's plan", "stop ana's plan for good", "how is ana's plan". */
+export function planVerb(text: string): PlanVerb | null {
+  const s = lastSentence(text);
+  if (PLANS_LIST.test(s)) return 'list';
+  if (/\b(?:pause|suspend)\b|\bon hold\b/i.test(s)) return 'pause';
+  if (/\b(?:resume|restart|unpause|reactivate)\b/i.test(s)) return 'resume';
+  if (!PLAN_WORD.test(s)) return null;
+  if (/\b(?:stop|end|cancel|kill)\b/i.test(s)) return 'cancel';
+  if (/\bstatus\b|\bhow(?:'s|\s+is)\b/i.test(s)) return 'status';
+  return null;
+}
+
+// Disputes. A reply quotes the owner's own words after the name: "tell sam in the dispute: I shipped it Monday".
+const DISPUTE_REPLY = /^(?:reply to|tell|message|answer)\s+(?<name>\p{L}[\p{L}'’-]*)(?:'s)?(?:\s+in\s+(?:the|a|our|his|her|their)\s+(?:paypal\s+)?(?:dispute|claim|case))?\s*[:,-]?\s+(?<message>\S.*)$/iu;
+
+export type DisputeVerb = { verb: 'list' | 'accept' | 'offer' } | { verb: 'reply'; name: string; message: string };
+
+/** "disputes", "accept sam's claim", "offer sam $20 back", "tell sam I shipped it". Who it is about is matched against open disputes. */
+export function disputeVerb(text: string): DisputeVerb | null {
+  const s = lastSentence(text);
+  if (/^(?:(?:show|list|see|check|any|my|open|what are)\s+)*(?:my\s+|open\s+|paypal\s+)*disputes\??$/i.test(s)) return { verb: 'list' };
+  if (/\baccept\b.*\b(?:claim|dispute|case)\b/i.test(s)) return { verb: 'accept' };
+  if (/\boffer\b/i.test(s) && /\d/.test(s)) return { verb: 'offer' };
+  // A reply keeps every sentence of its last line.
+  const m = (text.trim().split('\n').pop() ?? '').trim().match(DISPUTE_REPLY);
+  return m?.groups ? { verb: 'reply', name: m.groups.name, message: m.groups.message.trim() } : null;
+}
+
+// "how much do I have", "my balance", "what's my PayPal balance". The whole sentence, so "your balance is $45" to a client is not one.
+const BALANCE = /^(?:(?:what'?s|what is|check|show(?: me)?)\s+)?(?:my\s+|the\s+)?(?:paypal\s+)?balance\??$|^how much (?:money )?(?:do i have|have i got|is in (?:my )?paypal)\b/i;
+export const balanceAsk = (text: string) => BALANCE.test(lastSentence(text));
+
+// Money that moved outside PayPal, and invoices the owner calls off. PayPal's payment method names.
+const METHOD: [RegExp, string, string][] = [
+  [/\bcash\b/i, 'CASH', 'cash'], [/\b(?:check|cheque)\b/i, 'CHECK', 'check'], [/\bwire\b/i, 'WIRE_TRANSFER', 'wire'],
+  [/\b(?:zelle|venmo|bank|transfer)\b/i, 'BANK_TRANSFER', 'bank transfer'], [/\bcard\b/i, 'CREDIT_CARD', 'card'],
+];
+const OUTSIDE_METHOD = /\b(?:cash|check|cheque|wire|zelle|venmo|bank|transfer|card)\b/i;
+
+export type InvoiceVerb = { verb: 'mark_paid' | 'cancel_invoice' | 'record_refund'; method: string | null; methodWord: string | null };
+
+/** "sam paid cash", "mark sam paid", "cancel sam's invoice", "record a $20 refund for sam", "refunded sam $20 in cash". */
+export function invoiceVerb(text: string): InvoiceVerb | null {
+  const s = lastSentence(text);
+  const m = METHOD.find(([re]) => re.test(s));
+  const method = { method: m?.[1] ?? null, methodWord: m?.[2] ?? null };
+  if (/\b(?:cancel|void)\b.*\binvoice\b/i.test(s)) return { verb: 'cancel_invoice', method: null, methodWord: null };
+  if (/\b(?:record|log|mark)\b.*\brefund/i.test(s) || (/\brefunded\b/i.test(s) && OUTSIDE_METHOD.test(s))) return { verb: 'record_refund', ...method };
+  if (/^who\b/i.test(s)) return null;
+  if (/\bmark(?:ed)?\b.*\bpaid\b/i.test(s) || /\bpaid\s+(?:me\s+)?(?:(?:in|by|with|via)\s+)?(?:cash|check|cheque|wire|zelle|venmo|bank|transfer|card)\b/i.test(s)) {
+    return { verb: 'mark_paid', ...method };
+  }
+  return null;
+}

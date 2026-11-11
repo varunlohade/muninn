@@ -136,22 +136,22 @@ final class ReadyChipsTests: XCTestCase {
     }
 
     func testNoDataGivesWhoPaidAndNotes() {
-        XCTAssertEqual(ReadyChips.build(.init()).map(\.title), ["Who paid?", "Notes"])
+        XCTAssertEqual(ReadyChips.build(.init()).map(\.title), ["Who owes you", "Notes"])
     }
 
     func testOrderByUsefulness() {
         let next = appt("Sam Okafor", 30)
         let items = ReadyChips.build(.init(nextUp: next, today: [appt("Ava", -60), next, appt(nil, 90)], unpaidCount: 2,
                                            watch: Watch(id: "I", who: "Jordan", money: "$45", paid: true)))
-        XCTAssertEqual(items.map(\.title), ["Next: Sam \(next.time)", "Who paid?", "Jordan paid \u{2713}"])
-        XCTAssertEqual(items.map(\.detail), ["Invoice", "2 unpaid", nil])
-        XCTAssertEqual(items[0].action, .bill(next))
+        XCTAssertEqual(items.map(\.title), ["Next: Sam \(next.time)", "Who owes you", "Jordan paid \u{2713}"])
+        XCTAssertEqual(items.map(\.detail), [nil, "2 unpaid", nil])
+        XCTAssertNil(items[0].action, "Next only informs; Invoice Sam bills")
     }
 
     func testCopiedComesFirstAndNothingUnpaidHidesWhoPaid() {
         let items = ReadyChips.build(.init(copiedAvailable: true, today: [appt("Ava", -60)], unpaidCount: 0,
                                            watch: Watch(id: "I", who: "Jordan", money: "$45")))
-        XCTAssertEqual(items.map(\.title), ["Use copied message", "Waiting on $45", "Today"])
+        XCTAssertEqual(items.map(\.title), ["Use copied message", "Waiting on $45 \u{00B7} Jordan", "Today"])
         XCTAssertEqual(items.last?.detail, "1 appointment")
     }
 

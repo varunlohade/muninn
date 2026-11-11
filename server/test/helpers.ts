@@ -6,7 +6,7 @@ import type { Ai, Classification, DeviceAction, Extraction, ToneCheck } from '..
 import type { AskGroup, AskRoute } from '../src/config.ts';
 import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
-import type { PayPal, PayPalDispute, PayPalDisputeDetail, PayPalPartner, PayPalTxn } from '../src/paypal.ts';
+import type { Balance, PayPal, PayPalDispute, PayPalDisputeDetail, PayPalPartner, PayPalTxn } from '../src/paypal.ts';
 
 export const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
@@ -16,6 +16,12 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
   const calls: { fn: string; args: unknown[] }[] = [];
   const aiCalls: { fn: string; args: unknown[] }[] = [];
   let n = 0;
+  // What PayPal says each subscription is now. Unset means ACTIVE.
+  const subStatus = new Map<string, string>();
+  // What the balance read answers: the balances, or an error such as a sandbox that refuses it.
+  const balance: { reply: Balance[] | Error } = { reply: [{ currency: 'USD', available: '1240.50', primary: true }] };
+  // Each payout batch's one item. A test sets status to SUCCESS to play a recipient who already claimed it.
+  const payoutItems = new Map<string, { itemId: string; status: string }>();
   const pp: PayPal = {
     async createAndSendInvoice(...args) {
       calls.push({ fn: 'invoice', args });
@@ -48,6 +54,34 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       return { id: `INV2-SEED-${++n}`, status: 'UNPAID', payLink: `https://paypal.test/inv/${n}`, dueDate: args[0].dueDate };
     },
     async recordPayment(...args) { calls.push({ fn: 'record_payment', args }); return { paymentId: `EXTR-${++n}` }; },
+    async getSubscription(id) { calls.push({ fn: 'get_subscription', args: [id] }); return { status: subStatus.get(id) ?? 'ACTIVE', nextBillingAt: '2026-12-01T10:00:00Z', lastPaidAt: null }; },
+    async changeSubscription(...args) {
+      calls.push({ fn: 'change_subscription', args });
+      subStatus.set(args[0], { suspend: 'SUSPENDED', activate: 'ACTIVE', cancel: 'CANCELLED' }[args[1]]);
+    },
+    async deleteRecordedPayment(...args) { calls.push({ fn: 'delete_payment', args }); },
+    async cancelInvoice(...args) { calls.push({ fn: 'cancel_invoice', args }); },
+    async recordRefund(...args) { calls.push({ fn: 'record_refund', args }); return { refundId: `RFX-${++n}` }; },
+    async createPayout(...args) {
+      calls.push({ fn: 'payout', args });
+      await sleep(opts.paypalDelayMs);
+      const batchId = `BATCH-${++n}`;
+      payoutItems.set(batchId, { itemId: `ITEM-${n}`, status: 'UNCLAIMED' });
+      return { batchId, status: 'PENDING' };
+    },
+    async getPayoutItem(batchId) { calls.push({ fn: 'payout_item', args: [batchId] }); return payoutItems.get(batchId) ?? null; },
+    async cancelPayoutItem(...args) {
+      calls.push({ fn: 'payout_cancel', args });
+      for (const it of payoutItems.values()) if (it.itemId === args[0]) it.status = 'RETURNED';
+      return { status: 'RETURNED' };
+    },
+    async acceptClaim() {},
+    async makeOffer() {},
+    async getBalances() {
+      calls.push({ fn: 'balances', args: [] });
+      if (balance.reply instanceof Error) throw balance.reply;
+      return balance.reply;
+    },
   };
   // PayPal data per user, standing in for each user's own connected merchant account.
   const ppData = new Map<string, { txns?: PayPalTxn[] | Error; disputes?: PayPalDisputeDetail[] }>();
@@ -64,6 +98,8 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       async listDisputes() { calls.push({ fn: 'disputes', args: [userId] }); return list(); },
       async getDispute(id) { return d.disputes?.find((x) => x.id === id) ?? null; },
       async sendDisputeMessage(...args) { calls.push({ fn: 'dispute_message', args: [userId, ...args] }); },
+      async acceptClaim(...args) { calls.push({ fn: 'accept_claim', args: [userId, ...args] }); },
+      async makeOffer(...args) { calls.push({ fn: 'make_offer', args: [userId, ...args] }); },
     };
   };
   const rewrite = (text: string) => {
@@ -94,7 +130,9 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     async refine(...args) { aiCalls.push({ fn: 'refine', args }); return rewrite(args[0]); },
     async toneCheck(...args) { aiCalls.push({ fn: 'toneCheck', args }); return opts.tone ?? { tone: 'ok', calm: null }; },
   };
-  const app = createApp({ db, cipher, ai, paypal: { forUser, forAccount: (userId) => forUser(userId), platform: () => pp, partner: () => opts.partner ?? noPartner }, now: opts.now, apple: opts.apple, onNewUser: opts.onNewUser });
+  // Each forAccount call: which account an action on an existing object ran on.
+  const accounts: { userId: string; account: string | null }[] = [];
+  const app = createApp({ db, cipher, ai, paypal: { forUser, forAccount: (userId, account) => { accounts.push({ userId, account }); return forUser(userId); }, platform: () => pp, partner: () => opts.partner ?? noPartner }, now: opts.now, apple: opts.apple, onNewUser: opts.onNewUser });
   const device = () => {
     const userId = db.createUser();
     const token = randomToken('pkd');
@@ -114,7 +152,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  return { db, cipher, app, calls, aiCalls, device, call, ppData, mockPayPal: pp };
+  return { db, cipher, app, calls, aiCalls, device, call, ppData, mockPayPal: pp, subStatus, balance, payoutItems, accounts };
 }
 
 const noPartner: PayPalPartner = {

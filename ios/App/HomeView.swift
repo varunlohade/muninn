@@ -234,7 +234,7 @@ struct HomeView: View {
                 if a.billed {
                     Text("Billed").font(Theme.Font.label).foregroundStyle(Theme.Color.paid)
                 } else if ended {
-                    AskChip(title: "Bill \(a.who)?", detail: nil) { ask.prefill(a.invoicePrefix + " $") }
+                    AskChip(title: "Invoice \(a.who)", detail: nil) { ask.prefill(a.invoicePrefix + " $") }
                         .accessibilityIdentifier("today.bill.\(a.who)")
                 }
             }
@@ -401,6 +401,8 @@ final class AskModel: ObservableObject {
         case idle, loading, chips([Chip]), clients([Client]), lookup(LookupResult), unpaid([UnpaidClient]), review(String), confirm(Chip, String), ask(Chip, String), working, result(ActionResult), line(String), error(String)
         /// A money call that may not have run and no lookup found. A tap sends it again with the same key.
         case retry(Chip, String?)
+        /// Done, and PayPal can undo it: "Paused ✓" with Undo.
+        case undoable(String, Chip)
     }
     @Published var text = ""
     @Published var state: State = .idle
@@ -442,7 +444,7 @@ final class AskModel: ObservableObject {
     private func show(_ result: AskResponse.Result) {
         switch result {
         case .chips(let chips):
-            state = chips.isEmpty ? .error("No action for that yet. Try \"invoice Sam $45 for a haircut\".") : .chips(chips)
+            state = chips.isEmpty ? .line(AskModel.hint) : .chips(chips)
         case .text(let line), .line(let line):
             state = .line(line)
         case .tone(let t):
@@ -459,8 +461,9 @@ final class AskModel: ObservableObject {
             state = .lookup(found)
         case .disputes(let disputes):
             let money = disputes.compactMap(\.amount).map { formatMoney($0.value, $0.currency_code) }
+            // The answers live on the Disputes page: Reply, Offer, Accept.
             state = .line(disputes.isEmpty ? "No disputes \u{2713}"
-                : (["\(disputes.count) dispute\(disputes.count == 1 ? "" : "s")"] + money.prefix(3)).joined(separator: " \u{00B7} "))
+                : (["\(disputes.count) open"] + money.prefix(3)).joined(separator: " \u{00B7} ") + ". Answer in Disputes on Home.")
         case .addNote(let note):
             store.notes.insert(Note(text: note), at: 0)
             text = ""
@@ -523,6 +526,7 @@ final class AskModel: ObservableObject {
                 case .sent(let r): state = .result(r)
                 case .insert(let line), .line(let line): state = .line(line)
                 case .ask(let question, let next): state = .ask(next, question)
+                case .undoable(let line, let undo): state = .undoable(line, undo)
                 }
                 text = ""
             } catch APIError.needsConfirm(let r) {
@@ -531,9 +535,12 @@ final class AskModel: ObservableObject {
         }
     }
 
+    /// The neutral line when no action fits: every verb, not only invoices.
+    static let hint = "Try: invoice Sam $45 \u{00B7} nudge Ana \u{00B7} refund Sam $20 \u{00B7} who owes me"
+
     static func resultTitle(_ r: ActionResult) -> String {
         switch r.kind {
-        case "invoice": "Invoice sent \u{00B7} \(r.money)"
+        case "invoice": r.emailed ? "Invoice emailed \u{00B7} \(r.money)" : "Invoice link ready \u{00B7} \(r.money)"
         case "subscribe": "Repeat billing ready \u{00B7} \(r.money)"
         default: "Pay link ready \u{00B7} \(r.money)"
         }
@@ -675,6 +682,13 @@ struct AskBar: View {
         case .line(let line):
             Text(line).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
                 .textSelection(.enabled)
+        case .undoable(let line, let undo):
+            HStack(spacing: Theme.Space.xs) {
+                Text(line).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.paid).padding(.leading, Theme.Space.m)
+                AskChip(title: "Undo", detail: nil) { model.run(undo) }
+                    .accessibilityIdentifier("ask.undo")
+            }
+            .padding(.bottom, Theme.Space.xs)
         case .working:
             Text("Creating…").font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
         case .result(let r):

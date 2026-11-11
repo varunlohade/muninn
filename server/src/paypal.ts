@@ -20,7 +20,30 @@ export type PayPal = {
   createDatedInvoice(i: DatedInvoiceInput, requestId: string): Promise<{ id: string; status: string; payLink: string; dueDate: string }>;
   recordPayment(id: string, p: { date: string; value: string; currency: string; method: string; note: string }, requestId: string): Promise<{ paymentId: string }>;
   warmUp(): Promise<void>;
+  getSubscription(id: string): Promise<SubscriptionState>;
+  /** suspend = pause, activate = resume, cancel = end for good. */
+  changeSubscription(id: string, to: 'suspend' | 'activate' | 'cancel', reason: string, requestId: string): Promise<void>;
+  /** Takes back a payment recordPayment made. `paymentId` is what recordPayment returned. */
+  deleteRecordedPayment(invoiceId: string, paymentId: string, requestId: string): Promise<void>;
+  /** `notify`: PayPal emails the client that the invoice is cancelled. */
+  cancelInvoice(id: string, notify: boolean, requestId: string): Promise<void>;
+  /** Notes a refund that happened outside PayPal. No money moves. */
+  recordRefund(id: string, r: { date: string; value: string; currency: string; method: string }, requestId: string): Promise<{ refundId: string }>;
+  /** Every currency the account holds. Read-only. */
+  getBalances(): Promise<Balance[]>;
+  /** Sends money to one email. MONEY: the caller confirms recipient, amount and currency first. */
+  createPayout(p: { email: string; value: string; currency: string; note: string }, requestId: string): Promise<{ batchId: string; status: string }>;
+  /** The one item of a payout batch, or null while PayPal has not made it yet. */
+  getPayoutItem(batchId: string): Promise<{ itemId: string; status: string } | null>;
+  /** Only an UNCLAIMED item can be cancelled; the money goes back to the sender. */
+  cancelPayoutItem(itemId: string, requestId: string): Promise<{ status: string }>;
+  /** Gives the buyer the full disputed amount back and closes the dispute. MONEY. */
+  acceptClaim(id: string, note: string, requestId: string): Promise<void>;
+  /** Offers the buyer a refund to close the dispute. The buyer accepts or not. */
+  makeOffer(id: string, o: { note: string; value: string; currency: string }, requestId: string): Promise<void>;
 };
+export type Balance = { currency: string; available: string; primary: boolean };
+export type SubscriptionState = { status: string; nextBillingAt: string | null; lastPaidAt: string | null };
 // Explicit dates and a reference tag; sent without emailing the recipient. Used by the demo seed.
 // invoiceNumber is unique per merchant, so a re-run finds the invoice a crashed run left behind instead of making a second one.
 export type DatedInvoiceInput = InvoiceInput & { invoiceDate: string; dueDate: string; reference: string; invoiceNumber: string };
@@ -363,6 +386,71 @@ function createClient(creds: Creds, accessToken: () => Promise<string>, seller: 
         method: p.method, payment_date: p.date, note: p.note, amount: { currency_code: p.currency, value: p.value },
       }, requestId);
       return { paymentId: String(r?.payment_id ?? '') };
+    },
+
+    async getSubscription(id) {
+      const s = await rest('GET', `/v1/billing/subscriptions/${encodeURIComponent(id)}`);
+      return {
+        status: String(s?.status ?? 'UNKNOWN'), nextBillingAt: s?.billing_info?.next_billing_time ?? null,
+        lastPaidAt: s?.billing_info?.last_payment?.time ?? null,
+      };
+    },
+
+    async changeSubscription(id, to, reason, requestId) {
+      await rest('POST', `/v1/billing/subscriptions/${encodeURIComponent(id)}/${to}`, { reason: reason.slice(0, 127) }, requestId);
+    },
+
+    async deleteRecordedPayment(invoiceId, paymentId, requestId) {
+      await rest('DELETE', `/v2/invoicing/invoices/${encodeURIComponent(invoiceId)}/payments/${encodeURIComponent(paymentId)}`, undefined, requestId);
+    },
+
+    async cancelInvoice(id, notify, requestId) {
+      await rest('POST', `/v2/invoicing/invoices/${encodeURIComponent(id)}/cancel`, { send_to_recipient: notify, send_to_invoicer: false }, requestId);
+    },
+
+    async recordRefund(id, r, requestId) {
+      const out = await rest('POST', `/v2/invoicing/invoices/${encodeURIComponent(id)}/refunds`, {
+        method: r.method, refund_date: r.date, amount: { currency_code: r.currency, value: r.value },
+      }, requestId);
+      return { refundId: String(out?.refund_id ?? '') };
+    },
+
+    async getBalances() {
+      const r = await rest('GET', '/v1/reporting/balances');
+      return (r?.balances ?? []).filter((b: any) => b?.currency && b?.available_balance?.value != null).map((b: any) => ({
+        currency: String(b.currency), available: String(b.available_balance.value), primary: !!b.primary,
+      }));
+    },
+
+    async createPayout(p, requestId) {
+      const r = await rest('POST', '/v1/payments/payouts', {
+        sender_batch_header: { sender_batch_id: requestId, email_subject: 'You have a payment', email_message: p.note.slice(0, 1000) },
+        items: [{ recipient_type: 'EMAIL', receiver: p.email, amount: { value: p.value, currency: p.currency }, note: p.note.slice(0, 4000), sender_item_id: requestId.slice(0, 63) }],
+      }, requestId);
+      const batchId = String(r?.batch_header?.payout_batch_id ?? '');
+      if (!batchId) throw new PayPalError('PayPal returned no payout batch id', 502);
+      return { batchId, status: String(r?.batch_header?.batch_status ?? 'PENDING') };
+    },
+
+    async getPayoutItem(batchId) {
+      const r = await rest('GET', `/v1/payments/payouts/${encodeURIComponent(batchId)}`);
+      const it = r?.items?.[0];
+      return it?.payout_item_id ? { itemId: String(it.payout_item_id), status: String(it.transaction_status ?? 'PENDING') } : null;
+    },
+
+    async cancelPayoutItem(itemId, requestId) {
+      const r = await rest('POST', `/v1/payments/payouts-item/${encodeURIComponent(itemId)}/cancel`, {}, requestId);
+      return { status: String(r?.transaction_status ?? 'RETURNED') };
+    },
+
+    async acceptClaim(id, note, requestId) {
+      await rest('POST', `/v1/customer/disputes/${encodeURIComponent(id)}/accept-claim`, { note: note.slice(0, 2000), accept_claim_type: 'REFUND' }, requestId);
+    },
+
+    async makeOffer(id, o, requestId) {
+      await rest('POST', `/v1/customer/disputes/${encodeURIComponent(id)}/make-offer`, {
+        note: o.note.slice(0, 2000), offer_type: 'REFUND', offer_amount: { currency_code: o.currency, value: o.value },
+      }, requestId);
     },
 
     async sendDisputeMessage(id, message, requestId) {

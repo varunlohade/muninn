@@ -16,6 +16,16 @@ protocol KeyboardAPI {
     func refine(_ text: String, tone: String) async throws -> WriteResponse
     func toneCheck(draft: String, client: String?) async throws -> ToneResponse
     func payments() async throws -> [Payment]
+    func more(_ path: String, _ body: [String: JSONValue], key: String, lookup: Bool) async throws -> MoreResponse
+    func moreRead(_ path: String) async throws -> MoreResponse
+}
+
+/// The intro demo has no PayPal actions beyond its scripted ones.
+extension KeyboardAPI {
+    func more(_ path: String, _ body: [String: JSONValue], key: String, lookup: Bool) async throws -> MoreResponse {
+        throw APIError.message("Open \(AppConfig.displayName) for this one")
+    }
+    func moreRead(_ path: String) async throws -> MoreResponse { throw APIError.message("Open \(AppConfig.displayName) for this one") }
 }
 
 extension APIClient: KeyboardAPI {}

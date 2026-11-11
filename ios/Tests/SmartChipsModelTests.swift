@@ -132,7 +132,7 @@ final class SmartChipsModelTests: XCTestCase {
     }
 
     func testEmptyFieldShowsReadyChipsFromTheSnapshot() async {
-        XCTAssertEqual(model.barItems.map(\.title), ["Who paid?", "Notes"])
+        XCTAssertEqual(model.barItems.map(\.title), ["Who owes you", "Notes"])
         store.unpaidCount = 2
         host.text = "hi"
         model.textChanged()

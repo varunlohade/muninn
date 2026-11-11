@@ -94,7 +94,7 @@ struct WhoPaidStrip: View {
             Spacer(minLength: 0)
             if let chip = c.remind {
                 Button { model.tapChip(chip) } label: {
-                    Text("Remind").font(M.mode.weight(.medium)).foregroundStyle(palette.accent)
+                    Text("Nudge").font(M.mode.weight(.medium)).foregroundStyle(palette.accent)
                         .padding(.horizontal, Theme.Space.s).frame(height: Self.rowHeight).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
