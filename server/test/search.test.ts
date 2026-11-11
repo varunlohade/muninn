@@ -154,6 +154,7 @@ test('ask: the same search, an empty result, and the remind chip keeps its confi
   assert.equal((await w.lookup("ana's invoice"))?.label, 'No invoices for Ana Lopez yet', 'the chip still names who');
   // The Remind chip in a result goes through /v1/actions/remind, which still asks for the confirm.
   const remind = r.result.candidates[0].records[0].remind;
+  assert.equal(remind.label, `Nudge ${r.result.candidates[0].name} · $${Number(remind.payload.amount)} owed`);
   const first = await w.s.call(w.token, 'POST', '/v1/actions/remind', { invoice_id: remind.payload.invoice_id });
   assert.equal(first.status, 409);
   assert.equal((await first.json()).needs_confirm, true);

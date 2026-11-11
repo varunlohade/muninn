@@ -7,7 +7,7 @@ import XCTest
 @MainActor
 final class LookupTests: XCTestCase {
     static let samJSON = #"""
-    {"chips":[{"kind":"lookup","label":"Sam Lee's invoice · $120 · unpaid · Nov 9","payload":{"kind":"money","noun":"invoice","query":"sam","match":"exact","candidates":[{"name":"Sam Lee","records":[{"kind":"invoice","id":"INV2-cba387ce","title":"Color","amount":"120.00","currency":"USD","date":"2026-11-09","date_label":"Nov 9","state":"unpaid","link":"https://paypal.test/inv/INV2-cba387ce","line":"Your invoice for $120 (Nov 9) is here: https://paypal.test/inv/INV2-cba387ce","remind":{"kind":"remind","label":"Remind Sam Lee · $120","payload":{"invoice_id":"INV2-cba387ce","client_name":"Sam Lee","amount":"120.00","currency":"USD"},"needs_confirm":true}},{"kind":"invoice","id":"INV2-b47df4c0","title":"Haircut","amount":"45.00","currency":"USD","date":"2026-10-20","date_label":"Oct 20","state":"paid","link":"https://paypal.test/inv/INV2-b47df4c0","line":"Your invoice for $45 (Oct 20) is paid. Thank you!"},{"kind":"invoice","id":"INV2-dcdd25a5","title":"Blowout","amount":"60.00","currency":"USD","date":"2026-09-22","date_label":"Sep 22","state":"paid","link":"https://paypal.test/inv/INV2-dcdd25a5","line":"Your invoice for $60 (Sep 22) is paid. Thank you!"}],"empty_line":null}],"note":null,"new_invoice":false},"needs_confirm":false,"trigger":"invoice for sam"}],"intent":"lookup","confidence":1,"timings":{"total_ms":12}}
+    {"chips":[{"kind":"lookup","label":"Sam Lee's invoice · $120 · unpaid · Nov 9","payload":{"kind":"money","noun":"invoice","query":"sam","match":"exact","candidates":[{"name":"Sam Lee","records":[{"kind":"invoice","id":"INV2-cba387ce","title":"Color","amount":"120.00","currency":"USD","date":"2026-11-09","date_label":"Nov 9","state":"unpaid","link":"https://paypal.test/inv/INV2-cba387ce","line":"Your invoice for $120 (Nov 9) is here: https://paypal.test/inv/INV2-cba387ce","remind":{"kind":"remind","label":"Nudge Sam Lee · $120 owed","payload":{"invoice_id":"INV2-cba387ce","client_name":"Sam Lee","amount":"120.00","currency":"USD"},"needs_confirm":true}},{"kind":"invoice","id":"INV2-b47df4c0","title":"Haircut","amount":"45.00","currency":"USD","date":"2026-10-20","date_label":"Oct 20","state":"paid","link":"https://paypal.test/inv/INV2-b47df4c0","line":"Your invoice for $45 (Oct 20) is paid. Thank you!"},{"kind":"invoice","id":"INV2-dcdd25a5","title":"Blowout","amount":"60.00","currency":"USD","date":"2026-09-22","date_label":"Sep 22","state":"paid","link":"https://paypal.test/inv/INV2-dcdd25a5","line":"Your invoice for $60 (Sep 22) is paid. Thank you!"}],"empty_line":null}],"note":null,"new_invoice":false},"needs_confirm":false,"trigger":"invoice for sam"}],"intent":"lookup","confidence":1,"timings":{"total_ms":12}}
     """#
     static let anaJSON = #"""
     {"chips":[{"kind":"lookup","label":"No invoices for Ana Lopez yet","payload":{"kind":"money","noun":"invoice","query":"ana","match":"exact","candidates":[{"name":"Ana Lopez","records":[],"empty_line":"No invoices yet"}],"note":null,"new_invoice":false},"needs_confirm":false,"trigger":"ana's invoice"}],"intent":"lookup","confidence":1,"timings":{"total_ms":3}}
@@ -122,7 +122,7 @@ final class LookupTests: XCTestCase {
         let sam = try XCTUnwrap(found.candidates.first)
         XCTAssertEqual(LookupCopy.newInvoiceName(found, sam), "Sam Lee", "records shown, and New invoice offered")
         XCTAssertEqual(LookupCopy.hint(sam.records[0], insertWord: "Insert", offersNew: true),
-                       "Insert gives you a line with this invoice. Remind and New invoice ask you to confirm first.")
+                       "Insert gives you a line with this invoice. Nudge and New invoice ask you to confirm first.")
         model.newInvoiceFromLookup("Sam Lee")
         XCTAssertEqual(model.bar, .done("Type the amount for Sam"))
         XCTAssertFalse(api.calls.contains("invoice"), "no invoice before the amount and the confirm")
@@ -135,7 +135,7 @@ final class LookupTests: XCTestCase {
         XCTAssertEqual(LookupCopy.header(r, sam), "Sam Lee \u{00B7} latest invoice")
         XCTAssertEqual(LookupCopy.row(sam.records[0]), "$120 \u{00B7} unpaid \u{00B7} Nov 9")
         XCTAssertEqual(LookupCopy.hint(sam.records[0], insertWord: "Insert"),
-                       "Insert gives you a line with this invoice and its link. Remind asks before it sends.")
+                       "Insert gives you a line with this invoice and its link. Nudge asks before it sends.")
         XCTAssertEqual(LookupCopy.hint(sam.records[1], insertWord: "Copy"), "Copy gives you a line with this invoice.")
         XCTAssertNil(LookupCopy.newInvoiceName(r, sam), "a client with records gets no New invoice")
         XCTAssertNil(LookupResult(chip: Chip(kind: "invoice", label: "x", payload: [:], needs_confirm: true)))

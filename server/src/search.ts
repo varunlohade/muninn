@@ -54,7 +54,7 @@ export type Rec = {
   state: string; date: string | null; date_label: string | null; link: string | null;
   /** The short line Insert types for the client. */
   line: string;
-  /** An unpaid invoice's Remind chip: the same chip and confirm as /v1/suggest. */
+  /** An unpaid invoice's Nudge chip: the same chip and confirm as /v1/suggest. */
   remind?: { kind: 'remind'; label: string; payload: Record<string, unknown>; needs_confirm: true };
 };
 export type Candidate = { name: string; records: Rec[]; empty_line: string | null };
@@ -91,7 +91,7 @@ function record(row: Row, name: string): Rec {
         : state === 'cancelled' ? `Your invoice for ${money} (${d}) was cancelled.`
           : link ? `Your invoice for ${money} (${d}) is here: ${link}` : `Your invoice for ${money} (${d}) is still open.`;
     const remind = state === 'unpaid' && !row.r.paid_at
-      ? { kind: 'remind' as const, label: `Remind ${name} · ${money}`, payload: { invoice_id: r.id, client_name: name, amount: base.amount, currency: r.currency }, needs_confirm: true as const }
+      ? { kind: 'remind' as const, label: `Nudge ${name} · ${money} owed`, payload: { invoice_id: r.id, client_name: name, amount: base.amount, currency: r.currency }, needs_confirm: true as const }
       : undefined;
     return { kind: 'invoice', ...base, state, link, line, ...(remind ? { remind } : {}) };
   }

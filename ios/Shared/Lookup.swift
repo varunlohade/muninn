@@ -16,7 +16,7 @@ struct LookupResult: Codable, Equatable {
         let link: String?
         /// The short line Insert types for the client.
         let line: String
-        /// An unpaid invoice's Remind chip. It goes through the same confirm as every reminder.
+        /// An unpaid invoice's Nudge chip. It goes through the same confirm as every reminder.
         let remind: Chip?
     }
     struct Candidate: Codable, Equatable, Identifiable {
@@ -69,12 +69,12 @@ enum LookupCopy {
         guard let rec else { return "New invoice asks for the amount, then you confirm before anything is sent." }
         if offersNew {
             let first = "\(insertWord) gives you a line with this \(kindWord[rec.kind] ?? "record")."
-            return first + (rec.remind == nil ? " New invoice asks for the amount, then you confirm." : " Remind and New invoice ask you to confirm first.")
+            return first + (rec.remind == nil ? " New invoice asks for the amount, then you confirm." : " Nudge and New invoice ask you to confirm first.")
         }
         let what = rec.kind == "item" ? "the price" : "this \(kindWord[rec.kind] ?? "record")"
         let link = rec.line.contains("https://") ? " and its link" : ""
         let insert = "\(insertWord) gives you a line with \(what)\(link)."
-        return rec.remind == nil ? insert : insert + " Remind asks before it sends."
+        return rec.remind == nil ? insert : insert + " Nudge asks before it sends."
     }
 
     /// "Invoice Sam Lee $": the Ask bar's start of a new invoice. The amount comes next, then the confirm.
@@ -170,7 +170,7 @@ struct LookupCard: View {
                 let newFor = LookupCopy.newInvoiceName(result, c)
                 HStack(spacing: Theme.Space.xs) {
                     action(insertWord, id: "lookup.insert") { onInsert(top) }
-                    if let remind = top.remind { action("Remind", id: "lookup.remind") { onRemind(remind) } }
+                    if let remind = top.remind { action("Nudge", id: "lookup.remind") { onRemind(remind) } }
                     if let newFor { action("New invoice", id: "lookup.new") { onNewInvoice(newFor) } }
                 }
                 muted(LookupCopy.hint(top, insertWord: insertWord, offersNew: newFor != nil))
