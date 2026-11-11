@@ -251,9 +251,10 @@ export function createApp(deps: Deps) {
     const t0 = performance.now();
     const timings: Record<string, number> = {};
     let path = 'regex_none';
+    let parallel = false;
     const done = (chips: Chip[], intent: string, confidence: number) => {
       timings.total_ms = Math.round(performance.now() - t0);
-      log('suggest', { user_id: userId, path, paid_calls: path === 'regex_none' ? 0 : path === 'jev_only' ? 1 : 2, intent, confidence, chips: chips.length, ...timings });
+      log('suggest', { user_id: userId, path, paid_calls: path === 'regex_none' ? 0 : path === 'jev_only' ? 1 : 2, parallel, intent, confidence, chips: chips.length, ...timings });
       return c.json({ chips, intent, confidence, timings });
     };
 
@@ -271,10 +272,10 @@ export function createApp(deps: Deps) {
         (e) => { timings.extract_ms = Math.round(performance.now() - t0); log('extract_failed', { err: (e as Error).message }); return null; },
       );
     };
-    // A stated amount almost always means a money action, so extraction starts alongside jev
-    // (total about max(jev, extract)) unless the regex already fills a pay link (amount and item) or a refund.
-    let extracting = q.amount !== null && !known.pay_link && !known.refund ? extract() : null;
-
+    // A money signal the regex cannot fully fill: extraction starts alongside jev, so the total is about
+    // max(jev, extract), and its result is dropped if jev finds no action. Skipped when the regex filled an intent.
+    let extracting = Object.values(known).some(Boolean) ? null : extract();
+    parallel = !!extracting;
     path = extracting ? 'jev+extract' : 'jev_only';
     let cls;
     try {

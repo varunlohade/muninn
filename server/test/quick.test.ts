@@ -29,17 +29,18 @@ test('quick: obvious chat is none; money words, amounts and other scripts are no
 });
 
 // Before this change every suggest past validation paid for jev and a speculative extract: 2 calls.
+// mode: 'parallel' (extract starts before jev), 'sequential' (jev, then extract: slower, never wanted), or '-'.
 type Row = { text: string; context?: string; intent: Intent; path: 'regex_none' | 'jev_only' | 'jev+extract' };
 const TABLE: Row[] = [
   { text: 'hi!', intent: 'none', path: 'regex_none' },
   { text: 'thanks so much, see you tomorrow', intent: 'none', path: 'regex_none' },
-  { text: 'running 5 min late sorry', intent: 'none', path: 'jev_only' },
+  { text: 'running 5 min late sorry', intent: 'none', path: 'jev+extract' },
   { text: 'ok', intent: 'none', path: 'regex_none' },
   { text: 'lol yes', intent: 'none', path: 'regex_none' },
   { text: 'did ana pay yet?', intent: 'payment_status', path: 'jev_only' },
-  { text: 'who still owes me?', intent: 'payment_status', path: 'jev_only' },
-  { text: '', context: 'how much is a haircut?', intent: 'catalog_reply', path: 'jev_only' },
-  { text: 'what are your prices', intent: 'catalog_reply', path: 'jev_only' },
+  { text: 'who still owes me?', intent: 'payment_status', path: 'jev+extract' },
+  { text: '', context: 'how much is a haircut?', intent: 'catalog_reply', path: 'jev+extract' },
+  { text: 'what are your prices', intent: 'catalog_reply', path: 'jev+extract' },
   { text: '$45 for the haircut, sam@example.com', intent: 'create_invoice', path: 'jev_only' },
   { text: "that'll be $45 for the beard trim", intent: 'create_invoice', path: 'jev+extract' },
   { text: 'invoice sam 45 haircut', intent: 'create_invoice', path: 'jev+extract' },
@@ -67,19 +68,22 @@ async function world(opts: Parameters<typeof setup>[0]) {
 }
 
 test('suggest paths: paid calls per message, before vs after', async (t) => {
-  const lines = ['| message | intent | path | paid before | paid after |', '|---|---|---|---|---|'];
+  const lines = ['| message | intent | path | mode | paid before | paid after |', '|---|---|---|---|---|---|'];
   let before = 0, after = 0;
   for (const row of TABLE) {
     const { s, suggest } = await world({ cls: { intent: row.intent }, ext: { client_name: null, client_email: null, amount: null, item: null } });
     await suggest(row.text, row.context);
-    const fns = s.aiCalls.map((c) => c.fn).sort();
+    const order = s.aiCalls.map((c) => c.fn);
+    const fns = [...order].sort();
     const path = fns.length === 0 ? 'regex_none' : fns.includes('extract') ? 'jev+extract' : 'jev_only';
+    const mode = !fns.includes('extract') ? '-' : order.indexOf('extract') < order.indexOf('classify') ? 'parallel' : 'sequential';
     assert.equal(path, row.path, row.text);
     assert.equal(fns.length, PAID[row.path], row.text);
+    assert.notEqual(mode, 'sequential', row.text);
     before += 2; after += fns.length;
-    lines.push(`| ${row.context ? `[client] ${row.context}` : row.text} | ${row.intent} | ${path} | 2 | ${fns.length} |`);
+    lines.push(`| ${row.context ? `[client] ${row.context}` : row.text} | ${row.intent} | ${path} | ${mode} | 2 | ${fns.length} |`);
   }
-  lines.push(`| total (${TABLE.length}) | | | ${before} | ${after} |`);
+  lines.push(`| total (${TABLE.length}) | | | | ${before} | ${after} |`);
   t.diagnostic(`\n${lines.join('\n')}`);
   assert.ok(TABLE.length >= 15);
 });
