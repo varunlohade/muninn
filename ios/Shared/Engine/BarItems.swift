@@ -62,7 +62,7 @@ enum BarItems {
         case .working(let text):
             out.append(Item(id: "working", title: text, tone: .secondary))
         case .confirm(let chip, let recipient):
-            out.append(Item(id: "confirm", title: "Send to \(recipient)", tone: .accent, action: .confirm(chip, recipient: recipient)))
+            out.append(Item(id: "confirm", title: confirmTitle(chip, recipient: recipient), tone: .accent, action: .confirm(chip, recipient: recipient)))
             out.append(Item(id: "cancel", title: "Cancel", action: .cancelConfirm))
         case .ask(let chip, let question):
             out.append(Item(id: "confirm", title: question, tone: .accent, action: .chip(chip)))
@@ -80,11 +80,30 @@ enum BarItems {
         return nil
     }
 
+    /// A chip from the pay shortcut may have no currency. Then the server uses the profile's, and the bar shows the bare amount.
+    private static func money(_ chip: Chip) -> String {
+        string(chip, "amount").map { a in string(chip, "currency").map { formatMoney(a, $0) } ?? formatMoney(a, "").trimmingCharacters(in: .whitespaces) } ?? ""
+    }
+
     static func title(_ chip: Chip) -> String {
         guard chip.kind == "invoice" || chip.kind == "paylink" else { return chip.label }
-        // A chip from the pay shortcut may have no currency. Then the server uses the profile's, and the bar shows the bare amount.
-        let money = string(chip, "amount").map { a in string(chip, "currency").map { formatMoney(a, $0) } ?? formatMoney(a, "").trimmingCharacters(in: .whitespaces) } ?? ""
-        return [chip.kind == "invoice" ? "Invoice" : "Pay link", money, string(chip, "item") ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+        return [chip.kind == "invoice" ? "Invoice" : "Pay link", money(chip), string(chip, "item") ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// Every invoice, and a pay link the server is unsure of, takes one confirm tap before anything is sent.
+    static func asksFirst(_ chip: Chip) -> Bool {
+        chip.kind == "invoice" || (chip.kind == "paylink" && chip.needs_confirm)
+    }
+
+    /// Who an invoice goes to: the email, else the client name, else nobody named.
+    static func recipient(_ chip: Chip) -> String {
+        chip.kind == "invoice" ? string(chip, "client_email") ?? string(chip, "client_name") ?? "" : ""
+    }
+
+    /// The confirm shows what the tap sends: "Send $45 invoice to bob@x.com?", "Create $45 pay link?".
+    static func confirmTitle(_ chip: Chip, recipient: String) -> String {
+        let words = chip.kind == "paylink" ? ["Create", money(chip), "pay link"] : ["Send", money(chip), "invoice"] + (recipient.isEmpty ? [] : ["to", recipient])
+        return words.filter { !$0.isEmpty }.joined(separator: " ") + "?"
     }
 
     /// The recipient stays visible on an invoice (security review M2).

@@ -175,7 +175,8 @@ struct APIClient {
     }
 
     /// `key` is the Idempotency-Key of a money call. A retry passes the same key, so the server runs the action once.
-    private func request(_ method: String, _ path: String, body: Encodable? = nil, tap: Bool = false, key: String? = nil) throws -> URLRequest {
+    /// `lookup` asks only for the stored answer of `key`: the server never runs the action, and says 404 when it has none.
+    private func request(_ method: String, _ path: String, body: Encodable? = nil, tap: Bool = false, key: String? = nil, lookup: Bool = false) throws -> URLRequest {
         guard let token else { throw APIError.notPaired }
         guard let url = URL(string: baseURL + path) else { throw APIError.message("Server address is wrong") }
         var r = URLRequest(url: url, timeoutInterval: 20)
@@ -191,6 +192,7 @@ struct APIClient {
         if tap {
             r.setValue("tap", forHTTPHeaderField: "X-User-Action")
             r.setValue(key ?? UUID().uuidString, forHTTPHeaderField: "Idempotency-Key")
+            if lookup { r.setValue("1", forHTTPHeaderField: "Idempotency-Lookup") }
         }
         return r
     }
@@ -211,19 +213,19 @@ struct APIClient {
         return try await send(request("POST", "/v1/suggest", body: body), as: SuggestResponse.self)
     }
 
-    func invoice(_ payload: [String: JSONValue], key: String) async throws -> InvoiceResponse {
-        try await send(request("POST", "/v1/actions/invoice", body: payload, tap: true, key: key), as: InvoiceResponse.self)
+    func invoice(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> InvoiceResponse {
+        try await send(request("POST", "/v1/actions/invoice", body: payload, tap: true, key: key, lookup: lookup), as: InvoiceResponse.self)
     }
 
-    func payLink(_ payload: [String: JSONValue], key: String) async throws -> PayLinkResponse {
+    func payLink(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> PayLinkResponse {
         // The paylink route is strict: send only the fields it accepts.
         let keys: Set = ["amount", "currency", "item", "client_name"]
         let body = payload.filter { keys.contains($0.key) && $0.value != .null }
-        return try await send(request("POST", "/v1/actions/paylink", body: body, tap: true, key: key), as: PayLinkResponse.self)
+        return try await send(request("POST", "/v1/actions/paylink", body: body, tap: true, key: key, lookup: lookup), as: PayLinkResponse.self)
     }
 
-    func remind(invoiceID: String, key: String) async throws -> RemindResponse {
-        try await send(request("POST", "/v1/actions/remind", body: ["invoice_id": invoiceID], tap: true, key: key), as: RemindResponse.self)
+    func remind(invoiceID: String, key: String, lookup: Bool) async throws -> RemindResponse {
+        try await send(request("POST", "/v1/actions/remind", body: ["invoice_id": invoiceID], tap: true, key: key, lookup: lookup), as: RemindResponse.self)
     }
 
     /// `body` is {id, amount} to get a confirm token, or {confirm_token} to run the refund.

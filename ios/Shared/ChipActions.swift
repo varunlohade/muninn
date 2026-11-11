@@ -27,28 +27,32 @@ struct PendingAction: Codable, Equatable {
     let expires: Date
 }
 
-/// The key belongs to the chip, not the tap: the same chip within `ttl` sends the same key,
-/// so the server replays its stored answer instead of sending a second invoice.
+/// The key belongs to the chip in its field, not the tap: the same chip over the same text within `ttl` sends
+/// the same key, so the server replays its stored answer instead of sending a second invoice.
 enum ChipKeys {
     static let ttl: TimeInterval = 600
 
-    static func key(for chip: Chip, confirmed: String?, in store: KeyboardStore, now: Date) -> String {
+    /// `before` is the field text before the cursor, so the same chip typed to another client gets another key.
+    static func key(for chip: Chip, confirmed: String?, before: String, in store: KeyboardStore, now: Date) -> String {
         var keys = store.chipKeys.filter { $0.value.expires > now }
-        let id = fingerprint(chip, confirmed: confirmed)
+        let id = fingerprint(chip, confirmed: confirmed, before: before)
         let k = keys[id] ?? ChipKey(key: UUID().uuidString, expires: now + ttl)
         keys[id] = k
         store.chipKeys = keys
         return k.key
     }
 
-    /// Kind, payload and recipient: what makes the server request this chip sends.
-    private static func fingerprint(_ chip: Chip, confirmed: String?) -> String {
+    /// Kind, payload (amount, currency, item, email, client name), recipient and a hash of the field text.
+    private static func fingerprint(_ chip: Chip, confirmed: String?, before: String) -> String {
         let enc = JSONEncoder()
         enc.outputFormatting = .sortedKeys
         let value: JSONValue = .object(["kind": .string(chip.kind), "payload": .object(chip.payload),
-                                        "confirmed": confirmed.map { .string($0) } ?? .null])
-        let data = (try? enc.encode(value)) ?? Data()
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                                        "confirmed": confirmed.map { .string($0) } ?? .null, "before": .string(hex(Data(before.utf8)))])
+        return hex((try? enc.encode(value)) ?? Data())
+    }
+
+    private static func hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -66,6 +70,7 @@ enum ChipOutcome: Equatable {
 
 /// One place that runs a chip's action, for the keyboard and the app's Ask bar.
 /// Throws APIError.needsConfirm when the server wants the recipient confirmed first.
+/// `lookup` asks the server only for the stored answer of `key` and never runs the action (refunds always run).
 enum ChipActions {
     static let retryDelay: Duration = .milliseconds(1200)
     static let inProgressDelay: Duration = .seconds(2)
@@ -79,7 +84,7 @@ enum ChipActions {
     /// `source` is the message a reply answers. `key` is the Idempotency-Key; every retry sends it, so the
     /// server never runs a money action twice. `sleep` waits before a retry. `stillSending` runs while the
     /// server is still busy with the same key.
-    static func run(_ chip: Chip, confirmed: String?, source: String? = nil, api: KeyboardAPI, key: String = UUID().uuidString,
+    static func run(_ chip: Chip, confirmed: String?, source: String? = nil, api: KeyboardAPI, key: String = UUID().uuidString, lookup: Bool = false,
                     sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
                     stillSending: @MainActor () -> Void = {}) async throws -> ChipOutcome {
         func once<T>(_ work: () async throws -> T) async throws -> T {
@@ -101,8 +106,12 @@ enum ChipActions {
         switch chip.kind {
         case "invoice":
             var payload = chip.payload
-            if let confirmed { payload["confirm_recipient"] = .string(confirmed) }
-            let res = try await call { try await api.invoice(payload, key: key) }
+            // The confirm tap showed the amount and the recipient; the server checks both against the payload.
+            if let confirmed {
+                if case .string? = payload["client_email"] { payload["confirm_recipient"] = .string(confirmed) }
+                payload["confirm_amount"] = payload["amount"]
+            }
+            let res = try await call { try await api.invoice(payload, key: key, lookup: lookup) }
             guard let link = res.pay_link else { throw APIError.message("No link came back. Try again.") }
             // Item comes from the server-built chip, amount from the server's reply.
             let item = string(chip, "item") ?? "your order"
@@ -110,7 +119,7 @@ enum ChipActions {
             return .sent(ActionResult(id: res.id, kind: "invoice", link: link, money: money, who: who,
                                       message: "Here's your invoice for \(item) (\(money)): \(link)"))
         case "paylink":
-            let res = try await call { try await api.payLink(chip.payload, key: key) }
+            let res = try await call { try await api.payLink(chip.payload, key: key, lookup: lookup) }
             guard let link = res.approve_link else { throw APIError.message("No link came back. Try again.") }
             // A ";pay 45" chip has no currency: the server uses the profile's, and says which in its reply.
             let money = if let a = res.amount, let c = res.currency { formatMoney(a, c) }
@@ -118,7 +127,7 @@ enum ChipActions {
             return .sent(ActionResult(id: res.id, kind: "paylink", link: link, money: money, who: who, message: link))
         case "remind":
             guard let id = string(chip, "invoice_id") else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
-            _ = try await call { try await api.remind(invoiceID: id, key: key) }
+            _ = try await call { try await api.remind(invoiceID: id, key: key, lookup: lookup) }
             return .line("Reminder sent \u{2713}")
         case "refund":
             if let token = string(chip, "confirm_token") {

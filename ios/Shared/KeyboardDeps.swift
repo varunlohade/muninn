@@ -4,9 +4,10 @@ import UIKit
 /// The server calls the keyboard makes. APIClient is the real one; tests pass a fake.
 protocol KeyboardAPI {
     func suggest(_ text: String, context: String?) async throws -> SuggestResponse
-    func invoice(_ payload: [String: JSONValue], key: String) async throws -> InvoiceResponse
-    func payLink(_ payload: [String: JSONValue], key: String) async throws -> PayLinkResponse
-    func remind(invoiceID: String, key: String) async throws -> RemindResponse
+    /// `lookup`: return the stored answer for `key`, or throw a 404. Never runs the action.
+    func invoice(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> InvoiceResponse
+    func payLink(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> PayLinkResponse
+    func remind(invoiceID: String, key: String, lookup: Bool) async throws -> RemindResponse
     func refund(_ body: [String: JSONValue], key: String) async throws -> RefundResponse
     func reply(_ text: String) async throws -> ReplyResponse
     func fix(_ text: String) async throws -> WriteResponse

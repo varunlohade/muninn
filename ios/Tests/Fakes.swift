@@ -37,6 +37,8 @@ final class FakeAPI: KeyboardAPI {
     var failures: [Error] = []
     /// When set, invoice() throws needsConfirm unless the payload carries this confirm_recipient.
     var requireConfirm: String?
+    /// Keys whose call the fake server finished. A lookup answers only for these; else a 404.
+    var stored: Set<String> = []
 
     private(set) var calls: [String] = []
     private(set) var suggested: [(text: String, context: String?)] = []
@@ -58,19 +60,29 @@ final class FakeAPI: KeyboardAPI {
 
     private func fail() throws { if !failures.isEmpty { throw failures.removeFirst() } }
 
-    func invoice(_ payload: [String: JSONValue], key: String) async throws -> InvoiceResponse {
+    private func lookUp(_ kind: String, _ key: String) throws {
+        calls.append("lookup:\(kind)"); keys.append(key)
+        try fail()
+        if !stored.contains(key) { throw APIError.http(404, #"{"error":"not found"}"#) }
+    }
+
+    func invoice(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> InvoiceResponse {
+        if lookup { try lookUp("invoice", key); return invoiceReply }
         calls.append("invoice"); invoiced.append(payload); keys.append(key)
         try fail()
         if let r = requireConfirm, payload["confirm_recipient"] != .string(r) { throw APIError.needsConfirm(recipient: r) }
+        stored.insert(key)
         return invoiceReply
     }
 
-    func payLink(_ payload: [String: JSONValue], key: String) async throws -> PayLinkResponse {
-        calls.append("paylink"); keys.append(key); try fail(); return payLinkReply
+    func payLink(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> PayLinkResponse {
+        if lookup { try lookUp("paylink", key); return payLinkReply }
+        calls.append("paylink"); keys.append(key); try fail(); stored.insert(key); return payLinkReply
     }
 
-    func remind(invoiceID: String, key: String) async throws -> RemindResponse {
-        calls.append("remind:\(invoiceID)"); keys.append(key); try fail(); return remindReply
+    func remind(invoiceID: String, key: String, lookup: Bool) async throws -> RemindResponse {
+        if lookup { try lookUp("remind", key); return remindReply }
+        calls.append("remind:\(invoiceID)"); keys.append(key); try fail(); stored.insert(key); return remindReply
     }
 
     func refund(_ body: [String: JSONValue], key: String) async throws -> RefundResponse {

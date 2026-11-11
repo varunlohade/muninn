@@ -325,12 +325,46 @@ final class KeyboardModel: ObservableObject {
         if let watch, !watch.paid { startPolling() }
     }
 
-    /// A money call the keyboard closed on may have gone out. Ask again with the same key and show the answer.
+    /// A money call the keyboard closed on may have gone out. Look it up with the same key; a lookup never sends.
+    /// A refund replays as before: a stored "Refunded" is safe.
     private func resumePending() {
         guard let p = deps.store.pendingAction else { return }
         guard p.expires > deps.now() else { deps.store.pendingAction = nil; return }
         if case .working = bar { return }
-        run(p.chip, confirmed: p.confirmed, resuming: p)
+        if p.chip.kind == "refund" { run(p.chip, confirmed: p.confirmed, resuming: p); return }
+        let api = deps.api()
+        let store = deps.store
+        let sleep = deps.sleep
+        actionTask?.cancel()
+        actionTask = Task { [weak self] in
+            do {
+                let outcome = try await ChipActions.run(p.chip, confirmed: p.confirmed, api: api, key: p.key, lookup: true, sleep: sleep)
+                // A tap on another chip since then cleared it: that tap owns the bar.
+                guard let self, !Task.isCancelled, store.pendingAction == p else { return }
+                store.pendingAction = nil
+                switch outcome {
+                case .sent(let r):
+                    // The link goes in only where the owner left it, and never into an empty field.
+                    if !p.before.isEmpty, (self.host?.contextBeforeInput ?? "") == p.before {
+                        self.place(r.message, gap: r.kind == "invoice" ? "\n" : " ", readAt: p.before)
+                    } else if r.kind == "invoice" {
+                        self.bar = .done("Invoice sent to \(r.who) \u{2713}")
+                    } else {
+                        self.offerInsert(r.message)
+                    }
+                    self.watch = Watch(id: r.id, who: r.who, money: r.money)
+                    self.startPolling()
+                case .line(let text):
+                    self.bar = .done(text)
+                case .insert, .ask:
+                    break
+                }
+            } catch {
+                guard !Task.isCancelled, store.pendingAction == p else { return }
+                // Not found or refused: it never went out, so drop it with no line. Offline or in progress: the next appear looks again.
+                if !(error is URLError), !isInProgress(error) { store.pendingAction = nil }
+            }
+        }
     }
 
     func keyboardDisappeared() {
@@ -754,12 +788,14 @@ final class KeyboardModel: ObservableObject {
     // MARK: actions
 
     func tapChip(_ chip: Chip) {
+        // A new tap ends any call left from before: it is never sent or shown again.
+        deps.store.pendingAction = nil
         if chip.kind == Self.insertKind, case .string(let text)? = chip.payload["text"] {
             place(text, gap: " ", readAt: host?.contextBeforeInput ?? "")
             return
         }
-        if chip.kind == "invoice", chip.needs_confirm, case .string(let email)? = chip.payload["client_email"] {
-            bar = .confirm(chip, recipient: email)
+        if BarItems.asksFirst(chip) {
+            bar = .confirm(chip, recipient: BarItems.recipient(chip))
             return
         }
         run(chip, confirmed: nil)
@@ -787,7 +823,7 @@ final class KeyboardModel: ObservableObject {
         let store = deps.store
         let sendsMoney = ChipActions.sendsMoney.contains(chip.kind)
         let key = resuming?.key
-            ?? (sendsMoney ? ChipKeys.key(for: chip, confirmed: confirmed, in: store, now: deps.now()) : UUID().uuidString)
+            ?? (sendsMoney ? ChipKeys.key(for: chip, confirmed: confirmed, before: before, in: store, now: deps.now()) : UUID().uuidString)
         // Kept until the server answers, so closing the keyboard mid-call does not lose a sent invoice.
         if sendsMoney {
             store.pendingAction = resuming
@@ -801,12 +837,7 @@ final class KeyboardModel: ObservableObject {
                 if sendsMoney { store.pendingAction = nil }
                 switch outcome {
                 case .sent(let r):
-                    if resuming != nil, r.kind == "invoice", (self.host?.contextBeforeInput ?? "") != before {
-                        // PayPal already emailed it. The owner is in another field, so say so instead of typing.
-                        self.bar = .done("Invoice sent to \(r.who) \u{2713}")
-                    } else {
-                        self.place(r.message, gap: r.kind == "invoice" ? "\n" : " ", readAt: before)
-                    }
+                    self.place(r.message, gap: r.kind == "invoice" ? "\n" : " ", readAt: before)
                     self.watch = Watch(id: r.id, who: r.who, money: r.money)
                     if let billing = self.billing { self.billedHere.insert(billing.id) }
                     self.billing = nil
@@ -849,15 +880,16 @@ final class KeyboardModel: ObservableObject {
 
     /// Types `text` if the field still ends as it did at the tap. If the owner moved on, the text waits as a chip.
     private func place(_ text: String, gap: String, readAt before: String) {
-        guard let host, (host.contextBeforeInput ?? "") == before else {
-            bar = .chips([Chip(kind: Self.insertKind, label: "Tap to add", payload: ["text": .string(text)], needs_confirm: false)],
-                         fromCopied: false)
-            return
-        }
+        guard let host, (host.contextBeforeInput ?? "") == before else { return offerInsert(text) }
         let needsGap = !(before.last?.isWhitespace ?? true)
         host.insert((needsGap ? gap : "") + text)
         lastSent = typed
         bar = .idle
+    }
+
+    /// The text waits as a chip: it goes in only on a tap.
+    private func offerInsert(_ text: String) {
+        bar = .chips([Chip(kind: Self.insertKind, label: "Tap to add", payload: ["text": .string(text)], needs_confirm: false)], fromCopied: false)
     }
 
     /// Light polling, only while the keyboard is visible: at most one /v1/payments call every 10 s.

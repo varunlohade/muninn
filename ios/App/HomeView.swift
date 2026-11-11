@@ -414,8 +414,8 @@ final class AskModel: ObservableObject {
     }
 
     func run(_ chip: Chip, confirmed: String? = nil) {
-        if confirmed == nil, chip.kind == "invoice", chip.needs_confirm, case .string(let email)? = chip.payload["client_email"] {
-            state = .confirm(chip, email)
+        if confirmed == nil, BarItems.asksFirst(chip) {
+            state = .confirm(chip, BarItems.recipient(chip))
             return
         }
         state = .working
@@ -488,7 +488,7 @@ struct AskBar: View {
             .padding(.bottom, 6)
         case .confirm(let chip, let email):
             HStack(spacing: 8) {
-                AskChip(title: "Send to \(email)", detail: nil) { model.run(chip, confirmed: email) }
+                AskChip(title: BarItems.confirmTitle(chip, recipient: email), detail: nil) { model.run(chip, confirmed: email) }
                 AskChip(title: "Cancel", detail: nil) { model.state = .idle }
             }
             .padding(.horizontal, 10).padding(.bottom, 6)
