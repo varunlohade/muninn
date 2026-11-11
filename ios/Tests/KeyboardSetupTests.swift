@@ -26,8 +26,25 @@ final class KeyboardSetupTests: XCTestCase {
         XCTAssertEqual(state(system + [ours], nil), .needsFullAccess)
     }
 
-    func testAddedWithHeartbeatIsReady() {
-        XCTAssertEqual(state(system + [ours], seen), .ready)
+    func testFirstWithHeartbeatIsReady() {
+        XCTAssertEqual(state([ours] + system, seen), .ready)
+    }
+
+    /// iOS adds a new keyboard at the bottom of the list, so this is where most owners land.
+    func testOnButNotFirstIsNotFirst() {
+        XCTAssertEqual(state(system + [ours], seen), .notFirst)
+        XCTAssertEqual(state(["en_US@sw=QWERTY;hw=Automatic", ours, "emoji@sw=Emoji"], seen), .notFirst)
+    }
+
+    /// Full Access comes before the order hint.
+    func testNotFirstWithoutHeartbeatNeedsFullAccess() {
+        XCTAssertEqual(state(system + [ours], nil), .needsFullAccess)
+    }
+
+    /// Not first is a hint: the app counts the keyboard as on.
+    func testOnlyNotFirstAndReadyAreOn() {
+        XCTAssertEqual([KeyboardState.notAdded, .needsFullAccess, .notFirst, .ready].map(\.isOn), [false, false, true, true])
+        XCTAssertEqual(KeyboardState.notFirst.homeTitle, "Make Muninn your first keyboard")
     }
 
     /// No age limit: a heartbeat from long ago still proves Full Access.
@@ -35,7 +52,7 @@ final class KeyboardSetupTests: XCTestCase {
         XCTAssertEqual(state([ours], .distantPast), .ready)
     }
 
-    /// iOS shared no list: the heartbeat alone says the keyboard is there.
+    /// iOS shared no list: the heartbeat alone says the keyboard is there, and with no order it counts as first.
     func testEmptyListTrustsTheHeartbeat() {
         XCTAssertEqual(state([], nil), .notAdded)
         XCTAssertEqual(state([], seen), .ready)
@@ -57,6 +74,9 @@ final class KeyboardSetupTests: XCTestCase {
         setup.refresh()
         XCTAssertEqual(setup.state, .needsFullAccess)
         lastSeen = seen
+        setup.refresh()
+        XCTAssertEqual(setup.state, .notFirst)
+        enabled = [ours] + system
         setup.refresh()
         XCTAssertEqual(setup.state, .ready)
     }

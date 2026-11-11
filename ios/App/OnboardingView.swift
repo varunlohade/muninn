@@ -155,7 +155,7 @@ struct OnboardingView: View {
                 quietButton("Not now") { Task { await advance(from: .keyboard, skipped: true) } }
                     .accessibilityIdentifier("onboarding.later")
             case .makeDefault:
-                if setup.state == .ready {
+                if setup.state.isOn {
                     Button("Next") { Task { await complete(.makeDefault) } }
                         .buttonStyle(PrimaryButton())
                         .accessibilityIdentifier("onboarding.default.next")

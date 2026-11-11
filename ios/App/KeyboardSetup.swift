@@ -3,12 +3,17 @@ import SwiftUI
 /// Where the owner is with the keyboard. iOS has no API to set the default keyboard,
 /// so the app shows the steps and checks each one it can see.
 enum KeyboardState: Equatable {
-    case notAdded, needsFullAccess, ready
+    /// `notFirst`: on, with Full Access, but another keyboard is above it in Settings. A hint, never a blocker.
+    case notAdded, needsFullAccess, notFirst, ready
+
+    /// The keyboard has appeared with Full Access, so the app is fully usable.
+    var isOn: Bool { self == .notFirst || self == .ready }
 
     var homeTitle: String {
         switch self {
         case .notAdded: "Add the \(AppConfig.displayName) keyboard"
         case .needsFullAccess: "Allow Full Access"
+        case .notFirst: "Make \(AppConfig.displayName) your first keyboard"
         case .ready: "Keyboard is on"
         }
     }
@@ -22,7 +27,7 @@ final class KeyboardSetup: ObservableObject {
     @Published private(set) var state: KeyboardState = .notAdded
     private let read: () -> (enabled: [String], lastSeen: Date?)
 
-    /// `enabled`: the AppleKeyboards preference, the keyboards on in Settings.
+    /// `enabled`: the AppleKeyboards preference, the keyboards on in Settings, in their Settings order.
     /// `lastSeen`: the heartbeat the keyboard writes each time it appears. It only lands with Full Access.
     init(read: @escaping () -> (enabled: [String], lastSeen: Date?) = {
         (UserDefaults.standard.stringArray(forKey: "AppleKeyboards") ?? [], SharedStore.keyboardLastSeen)
@@ -43,7 +48,9 @@ final class KeyboardSetup: ObservableObject {
         // An empty list means iOS did not share it. Then only the heartbeat can say the keyboard is there.
         let added = enabled.isEmpty ? lastSeen != nil : enabled.contains(keyboardID)
         guard added else { return .notAdded }
-        return lastSeen == nil ? .needsFullAccess : .ready
+        guard lastSeen != nil else { return .needsFullAccess }
+        // An empty list gives no order, so it counts as first.
+        return enabled.isEmpty || enabled.first == keyboardID ? .ready : .notFirst
     }
 }
 
@@ -72,10 +79,15 @@ struct KeyboardDefaultGuide: View {
                 }
             }
             Group {
-                if setup.state == .ready {
+                if setup.state.isOn {
                     Label("\(AppConfig.displayName) is on", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(Theme.Color.paidInk)
                         .accessibilityIdentifier("keyboard.on")
+                    if setup.state == .notFirst {
+                        Label(KeyboardState.notFirst.homeTitle, systemImage: "arrow.up")
+                            .foregroundStyle(Theme.Color.text2)
+                            .accessibilityIdentifier("keyboard.notFirst")
+                    }
                 } else {
                     Label("Try it: hold the globe key, pick \(AppConfig.displayName).", systemImage: "globe")
                         .foregroundStyle(Theme.Color.text2)
@@ -89,7 +101,7 @@ struct KeyboardDefaultGuide: View {
         }
         // The keyboard can appear while the app stays open, so look for its heartbeat each second until it lands.
         .task(id: setup.state) {
-            while setup.state != .ready, !Task.isCancelled {
+            while !setup.state.isOn, !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 setup.refresh()
             }

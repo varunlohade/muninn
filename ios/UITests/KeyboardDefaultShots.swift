@@ -128,7 +128,16 @@ final class KeyboardDefaultShots: XCTestCase {
         XCTAssertTrue(id(app, "keyboard.on").waitForExistence(timeout: 8), "no heartbeat: \(app.debugDescription)")
         id(app, "onboarding.default.next").tap()
         getStarted(app)
-        XCTAssertTrue(app.staticTexts["Keyboard is on"].waitForExistence(timeout: 5), app.debugDescription)
+        // iOS put the new keyboard at the bottom of the list.
+        XCTAssertTrue(app.staticTexts["Make Muninn your first keyboard"].waitForExistence(timeout: 5), app.debugDescription)
+        shot("kb-08-home-not-first")
+
+        // Muninn first in the list. The arguments domain stands in for the drag in Settings; the app reads the same preference.
+        app.terminate()
+        app.launchArguments = ["-AppleKeyboards", "(com.orseliyas.muninn.keyboard, \"en_US@sw=QWERTY;hw=Automatic\", \"emoji@sw=Emoji\")"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Keyboard is on"].waitForExistence(timeout: 15), app.debugDescription)
+        dismissPrompts(app)
         shot("kb-04-home-ready")
     }
 
