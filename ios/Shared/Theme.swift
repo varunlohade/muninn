@@ -192,7 +192,6 @@ enum Theme {
         static let crossfade = Animation.easeOut(duration: 0.2)
         static let onboardingStep = Animation.spring(response: 0.42, dampingFraction: 0.82)
         static let onboardingCheckHold: Duration = .milliseconds(520)
-        static let onboardingLinkHold: Duration = .milliseconds(1600)
     }
 }
 

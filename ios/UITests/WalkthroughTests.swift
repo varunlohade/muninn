@@ -15,7 +15,7 @@ final class WalkthroughTests: XCTestCase {
     private func shot(_ name: String) {
         Thread.sleep(forTimeInterval: 0.6)
         let png = XCUIScreen.main.screenshot().pngRepresentation
-        if let dir = env["SHOT_DIR"] { try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png")) }
+        if let dir = env["SHOT_DIR"] { try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent((env["SHOT_PREFIX"] ?? "") + name + ".png")) }
         let a = XCTAttachment(data: png, uniformTypeIdentifier: "public.png"); a.name = name; a.lifetime = .keepAlways; add(a)
     }
 
@@ -110,16 +110,26 @@ final class WalkthroughTests: XCTestCase {
 
     // MARK: tests
 
-    func test00Pair() {
+    /// A fresh app goes in through the intro's Skip and "Get started": one tap, no sign-in. The fake server makes the account.
+    /// An app that is already in is pointed at the fake server with the Debug pairing link.
+    func test00GetStarted() {
         let app = XCUIApplication()
+        app.launchArguments = ["-calendarDemo", "-serverURL", fake.absoluteString]
         app.launch()
-        XCUIDevice.shared.system.open(URL(string: "muninn-dev://pair?token=pkd_fake&server=\(fake.absoluteString)")!)
-        let open = springboard.buttons["Open"]
-        if open.waitForExistence(timeout: 5) { open.tap() }
-        Thread.sleep(forTimeInterval: 2)
-        app.terminate()
-        app.launchArguments = ["-calendarDemo"]
-        app.launch()
+        if id(app, "onboarding.skip").waitForExistence(timeout: 6) { id(app, "onboarding.skip").tap() }
+        if id(app, "onboarding.later").waitForExistence(timeout: 3) { id(app, "onboarding.later").tap() }
+        let start = id(app, "onboarding.start")
+        if start.waitForExistence(timeout: 3) {
+            shot("00-get-started")
+            start.tap()
+        } else {
+            XCUIDevice.shared.system.open(URL(string: "muninn-dev://pair?token=pkd_fake&server=\(fake.absoluteString)")!)
+            let open = springboard.buttons["Open"]
+            if open.waitForExistence(timeout: 5) { open.tap() }
+            Thread.sleep(forTimeInterval: 2)
+            app.terminate()
+            app.launch()
+        }
         XCTAssertTrue(label(app, "label CONTAINS %@", "Jordan Ray").waitForExistence(timeout: 15), "Home did not load from the fake server")
         for a in [app, springboard] where a.buttons["Not Now"].waitForExistence(timeout: 2) { a.buttons["Not Now"].tap() }
         shot("00-home-on-fake")
@@ -212,7 +222,7 @@ final class WalkthroughTests: XCTestCase {
         }
 
         ask("who hasn't paid", #"{"group":{"group":"info"},"route":{"route":"who_paid"}}"#)
-        XCTAssertTrue(label(app, "label BEGINSWITH %@", "Jordan Ray $120").waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(id(app, "unpaid.card.Jordan Ray").waitForExistence(timeout: 10), app.debugDescription)
         shot("04a-ask-who-paid")
 
         ask("invoice Jordan Ray $120 for the logo", #"{"group":{"group":"money"},"route":{"route":"invoice"},"ext":{"client_name":"Jordan Ray","client_email":null,"amount":120,"currency":"USD","item":"logo"}}"#)
@@ -290,7 +300,8 @@ final class WalkthroughTests: XCTestCase {
         let field = openKeyboard()
         let bill = id(messages, "chip.bill")
         let billShown = bill.waitForExistence(timeout: 6)
-        print("BILL_CHIP", billShown ? bill.label : "none", "NEXT", label(messages, "label BEGINSWITH %@", "Next: ").label)
+        let nextUp = label(messages, "label BEGINSWITH %@", "Next: ")
+        print("BILL_CHIP", billShown ? bill.label : "none", "NEXT", nextUp.exists ? nextUp.label : "none")
         shot("06a-keyboard-calendar-chip")
 
         let toggle = id(messages, "notes.toggle")
@@ -319,5 +330,98 @@ final class WalkthroughTests: XCTestCase {
         print("BILL_INVOICE_CHIP", chip.exists ? chip.label : "none")
         shot("06e-keyboard-calendar-invoice-chip")
         _ = dumpLog("06e", from: mark)
+    }
+
+    /// "Who hasn't paid" in the keyboard and in the Ask bar. Remind asks first, then sends through the remind route with the client's name.
+    func test07WhoPaidRemind() {
+        var mark = logCount()
+        let remindsBefore = reminds()
+        _ = openKeyboard()
+        typeKeys(";late")
+        id(messages, "space").tap()
+        let header = id(messages, "whopaid.header")
+        XCTAssertTrue(header.waitForExistence(timeout: 10), messages.debugDescription)
+        print("WHOPAID_HEADER", header.label)
+        XCTAssertTrue(header.label.contains("unpaid"))
+        XCTAssertTrue(key("q").exists, "the keys stay under the list")
+        shot("07a-keyboard-who-paid-list")
+        id(messages, "whopaid.remind.Jordan Ray").tap()
+        let confirm = id(messages, "chip.confirm")
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), messages.debugDescription)
+        print("CONFIRM_LABEL", confirm.label)
+        XCTAssertEqual(confirm.label, "Remind Jordan Ray about $120?")
+        shot("07b-keyboard-who-paid-confirm")
+        XCTAssertEqual(reminds(), remindsBefore, "no reminder goes out before the confirm tap")
+        confirm.tap()
+        let after = label(messages, "identifier IN %@", "chip.done,chip.error,chip.retry")
+        XCTAssertTrue(after.waitForExistence(timeout: 20), messages.debugDescription)
+        print("AFTER_LABEL", after.identifier, after.label)
+        shot("07c-keyboard-who-paid-reminded")
+        XCTAssertEqual(after.identifier, "chip.done", after.label)
+        XCTAssertEqual(reminds(), remindsBefore + 1, "one reminder for one confirm tap")
+        mark = dumpLog("07c", from: mark)
+        id(messages, "whopaid.close").tap()
+        XCTAssertFalse(header.waitForExistence(timeout: 1))
+
+        let app = XCUIApplication()
+        app.launch()
+        let field = id(app, "ask.field")
+        XCTAssertTrue(field.waitForExistence(timeout: 15), app.debugDescription)
+        field.tap()
+        next(#"{"group":{"group":"info"},"route":{"route":"who_paid"}}"#)
+        field.typeText("who hasn't paid\n")
+        let total = id(app, "unpaid.header")
+        XCTAssertTrue(total.waitForExistence(timeout: 10), app.debugDescription)
+        print("UNPAID_HEADER", total.label)
+        shot("07d-ask-who-paid-cards")
+        // The test runner may not read the app's pasteboard, so the check is the button's own answer.
+        let copy = id(app, "unpaid.copy.Jordan Ray")
+        copy.tap()
+        XCTAssertTrue(label(app, "identifier == 'unpaid.copy.Jordan Ray' AND label == %@", "Copied").waitForExistence(timeout: 3), copy.label)
+        id(app, "unpaid.remind.Jordan Ray").tap()
+        let askConfirm = id(app, "ask.confirm")
+        XCTAssertTrue(askConfirm.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(askConfirm.label, "Remind Jordan Ray about $120?")
+        shot("07e-ask-who-paid-confirm")
+        askConfirm.tap()
+        XCTAssertTrue(label(app, "label BEGINSWITH %@", "Reminder sent").waitForExistence(timeout: 15), app.debugDescription)
+        shot("07f-ask-who-paid-reminded")
+        _ = dumpLog("07f", from: mark)
+    }
+
+    private func reminds() -> Int { String(decoding: fakeCall("GET", "_log"), as: UTF8.self).components(separatedBy: "/v1/actions/remind").count }
+
+    /// Repeat billing from the Ask bar: the chip, the confirm with amount, interval and recipient, then the approve link.
+    func test08Subscribe() {
+        let mark = logCount()
+        let app = XCUIApplication()
+        app.launch()
+        let field = id(app, "ask.field")
+        XCTAssertTrue(field.waitForExistence(timeout: 15), app.debugDescription)
+        field.tap()
+        next(#"{"group":{"group":"money"},"route":{"route":"subscribe"},"ext":{"client_name":"Sam","client_email":null,"amount":40,"currency":"USD","item":null}}"#)
+        field.typeText("bill Sam $40 monthly\n")
+        let chip = id(app, "ask.chip.subscribe")
+        XCTAssertTrue(chip.waitForExistence(timeout: 10), app.debugDescription)
+        print("CHIP_LABEL", chip.label)
+        shot("08a-ask-repeat-chip")
+        chip.tap()
+        let confirm = id(app, "ask.confirm")
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        print("CONFIRM_LABEL", confirm.label)
+        XCTAssertTrue(confirm.label.hasPrefix("Repeat $40 monthly to Sam") || confirm.label.hasPrefix("Repeat $40 monthly to sam@"), confirm.label)
+        shot("08b-ask-repeat-confirm")
+        let log = { String(decoding: self.fakeCall("GET", "_log"), as: UTF8.self) }
+        let sentBefore = log().components(separatedBy: "/v1/actions/subscribe").count
+        confirm.tap()
+        let link = id(app, "ask.link")
+        XCTAssertTrue(link.waitForExistence(timeout: 15), app.debugDescription)
+        print("APPROVE_LINK", link.label)
+        shot("08c-ask-repeat-link")
+        XCTAssertEqual(log().components(separatedBy: "/v1/actions/subscribe").count, sentBefore + 1, "one subscribe call for one confirm tap")
+        XCTAssertTrue(link.label.hasPrefix("https://"), link.label)
+        id(app, "ask.copy").tap()
+        XCTAssertTrue(label(app, "identifier == 'ask.copy' AND label == %@", "Copied").waitForExistence(timeout: 3))
+        _ = dumpLog("08c", from: mark)
     }
 }

@@ -107,6 +107,8 @@ final class KeyboardModel: ObservableObject {
     /// Today's appointments, as the main app last wrote them. The keyboard never reads the calendar.
     @Published var appointments: [Appointment] = []
     @Published var notesOpen = false
+    /// The "Who hasn't paid" list, open above the keys. Nil when closed.
+    @Published var whoPaid: [UnpaidClient]?
     @Published var notes: [Note] = []
     @Published var writeOpen = false
     @Published var writePanel: WritePanel = .menu
@@ -352,7 +354,7 @@ final class KeyboardModel: ObservableObject {
                     } else {
                         self.offerInsert(r.message)
                     }
-                    self.watch = Watch(id: r.id, who: r.who, money: r.money)
+                    if r.kind != "subscribe" { self.watch = Watch(id: r.id, who: r.who, money: r.money) }
                     self.startPolling()
                 case .line(let text):
                     self.bar = .done(text)
@@ -369,6 +371,7 @@ final class KeyboardModel: ObservableObject {
 
     func keyboardDisappeared() {
         notesOpen = false
+        whoPaid = nil
         resetWriting()
         pollTask?.cancel()
         actionTask?.cancel()
@@ -725,7 +728,7 @@ final class KeyboardModel: ObservableObject {
         updateFixable()
         switch m.action {
         case .insert: break
-        case .late: showLate()
+        case .late: openWhoPaid()
         case .fix: fix()
         case .payLink(let amount, let currency): offerPayLink(amount, currency: currency)
         }
@@ -741,19 +744,27 @@ final class KeyboardModel: ObservableObject {
         bar = .chips([Chip(kind: "paylink", label: "Pay link", payload: payload, needs_confirm: false)], fromCopied: false)
     }
 
-    private func showLate() {
+    /// The "Who paid?" chip and the late shortcut: the list opens above the keys. Each card's Remind goes through the bar's confirm.
+    func openWhoPaid() {
         guard paired else { return }
         suggestTask?.cancel()
         bar = .working("Checking who owes you\u{2026}")
         suggestTask = Task { [weak self] in
             do {
                 guard let payments = try await self?.deps.api().payments(), let self, !Task.isCancelled else { return }
-                self.bar = .done(Self.lateLine(payments))
+                let clients = WhoPaid.clients(payments, keeping: self.whoPaid ?? [])
+                self.whoPaid = clients.isEmpty ? nil : clients
+                self.bar = clients.isEmpty ? .done(WhoPaid.empty) : .idle
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 self.bar = .error("Could not check. Try again.")
             }
         }
+    }
+
+    func closeWhoPaid() {
+        host?.playClick()
+        whoPaid = nil
     }
 
     /// "Ana $90 · 2d late, Sam $45 +1 more"
@@ -791,6 +802,7 @@ final class KeyboardModel: ObservableObject {
     func tapChip(_ chip: Chip) {
         // A new tap ends any call left from before: it is never sent or shown again.
         deps.store.pendingAction = nil
+        if chip.kind == "payments" { return openWhoPaid() }
         if chip.kind == Self.insertKind, case .string(let text)? = chip.payload["text"] {
             place(text, gap: " ", readAt: host?.contextBeforeInput ?? "")
             return
@@ -851,7 +863,8 @@ final class KeyboardModel: ObservableObject {
                 switch outcome {
                 case .sent(let r):
                     self.place(r.message, gap: r.kind == "invoice" ? "\n" : " ", readAt: before)
-                    self.watch = Watch(id: r.id, who: r.who, money: r.money)
+                    // A repeat bill is not in the payments list, so there is nothing to watch.
+                    if r.kind != "subscribe" { self.watch = Watch(id: r.id, who: r.who, money: r.money) }
                     if let billing = self.billing { self.billedHere.insert(billing.id) }
                     self.billing = nil
                     self.startPolling()
@@ -883,6 +896,7 @@ final class KeyboardModel: ObservableObject {
         switch chip.kind {
         case "invoice": "Creating invoice\u{2026}"
         case "paylink": "Creating link\u{2026}"
+        case "subscribe": "Setting up repeat billing\u{2026}"
         case "remind": "Sending reminder\u{2026}"
         case "refund": chip.payload["confirm_token"] == nil ? "Checking refund\u{2026}" : "Refunding\u{2026}"
         case "payments": "Checking who owes you\u{2026}"

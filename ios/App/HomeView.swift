@@ -6,6 +6,8 @@ final class HomeModel: ObservableObject {
     @Published var brief: [String] = []
     @Published var clients: [Client] = []
     @Published var payments: [Payment] = []
+    /// "Who hasn't paid", built once per load: each card keeps its one reminder chip.
+    @Published var unpaidClients: [UnpaidClient] = []
     @Published var paymentTimes: [Date] = []
     @Published var error: String?
     @Published var raven: Payment?
@@ -33,6 +35,7 @@ final class HomeModel: ObservableObject {
         do {
             summary = try await s
             payments = try await p
+            unpaidClients = WhoPaid.clients(payments, keeping: unpaidClients)
             clients = (try? await c) ?? []
             paymentTimes = ((try? await t)?.transactions ?? []).compactMap { parseDate($0.date) }
             error = nil
@@ -70,8 +73,6 @@ final class HomeModel: ObservableObject {
         if ProcessInfo.processInfo.arguments.contains("-ravenDemo") { raven = paid.first ?? payments.first }
         #endif
     }
-
-    var unpaid: [Payment] { payments.filter { $0.state == "unpaid" } }
 
     /// Every invoice and pay link starts in the keyboard, so paid ones are what the keyboard brought back.
     var broughtBack: (money: String, chats: Int)? {
@@ -114,6 +115,13 @@ struct HomeView: View {
                 if !model.brief.isEmpty { briefCard }
                 if !calendar.today.isEmpty { todaySection }
                 summaryCard
+                if !session.appleLinked {
+                    SaveDetailsCard().padding(.horizontal, Theme.Metric.cardInset)
+                } else if let notice = session.notice {
+                    Text(notice).font(Theme.Font.label).foregroundStyle(Theme.Color.paid)
+                        .padding(.horizontal, Theme.Metric.margin).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("home.saved")
+                }
                 keyboardCard
                 if calendar.status == .notDetermined { calendarCard }
                 if let n = model.summary?.open_disputes, n > 0 { disputesRow(n) }
@@ -133,7 +141,8 @@ struct HomeView: View {
         .overlay(alignment: .top) { Theme.Color.bg.frame(height: 0).ignoresSafeArea(edges: .top) }
         .toolbar(.hidden, for: .navigationBar)
         .refreshable { await model.load() }
-        .task { await model.load() }
+        // Loads again when the account changes: "Welcome back" brings the earlier account's data.
+        .task(id: session.account) { await model.load() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in model.checkKeyboard(); calendar.refresh() }
         .overlay {
             if let p = model.raven {
@@ -328,15 +337,11 @@ struct HomeView: View {
     }
 
     private var unpaidList: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            SectionHeader(title: "Unpaid", count: model.unpaid.count)
-            VStack(spacing: 0) {
-                ForEach(model.unpaid.prefix(8)) { p in
-                    PaymentRow(payment: p)
-                }
-            }
-            .padding(.horizontal, Theme.Metric.margin)
-        }
+        // Remind asks in the Ask bar below: the same confirm and the same call as a reminder chip.
+        UnpaidListView(clients: Array(model.unpaidClients.prefix(8))) { ask.run($0) }
+            .padding(.horizontal, Theme.Metric.cardInset)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("home.unpaid")
     }
 }
 
@@ -395,7 +400,7 @@ extension APIClient: AskAPI {}
 @MainActor
 final class AskModel: ObservableObject {
     enum State: Equatable {
-        case idle, loading, chips([Chip]), clients([Client]), confirm(Chip, String), ask(Chip, String), working, result(ActionResult), line(String), error(String)
+        case idle, loading, chips([Chip]), clients([Client]), unpaid([UnpaidClient]), review(String), confirm(Chip, String), ask(Chip, String), working, result(ActionResult), line(String), error(String)
         /// A money call that may not have run and no lookup found. A tap sends it again with the same key.
         case retry(Chip, String?)
     }
@@ -444,8 +449,10 @@ final class AskModel: ObservableObject {
             state = .line(line)
         case .tone(let t):
             state = .line(t.calm ?? "Sounds fine \u{2713}")
+        case .review(let message):
+            state = .review(message)
         case .payments(let payments):
-            state = .line(KeyboardModel.lateLine(payments))
+            state = .unpaid(WhoPaid.clients(payments))
         case .brief(let lines):
             state = .line(lines.joined(separator: "\n"))
         case .clients(let clients):
@@ -464,7 +471,32 @@ final class AskModel: ObservableObject {
         }
     }
 
+    /// The owner picked a client's email from Contacts for an invoice that had none.
+    /// It is a new chip, and it goes back to the confirm: the email is shown before anything is sent.
+    func useContact(email: String, name: String?, for chip: Chip) {
+        let email = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard chip.kind == "invoice", email.contains("@") else { return }
+        var payload = chip.payload
+        payload["client_email"] = .string(email)
+        if BarItems.string(chip, "client_name") == nil, let name, !name.isEmpty { payload["client_name"] = .string(name) }
+        state = .confirm(Chip(kind: chip.kind, label: chip.label, payload: payload, needs_confirm: true), email)
+    }
+
+    /// An invoice with no email only makes a link. The confirm then offers Contacts.
+    static func canAddContact(_ chip: Chip) -> Bool {
+        chip.kind == "invoice" && BarItems.string(chip, "client_email") == nil
+    }
+
+    private func showUnpaid() {
+        state = .loading
+        let api = api()
+        task = Task {
+            do { state = .unpaid(WhoPaid.clients(try await api.payments())) } catch { state = .error(plainLine(error)) }
+        }
+    }
+
     func run(_ chip: Chip, confirmed: String? = nil) {
+        if chip.kind == "payments" { return showUnpaid() }
         if confirmed == nil, BarItems.asksFirst(chip) {
             state = .confirm(chip, BarItems.recipient(chip))
             return
@@ -499,6 +531,14 @@ final class AskModel: ObservableObject {
         }
     }
 
+    static func resultTitle(_ r: ActionResult) -> String {
+        switch r.kind {
+        case "invoice": "Invoice sent \u{00B7} \(r.money)"
+        case "subscribe": "Repeat billing ready \u{00B7} \(r.money)"
+        default: "Pay link ready \u{00B7} \(r.money)"
+        }
+    }
+
     func copy(_ link: String) {
         UIPasteboard.general.string = link
         copied = true
@@ -508,7 +548,11 @@ final class AskModel: ObservableObject {
 /// The prompt pill. A typed request goes to the router; money chips are the keyboard's chips and a tap runs the same action.
 struct AskBar: View {
     @ObservedObject var model: AskModel
+    /// The most height the "Who hasn't paid" list takes before it scrolls.
+    var listHeight: CGFloat = 280
     @FocusState private var focused: Bool
+    /// The invoice chip that waits for an email from Contacts.
+    @State private var pickingFor: Chip?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -541,6 +585,9 @@ struct AskBar: View {
                 .frame(height: Theme.Space.l).offset(y: -Theme.Space.l).allowsHitTesting(false)
         }
         .animation(Theme.Motion.chipAppear, value: model.state)
+        .sheet(item: $pickingFor) { chip in
+            ContactEmailPicker { email, name in model.useContact(email: email, name: name, for: chip) }.ignoresSafeArea()
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -570,12 +617,42 @@ struct AskBar: View {
                 .padding(.horizontal, Theme.Space.xs)
             }
             .padding(.bottom, Theme.Space.xxs)
-        case .confirm(let chip, let email):
-            HStack(spacing: Theme.Space.xs) {
-                AskChip(title: BarItems.confirmTitle(chip, recipient: email), detail: nil) { model.run(chip, confirmed: email) }
-                AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+        case .unpaid(let clients):
+            ScrollView {
+                UnpaidListView(clients: clients, fill: Theme.Color.bg) { model.run($0) }
+            }
+            .scrollIndicators(.hidden)
+            .frame(maxHeight: listHeight)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xs)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("ask.unpaid")
+        case .review(let message):
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                Text(message).font(Theme.Font.body).foregroundStyle(Theme.Color.text1).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("ask.review")
+                HStack(spacing: Theme.Space.xs) {
+                    AskChip(title: model.copied ? "Copied" : "Copy", detail: nil) { model.copy(message) }
+                        .accessibilityIdentifier("ask.review.copy")
+                    AskChip(title: "Done", detail: nil) { model.state = .idle; model.copied = false }
+                }
             }
             .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xxs)
+        case .confirm(let chip, let email):
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Space.xs) {
+                    AskChip(title: BarItems.confirmTitle(chip, recipient: email), detail: nil) { model.run(chip, confirmed: email) }
+                        .accessibilityIdentifier("ask.confirm")
+                    if AskModel.canAddContact(chip) {
+                        AskChip(title: "Add email from Contacts", detail: nil) { pickingFor = chip }
+                            .accessibilityIdentifier("ask.contacts")
+                    }
+                    AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+                }
+                .padding(.horizontal, Theme.Space.xs)
+            }
+            .padding(.bottom, Theme.Space.xxs)
         case .ask(let chip, let question):
             HStack(spacing: Theme.Space.xs) {
                 AskChip(title: question, detail: nil) { model.run(chip) }
@@ -598,7 +675,7 @@ struct AskBar: View {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(spacing: Theme.Space.xs) {
                     Image(systemName: "checkmark").foregroundStyle(Theme.Color.paid)
-                    Text(r.kind == "invoice" ? "Invoice sent · \(r.money)" : "Pay link ready · \(r.money)").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                    Text(AskModel.resultTitle(r)).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                 }
                 Text(r.link).font(Theme.Font.paper(12)).foregroundStyle(Theme.Color.text2).lineLimit(2).textSelection(.enabled)
                     .accessibilityIdentifier("ask.link")

@@ -43,7 +43,7 @@ enum ChipActions {
     static let inProgressDelay: Duration = .seconds(2)
     static let inProgressTries = 3
     /// Chips whose call moves money or messages a client. Only these keep a key and a pending call.
-    static let sendsMoney: Set = ["invoice", "paylink", "remind", "refund"]
+    static let sendsMoney: Set = ["invoice", "paylink", "subscribe", "remind", "refund"]
     private static let networkFailures: Set<URLError.Code> = [
         .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
     ]
@@ -114,6 +114,19 @@ enum ChipActions {
             let money = if let a = res.amount, let c = res.currency { formatMoney(a, c) }
                 else if let a = string(chip, "amount"), let c = string(chip, "currency") { formatMoney(a, c) } else { "" }
             return .sent(ActionResult(id: res.id, kind: "paylink", link: link, money: money, who: who, message: link))
+        case "subscribe":
+            var payload = chip.payload
+            // The confirm tap showed the amount, currency, interval and recipient; the server checks all four against the payload.
+            if let confirmed {
+                payload["confirm_amount"] = payload["amount"]
+                payload["confirm_currency"] = payload["currency"]
+                payload["confirm_interval"] = payload["interval"]
+                if case .string? = payload["client_email"] { payload["confirm_recipient"] = .string(confirmed) }
+            }
+            let res = try await call { try await api.subscribe(payload, key: key, lookup: lookup) }
+            guard let link = res.approve_link else { throw APIError.message("No link came back. Try again.") }
+            let money = [formatMoney(res.amount, res.currency), BarItems.every[res.interval] ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+            return .sent(ActionResult(id: res.id, kind: "subscribe", link: link, money: money, who: who, message: link))
         case "remind":
             guard let id = string(chip, "invoice_id") else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
             _ = try await call { try await api.remind(invoiceID: id, confirmClient: confirmed, key: key, lookup: lookup) }

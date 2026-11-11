@@ -102,12 +102,63 @@ final class ChipActionTests: XCTestCase {
         XCTAssertEqual(api.calls, ["refund"])
     }
 
-    func testPaymentsShowsTheLateLine() async {
+    func testWhoPaidChipOpensTheListAndRemindAsksFirst() async {
         api.paymentsReply = [Payment(kind: "invoice", id: "INV-1", state: "unpaid", amount: "90.00", currency: "USD", item: "color",
                                      client_name: "Ana", link: nil, created_at: "2026-11-01T00:00:00Z", days_overdue: 2)]
         model.tapChip(chip("payments", "Who paid? · 1 unpaid"))
+        await until("list") { model.whoPaid != nil }
+        XCTAssertEqual(model.bar, .idle)
+        XCTAssertEqual(model.whoPaid?.map(\.name), ["Ana"])
+        guard let remind = model.whoPaid?.first?.remind else { return XCTFail("no reminder on the card") }
+        model.tapChip(remind)
+        XCTAssertEqual(model.bar, .confirm(remind, recipient: "Ana"))
+        XCTAssertEqual(BarItems.confirmTitle(remind, recipient: "Ana"), "Remind Ana about $90?")
+        XCTAssertEqual(api.calls, ["payments"], "nothing is sent before the confirm tap")
+        model.confirm(remind, recipient: "Ana")
+        await until("reminder") { model.bar == .done("Reminder sent \u{2713}") }
+        XCTAssertEqual(api.calls, ["payments", "remind:INV-1"])
+        XCTAssertEqual(api.reminded, ["Ana"])
+        XCTAssertEqual(api.keys, [remind.key])
+    }
+
+    func testWhoPaidWithNobodyLateShowsOneLineAndNoList() async {
+        model.tapChip(chip("payments", "Who paid?"))
         await settled()
-        XCTAssertEqual(model.bar, .done("Ana $90 \u{00B7} 2d late"))
+        XCTAssertEqual(model.bar, .done("Everyone's paid \u{2713}"))
+        XCTAssertNil(model.whoPaid)
+    }
+
+    func testRepeatBillAsksFirstThenSendsWhatTheConfirmShowed() async {
+        let sub = chip("subscribe", "Repeat $40 monthly · Sam",
+                       ["amount": .string("40.00"), "currency": .string("USD"), "interval": .string("month"), "item": .string("Repeat payment"),
+                        "client_name": .string("Sam"), "client_email": .string("sam@example.com")], confirm: true)
+        host.text = "see you next month"
+        model.tapChip(sub)
+        XCTAssertEqual(model.bar, .confirm(sub, recipient: "sam@example.com"))
+        XCTAssertEqual(model.barItems.first?.title, "Repeat $40 monthly to sam@example.com?")
+        XCTAssertEqual(api.calls, [], "nothing is sent before the confirm tap")
+        model.confirm(sub, recipient: "sam@example.com")
+        await until("link") { host.text.contains("https://fake.pay/I-SUB1") }
+        XCTAssertEqual(host.text, "see you next month https://fake.pay/I-SUB1")
+        let sent = api.subscribed[0]
+        XCTAssertEqual(sent["confirm_amount"], .string("40.00"))
+        XCTAssertEqual(sent["confirm_currency"], .string("USD"))
+        XCTAssertEqual(sent["confirm_interval"], .string("month"))
+        XCTAssertEqual(sent["confirm_recipient"], .string("sam@example.com"))
+        XCTAssertEqual(api.keys, [sub.key])
+        XCTAssertNil(model.watch, "a repeat bill is not in the payments list")
+        XCTAssertNil(store.pendingAction)
+    }
+
+    func testRepeatBillThatTimedOutIsOnlyLookedUp() async {
+        let sub = chip("subscribe", "Repeat $40 monthly", ["amount": .string("40.00"), "currency": .string("USD"), "interval": .string("month")], confirm: true)
+        api.lostReplies = 1
+        model.confirm(sub, recipient: "")
+        await until("check") { clock.sleeping > 0 }
+        clock.advance(ChipActions.checkDelay.seconds)
+        await until("link") { host.text.contains("https://fake.pay/I-SUB1") }
+        XCTAssertEqual(api.calls, ["subscribe", "lookup:subscribe"])
+        XCTAssertEqual(Set(api.keys), [sub.key])
     }
 
     func testReplyAnswersTheTypedMessageAndInsertsIt() async {

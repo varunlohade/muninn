@@ -155,4 +155,13 @@ final class FormatMoneyTests: XCTestCase {
         XCTAssertEqual(formatMoney("45.10", "USD"), "$45.10")
         XCTAssertEqual(formatMoney("45", "USD"), "$45")
     }
+
+    func testAppleLinkAnswerDecodesAndSaysWelcomeBackOnlyForAnEarlierAccount() throws {
+        let fresh = try JSONDecoder().decode(AppleLinkResponse.self, from: Data(#"{"linked":true,"recovered":false}"#.utf8))
+        XCTAssertEqual(fresh, AppleLinkResponse(linked: true, recovered: false, device_token: nil))
+        XCTAssertTrue(Session.linkNotice(fresh).hasPrefix("Saved"))
+        let back = try JSONDecoder().decode(AppleLinkResponse.self, from: Data(#"{"linked":true,"recovered":true,"device_token":"pkd_earlier_account_token_0001"}"#.utf8))
+        XCTAssertEqual(back.device_token, "pkd_earlier_account_token_0001")
+        XCTAssertTrue(Session.linkNotice(back).hasPrefix("Welcome back"))
+    }
 }

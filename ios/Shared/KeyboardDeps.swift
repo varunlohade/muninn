@@ -7,6 +7,7 @@ protocol KeyboardAPI {
     /// `lookup`: return the stored answer for `key`, or throw a 404. Never runs the action.
     func invoice(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> InvoiceResponse
     func payLink(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> PayLinkResponse
+    func subscribe(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> SubscribeResponse
     /// `confirmClient`: the client the confirm tap showed. The server sends no reminder without it.
     func remind(invoiceID: String, confirmClient: String?, key: String, lookup: Bool) async throws -> RemindResponse
     func refund(_ body: [String: JSONValue], key: String, lookup: Bool) async throws -> RefundResponse

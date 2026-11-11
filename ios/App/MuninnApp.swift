@@ -20,19 +20,56 @@ final class Session: ObservableObject {
     @Published var onboarding = SharedStore.deviceToken == nil
     @Published var serverURL = SharedStore.serverURL
     @Published var error: String?
+    /// The account is saved with Apple. Until then Home and Integrations offer it.
+    @Published var appleLinked = SharedStore.appleLinked
+    /// One quiet line after a link, such as "Welcome back".
+    @Published var notice: String?
+    /// Goes up when the account behind the app changes, so Home loads again.
+    @Published var account = 0
 
-    /// One tap: the server checks the Apple identity token and returns the device token. The token never shows on screen.
-    func signInWithApple(identityToken: String, nonce: String) async -> Bool {
-        let server = SharedStore.serverURL
+    /// "Get started": the server makes a device account and returns its token. No sign-in, and the token never shows on screen.
+    func getStarted() async -> Bool {
+        var server = SharedStore.serverURL
+        #if DEBUG
+        // UI tests point a fresh install at the fake server: "-serverURL http://127.0.0.1:8799".
+        if let test = UserDefaults.standard.string(forKey: "serverURL") { server = test }
+        #endif
         do {
-            let token = try await APIClient.appleSignIn(baseURL: server, identityToken: identityToken, nonce: nonce)
-            return save(token: token, server: server)
-        } catch let e as APIError {
-            if case .http(let code, _) = e { error = "Sign-in did not work (error \(code)). Try again." } else { error = "Sign-in did not work. Try again." }
+            return save(token: try await APIClient.deviceSignIn(baseURL: server, deviceID: SharedStore.deviceID), server: server)
+        } catch APIError.http(429, _) {
+            error = "Too many tries. Wait a while, then try again."
+        } catch is APIError {
+            error = "That did not work. Try again."
         } catch {
-            self.error = "Cannot reach Muninn. Check your connection and try again."
+            self.error = "Cannot reach \(AppConfig.displayName). Check your connection and try again."
         }
         return false
+    }
+
+    /// What the owner reads after "Continue with Apple". A recovered account says so.
+    nonisolated static func linkNotice(_ r: AppleLinkResponse) -> String {
+        r.recovered ? "Welcome back. Your clients and invoices are here again." : "Saved \u{2713} Your details are safe with your Apple account."
+    }
+
+    /// "To save your details, continue with Apple": links the Apple account to this device account.
+    /// If the Apple account had an earlier account, the server sends that account's token and the app switches to it.
+    func linkApple(identityToken: String, nonce: String) async -> String? {
+        do {
+            let r = try await APIClient.shared().linkApple(identityToken: identityToken, nonce: nonce)
+            if r.recovered {
+                guard let token = r.device_token, save(token: token, server: SharedStore.serverURL) else { return "Could not save your account on this phone. Try again." }
+            }
+            SharedStore.appleLinked = true
+            appleLinked = true
+            notice = Self.linkNotice(r)
+            return nil
+        } catch APIError.http(409, _) {
+            return "This account is already saved with another Apple account."
+        } catch is APIError {
+            return "That did not work. Try again."
+        } catch {
+            return "Cannot reach \(AppConfig.displayName). Check your connection and try again."
+        }
     }
 
     #if DEBUG
@@ -56,13 +93,16 @@ final class Session: ObservableObject {
         SharedStore.serverURL = server
         let status = SharedStore.setDeviceToken(token)
         guard status == errSecSuccess, SharedStore.deviceToken == token else {
-            error = "Could not save your sign-in on this phone (Keychain \(status)). Try again."
+            error = "Could not save your account on this phone (Keychain \(status)). Try again."
             return false
         }
         serverURL = server
         // Cached brief and seen payments belong to the old account.
         for key in ["brief_cache", "brief_cache.at", "known_paid_ids"] { UserDefaults.standard.removeObject(forKey: key) }
         error = nil
+        SharedStore.appleLinked = false
+        appleLinked = false
+        account += 1
         paired = true
         return true
     }
@@ -71,6 +111,9 @@ final class Session: ObservableObject {
 
     func unpair() {
         SharedStore.setDeviceToken(nil)
+        SharedStore.appleLinked = false
+        appleLinked = false
+        notice = nil
         error = nil
         onboarding = true
         paired = false

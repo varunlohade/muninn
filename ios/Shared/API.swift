@@ -72,6 +72,8 @@ struct AskResponse {
         /// A rewrite or a reply.
         case text(String)
         case tone(ToneResponse)
+        /// A thank-you with the owner's review link, ready to copy into a chat.
+        case review(String)
         case payments([Payment])
         case brief([String])
         case clients([Client])
@@ -100,9 +102,10 @@ extension AskResponse: Decodable {
         confidence = try c.decode(Double.self, forKey: .confidence)
         func get<T: Decodable>(_ type: T.Type) throws -> T { try c.decode(T.self, forKey: .result) }
         switch route {
-        case "invoice", "paylink", "remind", "refund": result = .chips(try get(Chips.self).chips)
+        case "invoice", "paylink", "subscribe", "remind", "refund": result = .chips(try get(Chips.self).chips)
         case "fix", "refine": result = .text(try get(WriteResponse.self).text)
         case "reply": result = .text(try get(ReplyResponse.self).reply)
+        case "review_ask": result = .review(try get(WriteResponse.self).text)
         case "tone": result = .tone(try get(ToneResponse.self))
         case "who_paid": result = .payments(try get(PaymentsResponse.self).payments)
         case "brief": result = .brief(try get(Lines.self).lines)
@@ -117,6 +120,8 @@ extension AskResponse: Decodable {
 
 struct InvoiceResponse: Decodable { let id: String; let status: String; let pay_link: String?; let amount: String; let currency: String }
 struct PayLinkResponse: Decodable { let id: String; let status: String; let approve_link: String?; let amount: String?; let currency: String? }
+/// A repeat bill. The client approves it once at `approve_link`; PayPal then bills every `interval`.
+struct SubscribeResponse: Decodable { let id: String; let status: String; let approve_link: String?; let amount: String; let currency: String; let interval: String }
 struct RemindResponse: Decodable { let invoice_id: String }
 /// A refund runs in two calls. The first gives `confirm_token` and `summary`; the second, with the token, gives `refund_id`.
 struct RefundResponse: Decodable { let confirm_token: String?; let summary: String?; let refund_id: String?; let amount: String?; let currency: String? }
@@ -156,8 +161,19 @@ struct Money: Decodable, Hashable { let value: String; let currency_code: String
 struct Dispute: Decodable, Identifiable { let id: String; let status: String; let reason: String; let amount: Money?; let due_date: String? }
 struct DisputesResponse: Decodable { let disputes: [Dispute] }
 
-struct Integration: Decodable, Identifiable { let id: String; let name: String; let status: String }
+/// status is "connected", "not_connected", "on_device" (the phone does the work) or "coming_soon".
+struct Integration: Decodable, Identifiable, Equatable { let id: String; let name: String; let description: String?; let status: String }
 struct IntegrationsResponse: Decodable { let integrations: [Integration] }
+struct IntegrationResponse: Decodable { let integration: Integration }
+struct Profile: Codable, Equatable {
+    var business_name: String
+    var tone: String
+    var currency: String
+    var review_url: String?
+    /// The server's own default for a user with no profile yet.
+    static let standard = Profile(business_name: "my shop", tone: "friendly and short", currency: "USD", review_url: nil)
+}
+struct ProfileResponse: Decodable { let profile: Profile? }
 
 struct Payment: Decodable, Identifiable, Hashable {
     let kind: String
@@ -173,7 +189,9 @@ struct Payment: Decodable, Identifiable, Hashable {
 }
 
 struct PaymentsResponse: Decodable { let payments: [Payment] }
-struct AppleAuthResponse: Decodable { let device_token: String }
+struct DeviceAuthResponse: Decodable { let device_token: String }
+/// `recovered`: this Apple account already had a Muninn account from an earlier install. `device_token` is then the token of that account.
+struct AppleLinkResponse: Decodable, Equatable { let linked: Bool; let recovered: Bool; let device_token: String? }
 
 /// Same format as the server's formatMoney: "$45", "$45.50", "€12".
 func formatMoney(_ amount: String, _ currency: String) -> String {
@@ -235,17 +253,18 @@ struct APIClient {
         APIClient(baseURL: SharedStore.serverURL, token: SharedStore.deviceToken)
     }
 
-    /// Sign in with Apple: trades the identity token and the raw nonce for a device token. The only call with no token.
-    static func appleSignIn(baseURL: String, identityToken: String, nonce: String) async throws -> String {
-        guard let url = URL(string: baseURL + "/v1/auth/apple") else { throw APIError.http(0, "bad server URL") }
+    /// "Get started": makes a device account and returns its device token. The only call with no token.
+    /// `deviceID` is a random UUID from this phone's Keychain. The server makes a new user on each call.
+    static func deviceSignIn(baseURL: String, deviceID: String) async throws -> String {
+        guard let url = URL(string: baseURL + "/v1/auth/device") else { throw APIError.message("Server address is wrong") }
         var r = URLRequest(url: url, timeoutInterval: 20)
         r.httpMethod = "POST"
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        r.httpBody = try JSONEncoder().encode(["identity_token": identityToken, "nonce": nonce])
+        r.httpBody = try JSONEncoder().encode(["device_id": deviceID])
         let (data, resp) = try await URLSession.shared.data(for: r)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else { throw APIError.http(code, "") }
-        return try JSONDecoder().decode(AppleAuthResponse.self, from: data).device_token
+        return try JSONDecoder().decode(DeviceAuthResponse.self, from: data).device_token
     }
 
     /// `key` is the Idempotency-Key of a money call. A retry passes the same key, so the server runs the action once.
@@ -303,6 +322,11 @@ struct APIClient {
         return try await send(request("POST", "/v1/actions/paylink", body: body, tap: true, key: key, lookup: lookup), as: PayLinkResponse.self)
     }
 
+    /// The subscribe route is strict: it takes no null field.
+    func subscribe(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> SubscribeResponse {
+        try await send(request("POST", "/v1/actions/subscribe", body: payload.filter { $0.value != .null }, tap: true, key: key, lookup: lookup), as: SubscribeResponse.self)
+    }
+
     func remind(invoiceID: String, confirmClient: String?, key: String, lookup: Bool) async throws -> RemindResponse {
         var body = ["invoice_id": invoiceID]
         if let confirmClient { body["confirm_client"] = confirmClient }
@@ -350,6 +374,27 @@ struct APIClient {
     func disputes() async throws -> [Dispute] { try await send(request("GET", "/v1/disputes"), as: DisputesResponse.self).disputes }
     func integrations() async throws -> [Integration] {
         try await send(request("GET", "/v1/integrations"), as: IntegrationsResponse.self).integrations
+    }
+
+    /// "Save your details": attaches the Apple account to this device account. The server checks the identity token and the raw nonce.
+    func linkApple(identityToken: String, nonce: String) async throws -> AppleLinkResponse {
+        try await send(request("POST", "/v1/auth/apple/link", body: ["identity_token": identityToken, "nonce": nonce]), as: AppleLinkResponse.self)
+    }
+
+    func profile() async throws -> Profile? { try await send(request("GET", "/v1/profile"), as: ProfileResponse.self).profile }
+
+    /// Saves the Google review link on the profile. Nil clears it; the other profile fields go back unchanged.
+    func setReviewLink(_ url: String?) async throws -> Profile? {
+        let p = try await profile() ?? .standard
+        let body: [String: JSONValue] = ["business_name": .string(p.business_name), "tone": .string(p.tone), "currency": .string(p.currency),
+                                         "review_url": url.map(JSONValue.string) ?? .null]
+        return try await send(request("PUT", "/v1/profile", body: body), as: ProfileResponse.self).profile
+    }
+
+    /// Stores the Slack incoming webhook. Nil disconnects. The server never sends the URL back.
+    func setSlackWebhook(_ url: String?) async throws -> Integration {
+        let body: [String: JSONValue] = ["webhook_url": url.map(JSONValue.string) ?? .null]
+        return try await send(request("PUT", "/v1/integrations/slack", body: body), as: IntegrationResponse.self).integration
     }
 }
 

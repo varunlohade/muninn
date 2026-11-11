@@ -26,6 +26,7 @@ final class FakeAPI: AskAPI {
     var suggestReply = SuggestResponse(chips: [], intent: "none", timings: nil)
     var invoiceReply = InvoiceResponse(id: "INV-1", status: "sent", pay_link: "https://fake.pay/INV-1", amount: "45.00", currency: "USD")
     var payLinkReply = PayLinkResponse(id: "PL-1", status: "created", approve_link: "https://fake.pay/PL-1", amount: "45.00", currency: "USD")
+    var subscribeReply = SubscribeResponse(id: "I-SUB1", status: "APPROVAL_PENDING", approve_link: "https://fake.pay/I-SUB1", amount: "40.00", currency: "USD", interval: "month")
     var writeReply = WriteResponse(text: "", changed: nil)
     var toneReply = ToneResponse(tone: "ok", calm: nil)
     var paymentsReply: [Payment] = []
@@ -47,6 +48,7 @@ final class FakeAPI: AskAPI {
     private(set) var asked: [String] = []
     private(set) var suggested: [(text: String, context: String?)] = []
     private(set) var invoiced: [[String: JSONValue]] = []
+    private(set) var subscribed: [[String: JSONValue]] = []
     private(set) var refunded: [[String: JSONValue]] = []
     /// The confirm_client of each reminder sent.
     private(set) var reminded: [String?] = []
@@ -89,6 +91,15 @@ final class FakeAPI: AskAPI {
     func payLink(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> PayLinkResponse {
         if lookup { try lookUp("paylink", key); return payLinkReply }
         calls.append("paylink"); keys.append(key); try fail(); stored.insert(key); return payLinkReply
+    }
+
+    func subscribe(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> SubscribeResponse {
+        if lookup { try lookUp("subscribe", key); return subscribeReply }
+        calls.append("subscribe"); subscribed.append(payload); keys.append(key)
+        try fail()
+        stored.insert(key)
+        try loseReply()
+        return subscribeReply
     }
 
     func remind(invoiceID: String, confirmClient: String?, key: String, lookup: Bool) async throws -> RemindResponse {

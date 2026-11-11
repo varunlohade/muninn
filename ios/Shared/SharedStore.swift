@@ -23,6 +23,12 @@ enum SharedStore {
         set { defaults?.set(newValue, forKey: pasteboardKey) }
     }
 
+    /// The owner saved this account with Apple, so the "save your details" card stays away.
+    static var appleLinked: Bool {
+        get { defaults?.bool(forKey: "apple_linked") ?? false }
+        set { defaults?.set(newValue, forKey: "apple_linked") }
+    }
+
     /// Set by the keyboard each time it appears with Full Access, so the app can say "Keyboard is on".
     static var keyboardLastSeen: Date? {
         get { defaults?.object(forKey: keyboardSeenKey) as? Date }
@@ -68,7 +74,7 @@ enum SharedStore {
         set { save(newValue, file: "pending-action.json") }
     }
 
-    private static func baseQuery() -> [String: Any] {
+    private static func baseQuery(_ account: String = account) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -84,6 +90,21 @@ enum SharedStore {
         var out: CFTypeRef?
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    /// A random id for this install, made on first use and kept in the shared Keychain. "Get started" sends it.
+    static var deviceID: String {
+        var q = baseQuery("device_id")
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data, let id = String(data: data, encoding: .utf8) { return id }
+        let id = UUID().uuidString.lowercased()
+        var add = baseQuery("device_id")
+        add[kSecValueData as String] = Data(id.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(add as CFDictionary, nil)
+        return id
     }
 
     @discardableResult

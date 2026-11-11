@@ -103,7 +103,7 @@ final class AskModelTests: XCTestCase {
 
     func testInfoWritingAndNoneShowOneLine() async {
         await ask("who hasn't paid", "who_paid", .payments([]))
-        XCTAssertEqual(model.state, .line("Nobody owes you \u{2713}"))
+        XCTAssertEqual(model.state, .unpaid([]))
         await ask("make this nicer: ya ok will send", "refine", .text("Sure, I will send it."))
         XCTAssertEqual(model.state, .line("Sure, I will send it."))
         await ask("how is today", "brief", .brief(["Brought back $90 today.", "Ana's $90 is 2 days late."]))
@@ -115,6 +115,80 @@ final class AskModelTests: XCTestCase {
         XCTAssertEqual(api.asked.count, 5)
     }
 
+    private func payment(_ name: String?, _ amount: String, days: Int, id: String, kind: String = "invoice", currency: String = "USD", state: String = "unpaid") -> Payment {
+        Payment(kind: kind, id: id, state: state, amount: amount, currency: currency, item: "Cut", client_name: name, link: "https://fake.pay/\(id)",
+                created_at: "2026-11-01T00:00:00Z", days_overdue: days)
+    }
+
+    func testWhoHasNotPaidShowsCardsAndRemindGoesThroughTheConfirm() async {
+        await ask("who hasn't paid", "who_paid", .payments([payment("Jordan", "120.00", days: 2, id: "INV-J"), payment("Maya", "45.00", days: 0, id: "INV-M")]))
+        guard case .unpaid(let clients) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(WhoPaid.header(clients), "$165 unpaid \u{00B7} 2 clients")
+        guard let remind = clients.first?.remind else { return XCTFail("no reminder") }
+        await tap(remind)
+        XCTAssertEqual(model.state, .confirm(remind, "Jordan"))
+        XCTAssertEqual(BarItems.confirmTitle(remind, recipient: "Jordan"), "Remind Jordan about $120?")
+        XCTAssertEqual(api.calls, ["ask"])
+        await tap(remind, confirmed: "Jordan")
+        XCTAssertEqual(model.state, .line("Reminder sent \u{2713}"))
+        XCTAssertEqual(api.calls, ["ask", "remind:INV-J"])
+        XCTAssertEqual(api.reminded, ["Jordan"])
+        XCTAssertEqual(api.keys, [remind.key])
+    }
+
+    func testRepeatBillConfirmShowsAmountIntervalAndRecipient() async {
+        let sub = Chip(kind: "subscribe", label: "Repeat $40 monthly · Sam",
+                       payload: ["amount": .string("40.00"), "currency": .string("USD"), "interval": .string("month"), "item": .string("Repeat payment"),
+                                 "client_name": .string("Sam"), "client_email": .null], needs_confirm: true)
+        await ask("bill Sam $40 monthly", "subscribe", .chips([sub]))
+        await tap(sub)
+        XCTAssertEqual(model.state, .confirm(sub, "Sam"))
+        XCTAssertEqual(BarItems.confirmTitle(sub, recipient: "Sam"), "Repeat $40 monthly to Sam?")
+        XCTAssertEqual(api.calls, ["ask"])
+        await tap(sub, confirmed: "Sam")
+        guard case .result(let r) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(r.link, "https://fake.pay/I-SUB1")
+        XCTAssertEqual(AskModel.resultTitle(r), "Repeat billing ready \u{00B7} $40 monthly")
+        let sent = api.subscribed[0]
+        XCTAssertEqual(sent["confirm_amount"], .string("40.00"))
+        XCTAssertEqual(sent["confirm_currency"], .string("USD"))
+        XCTAssertEqual(sent["confirm_interval"], .string("month"))
+        XCTAssertNil(sent["confirm_recipient"], "no email, so PayPal emails nobody")
+        XCTAssertEqual(api.keys, [sub.key])
+    }
+
+    func testAnEmailPickedFromContactsGoesThroughTheConfirm() async {
+        let noEmail = Chip(kind: "invoice", label: "Invoice $45 · Haircut",
+                           payload: ["amount": .string("45.00"), "currency": .string("USD"), "item": .string("Haircut"), "client_name": .null, "client_email": .null],
+                           needs_confirm: true)
+        await ask("invoice $45 for a haircut", "invoice", .chips([noEmail]))
+        await tap(noEmail)
+        XCTAssertEqual(model.state, .confirm(noEmail, ""))
+        XCTAssertTrue(AskModel.canAddContact(noEmail))
+        model.useContact(email: " Kate.Bell@Example.com ", name: "Kate Bell", for: noEmail)
+        guard case .confirm(let picked, let recipient) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(recipient, "kate.bell@example.com")
+        XCTAssertEqual(BarItems.confirmTitle(picked, recipient: recipient), "Send $45 invoice to kate.bell@example.com?")
+        XCTAssertFalse(AskModel.canAddContact(picked))
+        XCTAssertNotEqual(picked.key, noEmail.key, "another recipient is another action")
+        XCTAssertEqual(api.calls, ["ask"], "picking a contact sends nothing")
+        api.requireConfirm = "kate.bell@example.com"
+        await tap(picked, confirmed: recipient)
+        guard case .result = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(api.invoiced.count, 1)
+        XCTAssertEqual(api.invoiced[0]["client_email"], .string("kate.bell@example.com"))
+        XCTAssertEqual(api.invoiced[0]["client_name"], .string("Kate Bell"))
+        XCTAssertEqual(api.invoiced[0]["confirm_recipient"], .string("kate.bell@example.com"))
+        XCTAssertEqual(api.invoiced[0]["confirm_amount"], .string("45.00"))
+        XCTAssertEqual(api.keys, [picked.key])
+    }
+
+    func testAContactIsOnlyUsedForAnInvoice() {
+        let link = Chip(kind: "paylink", label: "Pay link $45", payload: ["amount": .string("45.00")], needs_confirm: false)
+        model.useContact(email: "kate.bell@example.com", name: nil, for: link)
+        XCTAssertEqual(model.state, .idle)
+    }
+
     func testTheServerAnswerDecodesByRoute() throws {
         func decode(_ json: String) throws -> AskResponse { try JSONDecoder().decode(AskResponse.self, from: Data(json.utf8)) }
         let money = try decode(#"{"route":"invoice","confidence":0.9,"result":{"chips":[{"kind":"invoice","label":"Invoice $45","payload":{"amount":"45.00"},"needs_confirm":true}]}}"#)
@@ -123,6 +197,9 @@ final class AskModelTests: XCTestCase {
         XCTAssertTrue(chips[0].needs_confirm)
         guard case .addNote("buy shampoo") = try decode(#"{"route":"add_note","confidence":1,"result":{"action":"add_note","text":"buy shampoo"}}"#).result else { return XCTFail() }
         guard case .showCalendar = try decode(#"{"route":"today_calendar","confidence":1,"result":{"action":"show_calendar"}}"#).result else { return XCTFail() }
+        guard case .chips(let repeats) = try decode(#"{"route":"subscribe","confidence":0.9,"result":{"chips":[{"kind":"subscribe","label":"Repeat $40 monthly","payload":{"amount":"40.00","interval":"month"},"needs_confirm":true}]}}"#).result else { return XCTFail() }
+        XCTAssertEqual(repeats.map(\.kind), ["subscribe"])
+        guard case .review("Thanks! g.page/r/x/review") = try decode(#"{"route":"review_ask","confidence":0.9,"result":{"text":"Thanks! g.page/r/x/review"}}"#).result else { return XCTFail() }
         guard case .text("Hi") = try decode(#"{"route":"reply","confidence":1,"result":{"reply":"Hi"}}"#).result else { return XCTFail() }
         guard case .line("Try again") = try decode(#"{"route":"none","confidence":0.2,"result":{"line":"Try again"}}"#).result else { return XCTFail() }
         guard case .brief(let lines) = try decode(#"{"route":"brief","confidence":1,"result":{"lines":["a","b"],"source":"ai"}}"#).result else { return XCTFail() }

@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UIKit
 
@@ -8,6 +9,7 @@ final class ClickInputView: UIInputView, UIInputViewAudioFeedback {
 
 final class KeyboardViewController: UIInputViewController, TextHost {
     private let model = KeyboardModel()
+    private var heightWatch: AnyCancellable?
 
     override func loadView() {
         let v = ClickInputView(frame: .zero, inputViewStyle: .keyboard)
@@ -21,6 +23,7 @@ final class KeyboardViewController: UIInputViewController, TextHost {
         let hosting = UIHostingController(rootView: KeyboardView(model: model))
         hosting.view.translatesAutoresizingMaskIntoConstraints = false
         hosting.view.backgroundColor = .clear
+        let height = hosting.view.heightAnchor.constraint(equalToConstant: Theme.SystemKeyboard.height)
         addChild(hosting)
         view.addSubview(hosting.view)
         NSLayoutConstraint.activate([
@@ -28,8 +31,13 @@ final class KeyboardViewController: UIInputViewController, TextHost {
             hosting.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             hosting.view.topAnchor.constraint(equalTo: view.topAnchor),
             hosting.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            hosting.view.heightAnchor.constraint(equalToConstant: Theme.SystemKeyboard.height),
+            height,
         ])
+        // The keyboard grows while the "Who hasn't paid" list is open above the keys.
+        heightWatch = model.$whoPaid.sink { [weak self] list in
+            height.constant = KeyboardView.height(whoPaid: list)
+            self?.view.setNeedsLayout()
+        }
         hosting.didMove(toParent: self)
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (vc: KeyboardViewController, _) in vc.updateAppearance() }
     }

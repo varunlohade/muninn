@@ -94,25 +94,32 @@ enum BarItems {
         return [chip.kind == "invoice" ? "Invoice" : "Pay link", money(chip), string(chip, "item") ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    /// Every invoice and reminder, and a pay link the server is unsure of, takes one confirm tap before anything is sent.
+    /// How a repeat bill's interval reads: "monthly".
+    static let every = ["week": "weekly", "month": "monthly", "year": "yearly"]
+
+    /// Every invoice, repeat bill and reminder, and a pay link the server is unsure of, takes one confirm tap before anything is sent.
     static func asksFirst(_ chip: Chip) -> Bool {
-        ["invoice", "remind"].contains(chip.kind) || (chip.kind == "paylink" && chip.needs_confirm)
+        ["invoice", "subscribe", "remind"].contains(chip.kind) || (chip.kind == "paylink" && chip.needs_confirm)
     }
 
     /// Who an invoice goes to: the email, else the client name, else nobody named. A reminder: the client it names.
     static func recipient(_ chip: Chip) -> String {
         switch chip.kind {
-        case "invoice": string(chip, "client_email") ?? string(chip, "client_name") ?? ""
+        case "invoice", "subscribe": string(chip, "client_email") ?? string(chip, "client_name") ?? ""
         case "remind": string(chip, "client_name") ?? ""
         default: ""
         }
     }
 
     /// The confirm shows what the tap does: "Send $45 invoice to bob@x.com?", "Create $45 invoice for Sam?",
-    /// "Make a $45 pay link?", "Remind Ana about $90?". Only an invoice with an email is sent.
+    /// "Make a $45 pay link?", "Remind Ana about $90?", "Repeat $40 monthly to Sam?". Only an invoice with an email is sent.
     static func confirmTitle(_ chip: Chip, recipient: String) -> String {
         if chip.kind == "remind" {
             return recipient.isEmpty || money(chip).isEmpty ? chip.label + "?" : "Remind \(recipient) about \(money(chip))?"
+        }
+        if chip.kind == "subscribe" {
+            let words = ["Repeat", money(chip), string(chip, "interval").flatMap { every[$0] } ?? ""] + (recipient.isEmpty ? [] : ["to", recipient])
+            return words.filter { !$0.isEmpty }.joined(separator: " ") + "?"
         }
         let words = if chip.kind == "paylink" { ["Make a", money(chip), "pay link"] }
             else if recipient.contains("@") { ["Send", money(chip), "invoice", "to", recipient] }

@@ -7,6 +7,21 @@ struct KeyboardView: View {
 
     var body: some View {
         let p = model.isDark ? M.dark : M.light
+        VStack(spacing: 0) {
+            if let clients = model.whoPaid { WhoPaidStrip(model: model, clients: clients, palette: p) }
+            keyboard(p)
+        }
+        .frame(height: Self.height(whoPaid: model.whoPaid))
+        .background(p.bed)
+        .environment(\.colorScheme, model.isDark ? .dark : .light)
+    }
+
+    /// The keyboard grows by the list's height while "Who hasn't paid" is open. The keys keep their size and place.
+    static func height(whoPaid: [UnpaidClient]?) -> CGFloat {
+        M.height + (whoPaid.map { WhoPaidStrip.height(rows: $0.count) } ?? 0)
+    }
+
+    private func keyboard(_ p: M.Palette) -> some View {
         ZStack(alignment: .top) {
             p.bed
             if model.notesOpen {
@@ -20,7 +35,72 @@ struct KeyboardView: View {
                 .frame(height: M.barHeight)
         }
         .frame(height: M.height)
-        .environment(\.colorScheme, model.isDark ? .dark : .light)
+    }
+}
+
+/// "Who hasn't paid", compact, above the keys: the total, then one row per client with Remind.
+/// Remind puts the confirm in the bar below, the same one a reminder chip gets.
+struct WhoPaidStrip: View {
+    @ObservedObject var model: KeyboardModel
+    let clients: [UnpaidClient]
+    let palette: Theme.SystemKeyboard.Palette
+    typealias M = Theme.SystemKeyboard
+
+    static let headerHeight: CGFloat = 36
+    static let rowHeight: CGFloat = 44
+    /// Two rows show; more scroll.
+    static func height(rows: Int) -> CGFloat { headerHeight + CGFloat(min(rows, 2)) * (rowHeight + M.keyGap) + Theme.Space.xxs }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: Theme.Space.xs) {
+                Text(WhoPaid.header(clients)).font(M.mode.weight(.medium)).foregroundStyle(palette.label).lineLimit(1).minimumScaleFactor(0.7)
+                    .accessibilityIdentifier("whopaid.header")
+                Spacer()
+                Button(action: model.closeWhoPaid) {
+                    Image(systemName: "xmark").font(M.icon).foregroundStyle(palette.secondaryLabel)
+                        .frame(width: 44, height: Self.headerHeight).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+                .accessibilityIdentifier("whopaid.close")
+            }
+            .padding(.leading, Theme.Space.s)
+            .frame(height: Self.headerHeight)
+            ScrollView {
+                VStack(spacing: M.keyGap) {
+                    ForEach(clients) { c in row(c) }
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
+        .padding(.horizontal, M.sideInset)
+        .padding(.bottom, Theme.Space.xxs)
+        .frame(height: Self.height(rows: clients.count))
+    }
+
+    private func row(_ c: UnpaidClient) -> some View {
+        HStack(spacing: Theme.Space.xs) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("\(c.name) \(c.money)").font(M.mode).foregroundStyle(palette.label).lineLimit(1).minimumScaleFactor(0.7)
+                Text("\(c.item) \u{00B7} \(c.veryLate ? "very late, " : "")\(c.late)").font(M.predictionSmall)
+                    .foregroundStyle(c.daysLate > 0 ? Theme.Color.due : palette.secondaryLabel).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if let chip = c.remind {
+                Button { model.tapChip(chip) } label: {
+                    Text("Remind").font(M.mode.weight(.medium)).foregroundStyle(palette.accent)
+                        .padding(.horizontal, Theme.Space.s).frame(height: Self.rowHeight).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("whopaid.remind.\(c.name)")
+            }
+        }
+        .padding(.leading, Theme.Space.s)
+        .frame(height: Self.rowHeight)
+        .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("whopaid.row.\(c.name)")
     }
 }
 

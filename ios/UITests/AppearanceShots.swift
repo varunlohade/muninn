@@ -50,11 +50,17 @@ final class AppearanceShots: XCTestCase {
 
     func testScreens() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-calendarDemo"]
+        app.launchArguments = ["-calendarDemo", "-intro_seen", "NO"]
         app.launch()
+        try XCTSkipUnless(id(app, "onboarding.skip").waitForExistence(timeout: 8), "already in; reset the simulator keychain first")
+        id(app, "onboarding.skip").tap()
+        if id(app, "onboarding.step.2").waitForExistence(timeout: 4) {
+            shot("03-onboarding-keyboard")
+            id(app, "onboarding.later").tap()
+        }
         let mark = id(app, "onboarding.mark")
-        try XCTSkipUnless(mark.waitForExistence(timeout: 8), "already signed in; reset the simulator keychain first")
-        shot("01-onboarding-signin")
+        XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 8), app.debugDescription)
+        shot("01-onboarding-get-started")
 
         mark.press(forDuration: 1.3)
         let token = app.secureTextFields["token"]
@@ -68,16 +74,6 @@ final class AppearanceShots: XCTestCase {
         app.buttons["Pair"].tap()
         dismissPrompts(app)
 
-        if id(app, "onboarding.step.2").waitForExistence(timeout: 8) {
-            dismissPrompts(app)
-            shot("03-onboarding-keyboard")
-            id(app, "onboarding.later").tap()
-        }
-        if id(app, "onboarding.step.3").waitForExistence(timeout: 8) {
-            shot("04-onboarding-try")
-            dismissPrompts(app)
-            id(app, "onboarding.skip").tap()
-        }
         XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15), app.debugDescription)
         dismissPrompts(app)
         _ = id(app, "home.brief").waitForExistence(timeout: 10)
@@ -150,18 +146,23 @@ final class AppearanceShots: XCTestCase {
         Thread.sleep(forTimeInterval: 1)
         shot("kb-muninn")
     }
-    /// Release check: a fresh install shows only Sign in with Apple. Holding the mark opens nothing.
+    /// Release check: a fresh install ends the intro at Get started. Holding the mark opens nothing.
     func testReleaseHasNoDeveloperPairing() {
         let app = XCUIApplication()
+        app.launchArguments = ["-intro_seen", "NO"]
         app.launch()
+        XCTAssertTrue(id(app, "onboarding.skip").waitForExistence(timeout: 10))
+        id(app, "onboarding.skip").tap()
+        if id(app, "onboarding.later").waitForExistence(timeout: 4) { id(app, "onboarding.later").tap() }
         let mark = id(app, "onboarding.mark")
         XCTAssertTrue(mark.waitForExistence(timeout: 10))
-        shot("01-onboarding-signin")
+        shot("01-onboarding-get-started")
         mark.press(forDuration: 2)
         Thread.sleep(forTimeInterval: 1)
         shot("02-after-holding-mark")
         XCTAssertFalse(app.secureTextFields["token"].exists, "developer pairing opened in this build")
         XCTAssertFalse(app.staticTexts["Developer pairing"].exists)
-        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Apple")).firstMatch.exists)
+        XCTAssertTrue(id(app, "onboarding.start").exists)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Apple")).firstMatch.exists)
     }
 }
