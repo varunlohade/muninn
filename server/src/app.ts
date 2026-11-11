@@ -12,7 +12,7 @@ import { PayPalError, type PayPalProvider } from './paypal.ts';
 import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './money.ts';
 import { log } from './log.ts';
 import { clean } from './text.ts';
-import { askQuick, mentions, noteText, quick, withoutUrls, type Quick } from './quick.ts';
+import { askQuick, mentions, noteText, onlyKnownWords, quick, typedEmails, type Quick } from './quick.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { RANGES, createBusiness } from './business.ts';
@@ -276,7 +276,7 @@ export function createApp(deps: Deps) {
     const items = db.listItems(userId);
     const profile = profileOf(userId);
     const seen = `${text} ${context ?? ''}`;
-    const known = regexFields(userId, q, seen, items);
+    const known = regexFields(userId, q, text, seen, items);
     const extract = () => {
       path = 'jev+extract';
       return ai.extract(prompt, catalogText(items)).then(
@@ -343,26 +343,29 @@ export function createApp(deps: Deps) {
    * For each intent that needs fields: the fields when the regex and the owner's own records give all of them
    * (then no extract call), else null. An invoice needs amount, a catalog item and a typed email; a pay link
    * needs amount and item; a reminder needs one known unpaid client named; a refund needs one paid client
-   * named and, if the text has digits, the amount.
+   * named and, if the text has digits, the amount. A regex amount counts only when every other word the owner
+   * typed is a money word, a catalog item or a known client; else the model reads it too (rule B).
    */
-  function regexFields(userId: string, q: Quick, seen: string, items: CatalogItem[]) {
+  function regexFields(userId: string, q: Quick, text: string, seen: string, items: CatalogItem[]) {
     const hasItem = !!catalogMatch(items, seen.toLowerCase());
+    const invoices = db.listInvoices(userId);
+    const orders = db.listOrders(userId);
+    const clients = [...invoices, ...orders].map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n);
     const named = (rows: (InvoiceRow | OrderRow)[]) => {
       const names = new Set(rows.map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n && mentions(seen, n)));
       return names.size === 1 ? [...names][0] : null;
     };
-    const invoices = db.listInvoices(userId);
-    const orders = db.listOrders(userId);
+    const amount = q.amount !== null && onlyKnownWords(text, [...items.map((i) => i.name), ...clients]);
     const base: Extraction = { client_name: named([...invoices, ...orders]), client_email: q.email, amount: q.amount, currency: q.currency, item: null };
     const unpaid = invoices.filter((r) => !r.paid_at && r.status !== 'CANCELLED');
     const paid = [...invoices, ...orders].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED');
     const remindName = named(unpaid);
     const refundName = named(paid);
     return {
-      create_invoice: q.amount !== null && hasItem && q.email ? base : null,
-      pay_link: q.amount !== null && hasItem ? base : null,
+      create_invoice: amount && hasItem && q.email ? base : null,
+      pay_link: amount && hasItem ? base : null,
       send_reminder: remindName ? { ...base, client_name: remindName } : null,
-      refund: refundName && (q.amount !== null || !/\d/.test(seen)) ? { ...base, client_name: refundName } : null,
+      refund: refundName && (amount || !/\d/.test(seen)) ? { ...base, client_name: refundName } : null,
     };
   }
 
@@ -394,7 +397,8 @@ export function createApp(deps: Deps) {
       const item = ext?.item ? ext.item.charAt(0).toUpperCase() + ext.item.slice(1) : match?.name ?? 'Payment';
       const money = formatMoney(cents, currency);
       const base = { amount: centsToValue(cents), currency, item, client_name: ext?.client_name ?? null };
-      const email = ext?.client_email ?? null;
+      // An email counts only if the owner typed it: never one the model read from copied client text.
+      const email = ext?.client_email && typedEmails(text).includes(ext.client_email.toLowerCase()) ? ext.client_email : null;
       const recipient = email ?? ext?.client_name ?? null;
       // Every invoice gets one confirm tap that shows the amount and the recipient; the server checks both.
       const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`, { ...base, client_email: email }, true);
@@ -411,7 +415,11 @@ export function createApp(deps: Deps) {
       const hit = onlyOne(unpaid.filter((r) => sameClient(userId, r, want)));
       if (!hit) return [];
       const name = biz.namer(userId)(hit) ?? 'client';
-      return [chip('remind', `Remind ${name} · ${formatMoney(hit.amount_cents, hit.currency)}`, { invoice_id: hit.id })];
+      // A client named only in copied text takes one confirm tap: that text could name anyone.
+      const client = dec(userId, hit.client_name_enc) ?? '';
+      const namedIn = (t: string) => mentions(t, client) || mentions(t, client.split(/\s+/)[0]);
+      const fromCopied = !namedIn(text) && namedIn(context);
+      return [chip('remind', `Remind ${name} · ${formatMoney(hit.amount_cents, hit.currency)}`, { invoice_id: hit.id }, fromCopied)];
     }
     if (intent === 'refund') {
       const want = ext?.client_name?.trim().toLowerCase();
@@ -699,7 +707,7 @@ export function createApp(deps: Deps) {
         paid++;
         return ai.extract(text, catalogText(items)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
       };
-      const filled = { text, context: '', q, known: regexFields(userId, q, text, items), items, currency: profileOf(userId).currency };
+      const filled = { text, context: '', q, known: regexFields(userId, q, text, text, items), items, currency: profileOf(userId).currency };
       return done(route, confidence, { chips: (await moneyChips(userId, intent, filled, null, extract)) ?? [] });
     }
 

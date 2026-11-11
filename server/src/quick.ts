@@ -32,7 +32,8 @@ const QUANTITY_BEFORE = /\b\d+\s*(?:x|@|[\p{L}-]+\s+(?:at|@))\s*$/iu;
 const PRICE_SHAPE = /[$€£]\s?\d|\d\s?[$€£]|\b\d+(?:[.,]\d+)*\s+for\b|\b(?:do|for)\s+\d/i;
 // Rule A: a regex amount needs exactly one number in the owner's text and no rate or multiplier.
 const NUMBER = /\d+(?:[.,]\d+)*|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|dozens?|half)\b/gi;
-const RATE = /[×*]|\d\s*x|\bx\s*\d|\b(?:x|times|each|per|ea|hours?|hrs?|months?|people|pax)\b|\/\s*(?:hr|h|mo)\b/i;
+// A discount, tip, part payment or quantity word: the number may not be the total.
+const RATE = /[×*]|\d\s*x|\bx\s*\d|\b(?:x|times|each|per|ea|hours?|hrs?|months?|people|pax|off|minus|discount\w*|less|tips?|plus|extra|couple|twice|both|half|double|deposit|partial|split)\b|\/\s*(?:hr|h|mo)\b/i;
 const URL = /\S*\/\S*/g;
 /** Text with every URL-like token (anything with a slash) removed, so an email inside a link never counts as typed. */
 export const withoutUrls = (text: string) => text.replace(URL, ' ');
@@ -77,7 +78,7 @@ export function quick(text: string, context = ''): Quick {
   const plain = text.replace(EMAIL, ' ');
   const amt = (plain.match(NUMBER) ?? []).length === 1 && !RATE.test(plain) ? single(typed) : null;
   const currency = one(typed.map((a) => a.currency).filter((c) => c !== null), (c) => c);
-  const emails = [...withoutUrls(text).matchAll(EMAIL)].map((m) => m[0].toLowerCase());
+  const emails = typedEmails(text);
   const none = typed.length + copied.length === 0 && !MONEY_WORDS.test(all) && !PRICE_SHAPE.test(all) && !OTHER_SCRIPT.test(all);
   return {
     none, amount: amt?.amount ?? null, clientAmountOnly: typed.length === 0 && copied.length > 0,
@@ -85,11 +86,28 @@ export function quick(text: string, context = ''): Quick {
   };
 }
 
+// Words that add nothing to a money request. Any other word next to a regex amount sends the request to the model too.
+const FILLER = new Set(['a', 'an', 'the', 'for', 'to', 'of', 'is', 'it', 'this', 'that', 'here', "here's", 'heres', 'please', 'pls', 'and', 'my', 'your', 'you', 'me', 'send', 'make', 'create', 'new', 'now', 'with']);
+
+/** The emails the owner typed, lowercased. Links do not count. */
+export const typedEmails = (text: string) => [...withoutUrls(text).matchAll(EMAIL)].map((m) => m[0].toLowerCase());
+
+/** True when every word of `text` is an amount, an email, a currency or money word, a filler word, or one of `names`. */
+export function onlyKnownWords(text: string, names: string[]): boolean {
+  let rest = withoutUrls(text).replace(EMAIL, ' ');
+  for (const n of names) if (n.trim().length >= 2) rest = rest.replace(wholeWords(n.trim(), 'giu'), ' ');
+  const words = rest.toLowerCase().match(/[\p{L}']+/gu) ?? [];
+  return words.every((w) => FILLER.has(w) || Object.hasOwn(WORD, w) || MONEY_WORDS.test(w));
+}
+
+const wholeWords = (n: string, flags: string) =>
+  new RegExp(String.raw`(?<![\p{L}\d])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\p{L}\d])`, flags);
+
 /** True when `name` appears as whole words in `text` (case-insensitive). */
 export function mentions(text: string, name: string): boolean {
   const n = name.trim();
   if (n.length < 2) return false;
-  return new RegExp(String.raw`(?<![\p{L}\d])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\p{L}\d])`, 'iu').test(text);
+  return wholeWords(n, 'iu').test(text);
 }
 
 // ---- Ask router, step 0: what the regex can settle with no model call.

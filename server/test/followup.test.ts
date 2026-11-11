@@ -31,7 +31,7 @@ test('F1: no chip carries confirm_recipient, typed or injected; one tap never se
   const chip = (await (await inj.call(t2, 'POST', '/v1/suggest', { text: 'invoice sam 45 haircut' })).json()).chips[0];
   assert.equal(chip.needs_confirm, true);
   assert.equal(chip.payload.confirm_recipient, undefined);
-  assert.equal((await inj.call(t2, 'POST', '/v1/actions/invoice', chip.payload)).status, 409);
+  assert.equal(chip.payload.client_email, null, 'an email the owner did not type never reaches the chip');
 });
 
 test('F2: clean() strips zero-width, format, variation and tag characters after NFKC', () => {

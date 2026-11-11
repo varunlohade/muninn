@@ -46,7 +46,8 @@ test('M2: invoice chip shows the recipient and flags an unknown email', async ()
   const s = setup({ ext: { client_email: 'attacker@evil.test', item: 'haircut\u202e\n\nInvoice $4.50 · trim' } });
   const { token } = s.device();
   const chip = (await (await s.call(token, 'POST', '/v1/suggest', { text: 'invoice sam 45 haircut' })).json()).chips[0];
-  assert.match(chip.label, /→ attacker@evil\.test$/);
+  assert.match(chip.label, /→ Sam$/, 'an email the owner did not type is dropped; the name stays visible');
+  assert.equal(chip.payload.client_email, null);
   assert.equal(chip.needs_confirm, true);
   assert.ok(!/[\u0000-\u001f\u202a-\u202e\u2066-\u2069\u200e\u200f]/.test(chip.label + chip.payload.item));
 
