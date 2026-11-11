@@ -35,6 +35,8 @@ struct LookupResult: Codable, Equatable {
     let candidates: [Candidate]
     /// "Nothing from last week. Showing the latest."
     let note: String?
+    /// "invoice sam": it may also mean a new invoice, so the card offers New invoice beside the records. Older servers send none.
+    let new_invoice: Bool?
 
     init?(chip: Chip) {
         guard chip.kind == "lookup", let data = try? JSONEncoder().encode(chip.payload),
@@ -63,8 +65,12 @@ enum LookupCopy {
     }
 
     /// One muted line under the buttons that says what each one does. `insertWord` is "Insert" in the keyboard, "Copy" in the app.
-    static func hint(_ rec: LookupResult.Record?, insertWord: String) -> String {
+    static func hint(_ rec: LookupResult.Record?, insertWord: String, offersNew: Bool = false) -> String {
         guard let rec else { return "New invoice asks for the amount, then you confirm before anything is sent." }
+        if offersNew {
+            let first = "\(insertWord) gives you a line with this \(kindWord[rec.kind] ?? "record")."
+            return first + (rec.remind == nil ? " New invoice asks for the amount, then you confirm." : " Remind and New invoice ask you to confirm first.")
+        }
         let what = rec.kind == "item" ? "the price" : "this \(kindWord[rec.kind] ?? "record")"
         let link = rec.line.contains("https://") ? " and its link" : ""
         let insert = "\(insertWord) gives you a line with \(what)\(link)."
@@ -74,9 +80,10 @@ enum LookupCopy {
     /// "Invoice Sam Lee $": the Ask bar's start of a new invoice. The amount comes next, then the confirm.
     static func newInvoiceRequest(_ name: String) -> String { "Invoice \(name) $" }
 
-    /// The client a "New invoice" starts with: only a real name, never a catalog item.
+    /// The client a "New invoice" starts with: only a real name, never a catalog item. Offered when nothing was found,
+    /// or when the owner typed "invoice sam", which may mean a new one.
     static func newInvoiceName(_ r: LookupResult, _ c: LookupResult.Candidate) -> String? {
-        r.kind == "catalog" || !c.records.isEmpty ? nil : c.name
+        r.kind == "catalog" || !(c.records.isEmpty || r.new_invoice == true) ? nil : c.name
     }
 }
 
@@ -160,11 +167,13 @@ struct LookupCard: View {
                     .background(i == 0 ? palette.key : .clear, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
                     .accessibilityIdentifier("lookup.row.\(i)")
                 }
+                let newFor = LookupCopy.newInvoiceName(result, c)
                 HStack(spacing: Theme.Space.xs) {
                     action(insertWord, id: "lookup.insert") { onInsert(top) }
                     if let remind = top.remind { action("Remind", id: "lookup.remind") { onRemind(remind) } }
+                    if let newFor { action("New invoice", id: "lookup.new") { onNewInvoice(newFor) } }
                 }
-                muted(LookupCopy.hint(top, insertWord: insertWord))
+                muted(LookupCopy.hint(top, insertWord: insertWord, offersNew: newFor != nil))
             }
         } else {
             VStack(alignment: .leading, spacing: M.keyGap) {

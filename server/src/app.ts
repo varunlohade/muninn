@@ -405,7 +405,7 @@ export function createApp(deps: Deps) {
     const l = detectLookup(text, now());
     const r = l && search.find(userId, l);
     if (!l || !r || r.match === 'none') return null;
-    return { chip: { kind: 'lookup', label: clean(chipLabel(r)), payload: r, needs_confirm: false, trigger: l.trigger }, score: importance(l.sure, r.match) };
+    return { chip: { kind: 'lookup', label: clean(chipLabel(r)), payload: r, needs_confirm: false, trigger: l.trigger }, score: importance(l.sure, r.match, r.candidates.length) };
   }
 
   /**
@@ -920,8 +920,9 @@ export function createApp(deps: Deps) {
     if (aq.none) return none(1, 'Ask for an invoice, a reminder, a rewrite, who paid, or a note.');
     // A clear lookup phrase needs no router. An unknown name still answers: "No invoices for Sam yet".
     const look = detectLookup(text, now());
-    const found = look?.sure ? search.find(userId, look) : null;
-    if (found) return done('lookup', 1, found);
+    const found = look ? search.find(userId, look) : null;
+    // "invoice sam" with one client named Sam is a lookup too; with no such client it goes to the router.
+    if (look && found && (look.sure || importance(look.sure, found.match, found.candidates.length) >= SHOW_AT)) return done('lookup', 1, found);
     let group: AskGroup | null = aq.group;
     let confidence = 1;
     let route: AskRoute;

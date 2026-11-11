@@ -37,13 +37,15 @@ export function matchName(query: string, names: string[]): { match: Match; names
 
 /**
  * How much a lookup is worth showing, 0 to 1: the phrase (a full lookup phrase 0.6, unsure 0.3) plus the name
- * (exact 0.4, did-you-mean 0.25, several 0.2, unknown 0). 0.8 or more shows with no model call; 0.6 to 0.8 asks jev.
+ * (exact 0.4, did-you-mean 0.25, several 0.2, unknown 0). 0.8 or more shows with no model call; 0.5 to 0.8 asks jev.
+ * "invoice sam" is unsure, but one client with exactly that name settles it (0.7 → shown): the owner has a Sam to look up.
  */
-export function importance(sure: boolean, match: Match): number {
+export function importance(sure: boolean, match: Match, clients = 1): number {
+  if (!sure && match === 'exact' && clients === 1) return 1;
   return (sure ? 0.6 : 0.3) + { exact: 0.4, did_you_mean: 0.25, ambiguous: 0.2, none: 0 }[match];
 }
 export const SHOW_AT = 0.8;
-export const ASK_AT = 0.6;
+export const ASK_AT = 0.5;
 
 export type RecordKind = 'invoice' | 'pay_link' | 'repeat' | 'item';
 export type Rec = {
@@ -61,6 +63,8 @@ export type LookupResult = {
   candidates: Candidate[];
   /** "Nothing from last week. Showing the latest." when a date or amount filter found nothing. */
   note: string | null;
+  /** "invoice sam": a lookup that may also mean a new invoice, so the card offers New invoice too. */
+  new_invoice: boolean;
 };
 
 export const invoiceState = (s: string) => (['PAID', 'MARKED_AS_PAID'].includes(s) ? 'paid' : ['REFUNDED', 'PARTIALLY_REFUNDED', 'MARKED_AS_REFUNDED'].includes(s) ? 'refunded' : s === 'CANCELLED' ? 'cancelled' : 'unpaid');
@@ -137,7 +141,7 @@ export function createSearch({ db, dec, namer }: Deps) {
       const rec: Rec = { kind: 'item', id: it.id, title: it.name, amount: centsToValue(it.price_cents), currency: it.currency, state: 'price', date: null, date_label: null, link: null, line: `${it.name} is ${money}.` };
       return { name: it.name, records: [rec], empty_line: null };
     });
-    return { kind: 'catalog', noun: 'item', query: l.name, match: m.match, candidates, note: null };
+    return { kind: 'catalog', noun: 'item', query: l.name, match: m.match, candidates, note: null, new_invoice: false };
   }
 
   /** The lookup's result: up to 3 clients, each with its latest record and up to 2 older ones. */
@@ -167,10 +171,12 @@ export function createSearch({ db, dec, namer }: Deps) {
     const candidates = names.map((n) => {
       const c = clients.get(n.toLowerCase());
       const records = c ? pickRows(c.rows).map((row) => record(row, n)) : [];
-      const empty = l.want === 'unpaid' && c?.rows.length ? `${n} owes you nothing right now` : `No ${plural(noun)} for ${n} yet`;
+      // The card shows the name above this line, so the line does not repeat it.
+      const empty = l.want === 'unpaid' && c?.rows.length ? 'Owes you nothing right now' : `No ${plural(noun)} yet`;
       return { name: n, records, empty_line: records.length ? null : empty };
     });
-    return { kind: l.kind, noun, query: l.name, match: m.match, candidates, note };
+    const newInvoice = !l.sure && (noun === 'invoice' || noun === 'bill');
+    return { kind: l.kind, noun, query: l.name, match: m.match, candidates, note, new_invoice: newInvoice };
   }
 
   return { find };
@@ -181,7 +187,7 @@ export function chipLabel(r: LookupResult): string {
   if (r.match === 'ambiguous') return `${r.candidates.length} clients match "${cap(r.query)}" · pick one`;
   const c = r.candidates[0];
   const top = c.records[0];
-  if (!top) return c.empty_line ?? `No records for ${c.name} yet`;
+  if (!top) return c.empty_line?.startsWith('No ') ? `${c.empty_line.replace(/ yet$/, '')} for ${c.name} yet` : `${c.name} ${(c.empty_line ?? 'has no records yet').replace(/^O/, 'o')}`;
   const money = formatMoney(Math.round(Number(top.amount) * 100), top.currency);
   if (top.kind === 'item') return r.match === 'did_you_mean' ? `Did you mean ${top.title}? · ${money}` : `${top.title} · ${money}`;
   const what = KIND_WORD[top.kind];

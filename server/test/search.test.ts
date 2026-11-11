@@ -50,7 +50,9 @@ test('detectLookup: business words map to kinds; plain chat and new-invoice comm
 test('importance: a full phrase and a known name show; a bare name never does', () => {
   assert.ok(importance(true, 'exact') >= SHOW_AT);
   assert.ok(importance(true, 'did_you_mean') >= SHOW_AT);
-  assert.ok(importance(false, 'exact') < SHOW_AT);
+  assert.ok(importance(false, 'exact') >= SHOW_AT, '"invoice sam" with one Sam shows');
+  assert.ok(importance(false, 'exact', 2) < SHOW_AT);
+  assert.ok(importance(false, 'did_you_mean') < SHOW_AT);
   assert.ok(importance(true, 'none') < SHOW_AT);
 });
 
@@ -115,11 +117,22 @@ test('suggest: plain chat stays free; an unsure lookup asks jev once', async () 
     assert.deepEqual((await salon.suggest(t)).chips, [], t);
   }
   assert.equal(salon.s.aiCalls.length, 0, 'plain chat: 0 paid calls');
+  // "invoice sam" with one client named Sam: the regex settles it, and the card also offers New invoice.
   const chip = await salon.lookup('invoice sam');
-  assert.equal(chip?.payload.candidates[0].name, 'Sam Lee');
+  assert.equal(chip?.label, "Sam Lee's invoice · $120 · unpaid · Nov 9");
+  assert.equal(chip?.payload.new_invoice, true);
+  assert.equal(salon.s.aiCalls.length, 0, 'an exact unique name: 0 paid calls');
+  assert.equal((await salon.lookup('invoice for sam'))?.payload.new_invoice, false, 'a clear lookup phrase offers no New invoice');
+  // A near name in an unsure phrase asks jev once.
+  const near = await salon.lookup('invoice samanta');
+  assert.equal(near?.payload.candidates[0].name, 'Samantha Cruz');
   assert.deepEqual(salon.s.aiCalls.map((c) => c.fn), ['askRoute']);
   const no = seeded(BUSINESSES.salon, { route: { route: 'who_paid' } });
-  assert.equal(await no.lookup('invoice sam'), undefined, 'jev says it is not a lookup: the normal suggest runs');
+  assert.equal(await no.lookup('invoice samanta'), undefined, 'jev says it is not a lookup: the normal suggest runs');
+  const two = seeded({ invoices: [
+    { client: 'Sam Lee', cents: 12000, item: 'Color', at: daysAgo(2) }, { client: 'Sam Ortiz', cents: 3000, item: 'Trim', at: daysAgo(1) },
+  ] }, { route: { route: 'who_paid' } });
+  assert.equal(await two.lookup('invoice sam'), undefined, 'two Sams: not settled by the regex');
 });
 
 test('ask: the same search, an empty result, and the remind chip keeps its confirm', async () => {
@@ -130,9 +143,10 @@ test('ask: the same search, an empty result, and the remind chip keeps its confi
   assert.deepEqual(w.s.aiCalls, [], 'a clear lookup skips the router');
   const empty = await w.ask('invoice for zed');
   assert.equal(empty.result.match, 'none');
-  assert.equal(empty.result.candidates[0].empty_line, 'No invoices for Zed yet');
+  assert.equal(empty.result.candidates[0].empty_line, 'No invoices yet');
   const none = await w.ask("ana's invoice");
-  assert.equal(none.result.candidates[0].empty_line, 'No invoices for Ana Lopez yet', 'Ana has a pay link, not an invoice');
+  assert.equal(none.result.candidates[0].empty_line, 'No invoices yet', 'Ana has a pay link, not an invoice');
+  assert.equal((await w.lookup("ana's invoice"))?.label, 'No invoices for Ana Lopez yet', 'the chip still names who');
   // The Remind chip in a result goes through /v1/actions/remind, which still asks for the confirm.
   const remind = r.result.candidates[0].records[0].remind;
   const first = await w.s.call(w.token, 'POST', '/v1/actions/remind', { invoice_id: remind.payload.invoice_id });

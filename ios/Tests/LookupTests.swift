@@ -7,12 +7,15 @@ import XCTest
 @MainActor
 final class LookupTests: XCTestCase {
     static let samJSON = #"""
-    {"chips":[{"kind":"lookup","label":"Sam Lee's invoice · $120 · unpaid · Nov 9","payload":{"kind":"money","noun":"invoice","query":"sam","match":"exact","candidates":[{"name":"Sam Lee","records":[{"kind":"invoice","id":"INV2-cba387ce","title":"Color","amount":"120.00","currency":"USD","date":"2026-11-09","date_label":"Nov 9","state":"unpaid","link":"https://paypal.test/inv/INV2-cba387ce","line":"Your invoice for $120 (Nov 9) is here: https://paypal.test/inv/INV2-cba387ce","remind":{"kind":"remind","label":"Remind Sam Lee · $120","payload":{"invoice_id":"INV2-cba387ce","client_name":"Sam Lee","amount":"120.00","currency":"USD"},"needs_confirm":true}},{"kind":"invoice","id":"INV2-b47df4c0","title":"Haircut","amount":"45.00","currency":"USD","date":"2026-10-20","date_label":"Oct 20","state":"paid","link":"https://paypal.test/inv/INV2-b47df4c0","line":"Your invoice for $45 (Oct 20) is paid. Thank you!"},{"kind":"invoice","id":"INV2-dcdd25a5","title":"Blowout","amount":"60.00","currency":"USD","date":"2026-09-22","date_label":"Sep 22","state":"paid","link":"https://paypal.test/inv/INV2-dcdd25a5","line":"Your invoice for $60 (Sep 22) is paid. Thank you!"}],"empty_line":null}],"note":null},"needs_confirm":false,"trigger":"invoice for sam"}],"intent":"lookup","confidence":1,"timings":{"total_ms":12}}
+    {"chips":[{"kind":"lookup","label":"Sam Lee's invoice · $120 · unpaid · Nov 9","payload":{"kind":"money","noun":"invoice","query":"sam","match":"exact","candidates":[{"name":"Sam Lee","records":[{"kind":"invoice","id":"INV2-cba387ce","title":"Color","amount":"120.00","currency":"USD","date":"2026-11-09","date_label":"Nov 9","state":"unpaid","link":"https://paypal.test/inv/INV2-cba387ce","line":"Your invoice for $120 (Nov 9) is here: https://paypal.test/inv/INV2-cba387ce","remind":{"kind":"remind","label":"Remind Sam Lee · $120","payload":{"invoice_id":"INV2-cba387ce","client_name":"Sam Lee","amount":"120.00","currency":"USD"},"needs_confirm":true}},{"kind":"invoice","id":"INV2-b47df4c0","title":"Haircut","amount":"45.00","currency":"USD","date":"2026-10-20","date_label":"Oct 20","state":"paid","link":"https://paypal.test/inv/INV2-b47df4c0","line":"Your invoice for $45 (Oct 20) is paid. Thank you!"},{"kind":"invoice","id":"INV2-dcdd25a5","title":"Blowout","amount":"60.00","currency":"USD","date":"2026-09-22","date_label":"Sep 22","state":"paid","link":"https://paypal.test/inv/INV2-dcdd25a5","line":"Your invoice for $60 (Sep 22) is paid. Thank you!"}],"empty_line":null}],"note":null,"new_invoice":false},"needs_confirm":false,"trigger":"invoice for sam"}],"intent":"lookup","confidence":1,"timings":{"total_ms":12}}
     """#
     static let anaJSON = #"""
-    {"chips":[{"kind":"lookup","label":"No invoices for Ana Lopez yet","payload":{"kind":"money","noun":"invoice","query":"ana","match":"exact","candidates":[{"name":"Ana Lopez","records":[],"empty_line":"No invoices for Ana Lopez yet"}],"note":null},"needs_confirm":false,"trigger":"ana's invoice"}],"intent":"lookup","confidence":1,"timings":{"total_ms":3}}
+    {"chips":[{"kind":"lookup","label":"No invoices for Ana Lopez yet","payload":{"kind":"money","noun":"invoice","query":"ana","match":"exact","candidates":[{"name":"Ana Lopez","records":[],"empty_line":"No invoices yet"}],"note":null,"new_invoice":false},"needs_confirm":false,"trigger":"ana's invoice"}],"intent":"lookup","confidence":1,"timings":{"total_ms":3}}
     """#
     static func reply(_ json: String) -> SuggestResponse { try! JSONDecoder().decode(SuggestResponse.self, from: Data(json.utf8)) }
+    /// "invoice sam" with one Sam: the server's same records, plus new_invoice, and the typed words as the trigger.
+    static let invoiceSamJSON = samJSON.replacingOccurrences(of: #""new_invoice":false"#, with: #""new_invoice":true"#)
+        .replacingOccurrences(of: #""trigger":"invoice for sam""#, with: #""trigger":"invoice sam""#)
 
     private var host: FakeHost!
     private var api: FakeAPI!
@@ -110,6 +113,21 @@ final class LookupTests: XCTestCase {
         XCTAssertFalse(api.calls.contains("invoice"))
     }
 
+    func testInvoiceSamShowsTheLatestAndOffersNewInvoice() async throws {
+        let typedChip = await typeAndWait("invoice sam", Self.reply(Self.invoiceSamJSON))
+        let chip = try XCTUnwrap(typedChip)
+        XCTAssertEqual(chip.trigger, "invoice sam")
+        model.tapChip(chip)
+        let found = try XCTUnwrap(model.lookup)
+        let sam = try XCTUnwrap(found.candidates.first)
+        XCTAssertEqual(LookupCopy.newInvoiceName(found, sam), "Sam Lee", "records shown, and New invoice offered")
+        XCTAssertEqual(LookupCopy.hint(sam.records[0], insertWord: "Insert", offersNew: true),
+                       "Insert gives you a line with this invoice. Remind and New invoice ask you to confirm first.")
+        model.newInvoiceFromLookup("Sam Lee")
+        XCTAssertEqual(model.bar, .done("Type the amount for Sam"))
+        XCTAssertFalse(api.calls.contains("invoice"), "no invoice before the amount and the confirm")
+    }
+
     func testCardWordsSayWhatEachButtonDoes() throws {
         let chip = try XCTUnwrap(Self.reply(Self.samJSON).chips.first)
         let r = try XCTUnwrap(LookupResult(chip: chip))
@@ -141,9 +159,9 @@ final class LookupTests: XCTestCase {
         ask.submit()
         await ask.task?.value
         XCTAssertEqual(ask.state, .lookup(r))
-        let wire = #"{"route":"lookup","confidence":1,"result":{"kind":"money","noun":"invoice","query":"ana","match":"exact","candidates":[{"name":"Ana Lopez","records":[],"empty_line":"No invoices for Ana Lopez yet"}],"note":null}}"#
+        let wire = #"{"route":"lookup","confidence":1,"result":{"kind":"money","noun":"invoice","query":"ana","match":"exact","candidates":[{"name":"Ana Lopez","records":[],"empty_line":"No invoices yet"}],"note":null,"new_invoice":false}}"#
         guard case .lookup(let decoded) = try JSONDecoder().decode(AskResponse.self, from: Data(wire.utf8)).result else { return XCTFail("route") }
-        XCTAssertEqual(decoded.candidates.first?.empty_line, "No invoices for Ana Lopez yet")
+        XCTAssertEqual(decoded.candidates.first?.empty_line, "No invoices yet")
         XCTAssertEqual(LookupCopy.newInvoiceRequest("Ana Lopez"), "Invoice Ana Lopez $")
     }
 
@@ -159,9 +177,13 @@ final class LookupTests: XCTestCase {
             if cutKeys, let top = image.cropping(to: CGRect(x: 0, y: 0, width: image.width, height: image.height - Int((keys + 6) * 3))) { image = top }
             if let png = UIImage(cgImage: image).pngData() { try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png")) }
         }
+        let samChip = await typeAndWait("invoice sam", Self.reply(Self.invoiceSamJSON))
+        save("1-chip", KeyboardView(model: model))
+        model.tapChip(try XCTUnwrap(samChip))
+        save("6-card-invoice-sam", KeyboardView(model: model))
+        model.closeLookup()
         let typedChip = await typeAndWait("invoice for sam", Self.reply(Self.samJSON))
         let chip = try XCTUnwrap(typedChip)
-        save("1-chip", KeyboardView(model: model))
         model.tapChip(chip)
         save("2-card", KeyboardView(model: model))
         model.isDark = true
