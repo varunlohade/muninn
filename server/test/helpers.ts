@@ -3,13 +3,14 @@ import { randomBytes } from 'node:crypto';
 import { createApp } from '../src/app.ts';
 import type { AppleVerifier } from '../src/apple.ts';
 import type { Ai, Classification, Extraction, ToneCheck } from '../src/ai.ts';
+import type { AskGroup, AskRoute } from '../src/config.ts';
 import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
 import type { PayPal, PayPalDispute, PayPalDisputeDetail, PayPalTxn } from '../src/paypal.ts';
 
 export const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
-export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void } = {}) {
+export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number } | Error; route?: { route?: AskRoute; confidence?: number }; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void } = {}) {
   const db = openDb(':memory:');
   const cipher = createCipher(randomBytes(32));
   const calls: { fn: string; args: unknown[] }[] = [];
@@ -65,7 +66,13 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
   const ai: Ai = {
     async classify(text) { aiCalls.push({ fn: 'classify', args: [text] }); await sleep(opts.delayMs); return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
     async extract(text, catalog) { aiCalls.push({ fn: 'extract', args: [text, catalog] }); await sleep(opts.delayMs); return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...opts.ext }; },
-    async reply() { return 'Haircut is $45. Want a slot tomorrow?'; },
+    async askGroup(text) {
+      aiCalls.push({ fn: 'askGroup', args: [text] });
+      if (opts.group instanceof Error) throw opts.group;
+      return { group: 'money', confidence: 0.92, ...opts.group };
+    },
+    async askRoute(text, group) { aiCalls.push({ fn: 'askRoute', args: [text, group] }); return { route: 'invoice', confidence: 0.92, ...opts.route }; },
+    async reply(...args) { aiCalls.push({ fn: 'reply', args }); return 'Haircut is $45. Want a slot tomorrow?'; },
     async brief(facts) {
       aiCalls.push({ fn: 'brief', args: [facts] });
       if (opts.brief instanceof Error) throw opts.brief;
@@ -89,7 +96,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(path.startsWith('/v1/write') ? { 'X-User-Action': 'tap' } : {}),
+        ...(path.startsWith('/v1/write') || path === '/v1/ask' ? { 'X-User-Action': 'tap' } : {}),
         ...(path.startsWith('/v1/actions') ? { 'X-User-Action': 'tap', 'Idempotency-Key': `key-${Date.now()}-${++k}` } : {}),
         ...headers,
       },

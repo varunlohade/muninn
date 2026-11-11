@@ -1,10 +1,10 @@
 // A local stand-in Muninn server for the iOS app and UI tests: fake AI, fake PayPal, in-memory DB, no network.
 // usage: npm run fake   (PORT=0 picks a free port; the first line printed names it)
-// Debug routes: GET /_log, POST /_reset, POST /_paid/:id, POST /_next {"cls": {...}, "ext": {...}}
+// Debug routes: GET /_log, POST /_reset, POST /_paid/:id, POST /_next {"cls": {...}, "ext": {...}, "group": {...}, "route": {...}}
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Classification, Extraction } from '../src/ai.ts';
-import { config } from '../src/config.ts';
+import { config, type AskGroup, type AskRoute } from '../src/config.ts';
 import { sha256 } from '../src/crypto.ts';
 import { DEMO_CATALOG, DEMO_PROFILE } from '../src/seed.ts';
 import { paidEvent, setup, webhookHeaders } from '../test/helpers.ts';
@@ -22,7 +22,7 @@ const FAKE_TOKEN = 'pkd_fake';
 const INNER_TOKEN = 'pkd_fake_local_only_device_token';
 const DAY = 86_400_000;
 
-type Next = { cls?: Partial<Classification>; ext?: Partial<Extraction> };
+type Next = { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number }; route?: { route?: AskRoute; confidence?: number } };
 type LogEntry = { method: string; path: string; status: number; body: unknown };
 
 function build() {
@@ -35,6 +35,8 @@ function build() {
   const env = setup({
     get cls() { return take('cls'); },
     get ext() { return take('ext'); },
+    get group() { return take('group'); },
+    get route() { return take('route'); },
     apple: async () => { throw new Error('no Sign in with Apple on the fake server'); },
   });
   const { db, cipher } = env;
@@ -74,6 +76,8 @@ fake.post('/_next', async (c) => {
   const b = (await c.req.json().catch(() => ({}))) as Next;
   if (b.cls) state.next.cls = b.cls;
   if (b.ext) state.next.ext = b.ext;
+  if (b.group) state.next.group = b.group;
+  if (b.route) state.next.route = b.route;
   return c.json({ ok: true, next: state.next });
 });
 // Plays the PayPal webhook the real server would get when the client pays.

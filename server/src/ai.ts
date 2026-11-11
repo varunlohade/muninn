@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { config, INTENTS, type Intent, type Tone } from './config.ts';
+import { config, ASK_GROUPS, ASK_ROUTES, INTENTS, type AskGroup, type AskRoute, type Intent, type Tone } from './config.ts';
 import { clean } from './text.ts';
 import { log } from './log.ts';
 
@@ -9,6 +9,10 @@ export type Extraction = {
 };
 export type Ai = {
   classify(text: string): Promise<Classification>;
+  /** Ask router step 1: which group of functions the request belongs to. */
+  askGroup(text: string): Promise<{ group: AskGroup; confidence: number }>;
+  /** Ask router step 2: which function inside the group. */
+  askRoute(text: string, group: Exclude<AskGroup, 'none'>): Promise<{ route: AskRoute; confidence: number }>;
   extract(text: string, catalog: string): Promise<Extraction>;
   reply(text: string, profile: { business_name: string; tone: string }, catalog: string): Promise<string>;
   brief(facts: string): Promise<string>;
@@ -39,6 +43,32 @@ const CRITERIA: Record<Intent, string> = {
   refund: 'The owner agrees to give a client money back or refund a payment.',
   catalog_reply: 'A client asks about prices, services, products, or availability, and the owner should reply with the catalog.',
   none: 'Ordinary chat with no payment, pricing or invoice action.',
+};
+
+const GROUP_CRITERIA: Record<AskGroup, string> = {
+  money: 'The owner wants to bill, invoice or charge a client, make a pay link, remind a client about an unpaid invoice, or refund a client.',
+  writing: 'The owner wants a piece of text fixed, rewritten, made nicer, shorter or firmer, checked for tone, or wants a reply written to a client message.',
+  info: 'The owner asks a question about the business: who paid or still owes, how the day or week went, the clients, or disputes.',
+  device: 'The owner wants to save a note, or asks what is on the calendar or schedule today.',
+  none: 'A greeting, small talk, or anything else that none of the other options covers.',
+};
+const NO_ROUTE = 'None of the other options fits.';
+const ROUTE_CRITERIA: Record<AskRoute, string> = {
+  invoice: 'Send a client an invoice or a bill for a job or an item.',
+  paylink: 'Make a quick link the client can pay with now.',
+  remind: 'Remind or nudge a client about an unpaid or late invoice.',
+  refund: 'Give a client money back.',
+  fix: 'Fix spelling and grammar only, with no change of tone or words.',
+  refine: 'Rewrite the text in another style: nicer, friendlier, more professional, shorter or firmer.',
+  tone: 'Check or judge how a message sounds: rude, blunt, angry or fine.',
+  reply: 'Write a reply to a message a client sent, for example a question about prices.',
+  who_paid: 'Who paid, who has not paid, what is still owed or late.',
+  brief: 'A short summary of how the business did today or this week: money earned, what needs attention.',
+  clients: 'A list of the clients, or facts about a client.',
+  disputes: 'Disputes, chargebacks or payment claims from clients.',
+  add_note: 'Save a note or something to remember.',
+  today_calendar: 'What is on the calendar or schedule today, the appointments, who is next.',
+  none: NO_ROUTE,
 };
 
 const TONE_LABELS = ['upset', 'blunt', 'ok'] as const;
@@ -211,6 +241,19 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
       const { index, confidence } = await choose(text.slice(0, config.maxTextChars),
         'A small business owner is typing this chat message. Which payment action fits it best?', INTENTS.map((k) => CRITERIA[k]));
       return { intent: INTENTS[index] ?? 'none', confidence, ms: Math.round(performance.now() - t) };
+    },
+
+    async askGroup(text) {
+      const { index, confidence } = await choose(text.slice(0, config.maxTextChars),
+        'A small business owner asks an assistant for this. Which kind of request is it?', ASK_GROUPS.map((g) => GROUP_CRITERIA[g]));
+      return { group: ASK_GROUPS[index] ?? 'none', confidence };
+    },
+
+    async askRoute(text, group) {
+      const routes: readonly AskRoute[] = ASK_ROUTES[group];
+      const { index, confidence } = await choose(text.slice(0, config.maxTextChars),
+        'A small business owner asks an assistant for this. Which one action fits it best?', routes.map((r) => ROUTE_CRITERIA[r]));
+      return { route: routes[index] ?? 'none', confidence };
     },
 
     async extract(text, catalog) {

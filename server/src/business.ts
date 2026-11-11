@@ -289,12 +289,14 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
     };
   }
 
-  async function brief(userId: string) {
+  /** `onPaid` runs once for each model call the brief makes. */
+  async function brief(userId: string, onPaid?: () => void) {
     const sum = await summary(userId);
     const facts = briefFacts(sum, now());
     const fallback = briefTemplate(sum, now());
     if (!facts.length) return { lines: fallback, source: 'template' as const, data_source: sum.source };
     try {
+      onPaid?.();
       const out = await ai.brief(facts.join('\n'));
       const lines = checkBrief(out, facts.join('\n'));
       if (lines) return { lines, source: 'ai' as const, data_source: sum.source };

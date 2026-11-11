@@ -87,3 +87,26 @@ export function mentions(text: string, name: string): boolean {
   if (n.length < 2) return false;
   return new RegExp(String.raw`(?<![\p{L}\d])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\p{L}\d])`, 'iu').test(text);
 }
+
+// ---- Ask router, step 0: what the regex can settle with no model call.
+const GREETING = /^(?:(?:hi+|hello|hey|yo|sup|thanks|thank you|thx|ok|okay|k|lol|cool|nice|great|bye|good (?:morning|afternoon|evening|night))(?:\s+(?:there|muninn|again|so much|a lot))?[\s!.?,]*)+$/i;
+const MONEY_ACTION = /\b(?:invoic\w*|bill\w*|charge\w*|pay\s?link|refund\w*|remind\w*)\b/i;
+const NOTE_PREFIX = /^(?:please\s+)?(?:(?:add|save|make|take|create|write)\s+)?(?:(?:a|new|this as a)\s+)*note(?:\s+to self)?\b\s*(?:[:\-,]|that\b|saying\b)?\s*/i;
+
+export type AskQuick = {
+  /** True for an empty request or a plain greeting: route "none" with no paid call. */
+  none: boolean;
+  /** The group when the words alone make it obvious, so the router skips its first question. */
+  group: 'money' | 'device' | null;
+};
+
+/** A request that starts as a note is a note, even when the note is about money. */
+export function askQuick(text: string): AskQuick {
+  const t = text.trim();
+  if (!t || GREETING.test(t)) return { none: true, group: null };
+  if (NOTE_PREFIX.test(t)) return { none: false, group: 'device' };
+  return { none: false, group: amountsIn(t).length > 0 && MONEY_ACTION.test(t) ? 'money' : null };
+}
+
+/** "add a note: buy shampoo" gives "buy shampoo". Text with no note prefix comes back whole. */
+export const noteText = (text: string) => text.trim().replace(NOTE_PREFIX, '').trim();

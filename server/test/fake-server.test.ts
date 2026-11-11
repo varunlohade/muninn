@@ -52,6 +52,11 @@ test('fake server: suggest, invoice, remind, refund and /_paid work with the fix
   const pays = await call('/v1/payments');
   assert.equal(pays.json.payments.find((i: any) => i.id === 'INV2-TEST-1').state, 'paid');
 
+  await call('/_next', { group: { group: 'info' }, route: { route: 'who_paid' } });
+  const asked = await call('/v1/ask', { text: "who hasn't paid" }, true);
+  assert.equal(asked.json.route, 'who_paid');
+  assert.ok(asked.json.result.payments.length >= 3, JSON.stringify(asked.json));
+
   const log = (await call('/_log')).json;
   assert.deepEqual(log.requests[0], { method: 'POST', path: '/v1/suggest', status: 200, body: { text: 'that is $45 for the haircut, sam@example.com' } });
   assert.deepEqual(log.paypal.map((c: any) => c.fn), ['invoice', 'remind', 'refund']);

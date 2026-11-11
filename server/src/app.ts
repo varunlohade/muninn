@@ -4,7 +4,7 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { config, TONES } from './config.ts';
+import { config, TONES, type AskGroup, type AskRoute, type Intent, type Tone } from './config.ts';
 import { randomToken, sha256, type Cipher } from './crypto.ts';
 import type { CatalogItem, Db, InvoiceRow, OrderRow } from './db.ts';
 import type { Ai, Extraction } from './ai.ts';
@@ -12,7 +12,7 @@ import { PayPalError, type PayPalProvider } from './paypal.ts';
 import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './money.ts';
 import { log } from './log.ts';
 import { clean } from './text.ts';
-import { mentions, quick, withoutUrls, type Quick } from './quick.ts';
+import { askQuick, mentions, noteText, quick, withoutUrls, type Quick } from './quick.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { RANGES, createBusiness } from './business.ts';
@@ -97,6 +97,8 @@ const SuggestBody = z.object({
 }).strict().refine((b) => b.text || b.context, { message: 'text or context is required' });
 // Writing help: one paragraph, cleaned and capped. The text is never stored or logged.
 const WriteText = CleanText(config.maxWriteChars);
+// An empty ask is allowed: it routes to "none" with no paid call.
+const AskBody = z.object({ text: z.string().trim().max(config.maxTextChars) }).strict();
 const FixBody = z.object({ text: WriteText }).strict();
 const RefineBody = z.object({ text: WriteText, tone: z.enum(TONES) }).strict();
 const OptionalWriteText = z.string().transform(clean).pipe(z.string().max(config.maxWriteChars)).optional();
@@ -210,6 +212,7 @@ export function createApp(deps: Deps) {
   const byUser = (c: Context<Env>) => c.get('userId');
   app.use('/v1/suggest', rateLimiter('suggest', byUser));
   app.use('/v1/reply', rateLimiter('suggest', byUser));
+  app.use('/v1/ask', rateLimiter('suggest', byUser));
   app.use('/v1/actions/*', rateLimiter('actions', byUser));
   app.use('/v1/write/*', rateLimiter('write', byUser));
   app.use('/v1/disputes/:id/message', rateLimiter('actions', byUser));
@@ -290,16 +293,28 @@ export function createApp(deps: Deps) {
     timings.classify_ms = cls.ms;
     if (cls.intent === 'none' || cls.confidence < config.jev.minConfidence) return done([], cls.intent, cls.confidence);
 
+    const chips = await moneyChips(userId, cls.intent, { text, context: context ?? '', q, known, items, currency: profile.currency }, extracting, extract);
+    return done(chips ?? [], cls.intent, cls.confidence);
+  });
+
+  type Filled = { text: string; context: string; q: Quick; known: ReturnType<typeof regexFields>; items: CatalogItem[]; currency: string };
+  /**
+   * The chips for an intent that is already picked. `extracting` is an extract call that already runs, or null;
+   * `extract` starts one, and it runs only when the regex and the owner's records cannot fill the intent.
+   * Null when the extract call was needed and failed.
+   */
+  async function moneyChips(userId: string, intent: string, f: Filled, extracting: Promise<Extraction | null> | null, extract: () => Promise<Extraction | null>): Promise<Chip[] | null> {
+    const { q } = f;
     let ext: Extraction | null = null;
     // An amount the owner did not type, or one the regex and the model read differently, is never pre-confirmed.
     let unsure = false;
-    const fill = known[cls.intent as keyof typeof known];
+    const fill = f.known[intent as keyof typeof f.known];
     if (fill !== undefined) {
       if (fill && !extracting) {
         ext = fill;
       } else {
         const model = await (extracting ??= extract());
-        if (!model) return done([], cls.intent, cls.confidence);
+        if (!model) return null;
         unsure = q.clientAmountOnly || (q.amount !== null && model.amount !== null && model.amount !== q.amount);
         // What the regex read beats a model guess. Email comes only from the owner's own text (see buildChips).
         ext = {
@@ -311,10 +326,8 @@ export function createApp(deps: Deps) {
         };
       }
     }
-
-    const chips = buildChips(userId, cls.intent, ext, text, context ?? '', items, profile.currency, unsure);
-    return done(chips, cls.intent, cls.confidence);
-  });
+    return buildChips(userId, intent, ext, f.text, f.context, f.items, f.currency, unsure);
+  }
 
   const catalogMatch = (items: CatalogItem[], seen: string, extItem?: string | null) =>
     items.find((i) => seen.includes(i.name.toLowerCase()) || (extItem && extItem.toLowerCase().includes(i.name.toLowerCase())));
@@ -530,6 +543,10 @@ export function createApp(deps: Deps) {
         }
       }));
     }
+    return c.json({ payments: paymentsOf(userId) });
+  });
+
+  function paymentsOf(userId: string) {
     const t = now();
     const nameOf = biz.namer(userId);
     const invoices = db.listInvoices(userId).map((r) => {
@@ -547,8 +564,8 @@ export function createApp(deps: Deps) {
       origin: 'paypal_order', paid_via: r.paid_at ? 'paypal' : null, seeded: false,
     }));
     const payments = [...invoices, ...orders].sort((a, b) => b.created_at.localeCompare(a.created_at));
-    return c.json({ payments });
-  });
+    return payments;
+  }
 
   app.get('/v1/summary', async (c) => c.json(await biz.summary(c.get('userId'))));
 
@@ -627,6 +644,99 @@ export function createApp(deps: Deps) {
     const draft = b.text ?? '', client = b.context ?? '';
     // jev judges the tone; the LLM writes a calm reply only when the tone is not ok.
     return writing(c, 'tone', draft.length + client.length, () => ai.toneCheck(draft, client), (out) => (out.tone === 'ok' ? 1 : 2));
+  });
+
+  // ---- ask: one free-form request, routed to one Muninn function. Regex first, then two small jev choices.
+  // The router never moves money: a money route returns the same chips as /v1/suggest, and each chip
+  // still needs its own tap on /v1/actions/*. Device routes return an instruction; the phone does the work.
+  const ROUTE_INTENT: Partial<Record<AskRoute, Intent>> = { invoice: 'create_invoice', paylink: 'pay_link', remind: 'send_reminder', refund: 'refund' };
+  const NOT_SURE = 'Not sure what you need. Try "invoice Sam $45 for a haircut" or "who has not paid".';
+  const refineTone = (words: string): Tone =>
+    /\b(?:short|brief|concise)/i.test(words) ? 'shorter' : /\b(?:firm|strict|stern)/i.test(words) ? 'firmer'
+      : /\b(?:professional|formal|polite)/i.test(words) ? 'professional' : 'friendly';
+  app.post('/v1/ask', async (c) => {
+    // A writing route calls the model on the owner's text, so ask keeps the rule of /v1/write/*.
+    if (c.req.header('x-user-action') !== 'tap') return c.json({ error: 'ask runs only from an explicit user tap' }, 428);
+    const userId = c.get('userId');
+    const { text } = await body(c, AskBody);
+    const t0 = performance.now();
+    let paid = 0;
+    // Only the route, sizes and timings are logged, never the text.
+    const done = (route: AskRoute, confidence: number, result: Record<string, unknown>, err?: string) => {
+      log('ask', { user_id: userId, route, confidence, paid_calls: paid, chars: text.length, ms: Math.round(performance.now() - t0), ...(err ? { err } : {}) });
+      return c.json({ route, confidence, result });
+    };
+    const none = (confidence: number, line = NOT_SURE, err?: string) => done('none', confidence, { line }, err);
+
+    const aq = askQuick(text);
+    if (aq.none) return none(1, 'Ask for an invoice, a reminder, a rewrite, who paid, or a note.');
+    let group: AskGroup | null = aq.group;
+    let confidence = 1;
+    let route: AskRoute;
+    try {
+      if (!group) {
+        paid++;
+        ({ group, confidence } = await ai.askGroup(text));
+      }
+      if (group === 'none' || confidence < config.jev.minConfidence) return none(confidence);
+      paid++;
+      const picked = await ai.askRoute(text, group);
+      confidence = Math.min(confidence, picked.confidence);
+      if (picked.route === 'none' || confidence < config.jev.minConfidence) return none(confidence);
+      route = picked.route;
+    } catch (e) {
+      return none(0, 'Could not read that right now. Try again.', (e as Error).message);
+    }
+
+    const intent = ROUTE_INTENT[route];
+    if (intent) {
+      const q = quick(text);
+      const items = db.listItems(userId);
+      const extract = () => {
+        paid++;
+        return ai.extract(text, catalogText(items)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
+      };
+      const filled = { text, context: '', q, known: regexFields(userId, q, text, items), items, currency: profileOf(userId).currency };
+      return done(route, confidence, { chips: (await moneyChips(userId, intent, filled, null, extract)) ?? [] });
+    }
+
+    if (group === 'writing') {
+      // The text to work on comes after the first colon: "make this nicer: ya ok will send".
+      const colon = text.indexOf(':');
+      const draft = WriteText.safeParse(colon < 0 ? '' : text.slice(colon + 1));
+      if (!draft.success) return none(confidence, 'Put the text after a colon, like "fix: thnks for comming".');
+      const d = draft.data;
+      try {
+        paid++;
+        if (route === 'fix') {
+          const fixed = await ai.fix(d);
+          return done(route, confidence, { text: fixed, changed: fixed !== d });
+        }
+        if (route === 'refine') {
+          const tone = refineTone(text.slice(0, colon));
+          return done(route, confidence, { text: await ai.refine(d, tone), tone });
+        }
+        if (route === 'tone') {
+          const out = await ai.toneCheck(d, '');
+          if (out.tone !== 'ok') paid++;
+          return done(route, confidence, out);
+        }
+        return done(route, confidence, { reply: await ai.reply(d, profileOf(userId), catalogText(db.listItems(userId))) });
+      } catch (e) {
+        // A model error can quote the text, so only its type is logged.
+        return none(confidence, 'Writing help is not available right now. Try again.', (e as Error).name);
+      }
+    }
+
+    if (route === 'who_paid') return done(route, confidence, { payments: paymentsOf(userId) });
+    if (route === 'brief') return done(route, confidence, await biz.brief(userId, () => paid++));
+    if (route === 'clients') return done(route, confidence, await biz.clients(userId));
+    if (route === 'disputes') return done(route, confidence, { disputes: await biz.disputes(userId) });
+    if (route === 'add_note') {
+      const note = clean(noteText(text));
+      return note ? done(route, confidence, { action: 'add_note', text: note }) : none(confidence, 'Say what to note, like "add a note: buy shampoo".');
+    }
+    return done(route, confidence, { action: 'show_calendar' });
   });
 
   // ---- profile and catalog

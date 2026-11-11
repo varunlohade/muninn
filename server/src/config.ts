@@ -2,6 +2,16 @@ const env = process.env;
 
 export const INTENTS = ['create_invoice', 'pay_link', 'payment_status', 'send_reminder', 'refund', 'catalog_reply', 'none'] as const;
 export type Intent = (typeof INTENTS)[number];
+// Ask router: step 1 picks a group, step 2 picks one function inside it. 'none' is the last option of every question.
+export const ASK_GROUPS = ['money', 'writing', 'info', 'device', 'none'] as const;
+export type AskGroup = (typeof ASK_GROUPS)[number];
+export const ASK_ROUTES = {
+  money: ['invoice', 'paylink', 'remind', 'refund', 'none'],
+  writing: ['fix', 'refine', 'tone', 'reply', 'none'],
+  info: ['who_paid', 'brief', 'clients', 'disputes', 'none'],
+  device: ['add_note', 'today_calendar', 'none'],
+} as const;
+export type AskRoute = (typeof ASK_ROUTES)[Exclude<AskGroup, 'none'>][number];
 export const TONES = ['professional', 'friendly', 'shorter', 'firmer'] as const;
 export type Tone = (typeof TONES)[number];
 
