@@ -233,10 +233,11 @@ final class WalkthroughTests: XCTestCase {
         print("CHIP_LABEL", chip.label)
         shot("04b-ask-invoice-chip")
         chip.tap()
-        let confirm = label(app, "label BEGINSWITH %@", "Create $")
-        let confirmSend = label(app, "label BEGINSWITH %@", "Send $")
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5) || confirmSend.exists, app.debugDescription)
-        let c = confirm.exists ? confirm : confirmSend
+        // "Email Jordan Ray (jordan.ray@…) a $120 invoice?" or, with no email, "Make a $120 invoice link for Jordan Ray?"
+        let confirm = label(app, "label BEGINSWITH %@", "Email ")
+        let confirmLink = label(app, "label BEGINSWITH %@", "Make a $")
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5) || confirmLink.exists, app.debugDescription)
+        let c = confirm.exists ? confirm : confirmLink
         print("CONFIRM_LABEL", c.label)
         shot("04c-ask-invoice-confirm")
         c.tap()
