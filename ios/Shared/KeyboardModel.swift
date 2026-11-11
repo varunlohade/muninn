@@ -326,12 +326,10 @@ final class KeyboardModel: ObservableObject {
     }
 
     /// A money call the keyboard closed on may have gone out. Look it up with the same key; a lookup never sends.
-    /// A refund replays as before: a stored "Refunded" is safe.
     private func resumePending() {
         guard let p = deps.store.pendingAction else { return }
         guard p.expires > deps.now() else { deps.store.pendingAction = nil; return }
         if case .working = bar { return }
-        if p.chip.kind == "refund" { run(p.chip, confirmed: p.confirmed, resuming: p); return }
         let api = deps.api()
         let store = deps.store
         let sleep = deps.sleep
@@ -811,23 +809,21 @@ final class KeyboardModel: ObservableObject {
         lastSent = ""
     }
 
-    private func run(_ chip: Chip, confirmed: String?, resuming: PendingAction? = nil) {
+    private func run(_ chip: Chip, confirmed: String?) {
         suggestTask?.cancel()
         actionTask?.cancel()
         bar = .working(Self.workingLine(chip))
         // What the field held at the tap. The result goes in only if the field still holds it.
-        let before = resuming?.before ?? host?.contextBeforeInput ?? ""
+        let before = host?.contextBeforeInput ?? ""
         let source = chipSource
         let api = deps.api()
         let sleep = deps.sleep
         let store = deps.store
         let sendsMoney = ChipActions.sendsMoney.contains(chip.kind)
-        let key = resuming?.key
-            ?? (sendsMoney ? ChipKeys.key(for: chip, confirmed: confirmed, before: before, in: store, now: deps.now()) : UUID().uuidString)
+        let key = chip.key
         // Kept until the server answers, so closing the keyboard mid-call does not lose a sent invoice.
         if sendsMoney {
-            store.pendingAction = resuming
-                ?? PendingAction(chip: chip, confirmed: confirmed, before: before, key: key, expires: deps.now() + ChipKeys.ttl)
+            store.pendingAction = PendingAction(chip: chip, confirmed: confirmed, before: before, key: key, expires: deps.now() + PendingAction.ttl)
         }
         actionTask = Task { [weak self] in
             do {

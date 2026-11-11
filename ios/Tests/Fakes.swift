@@ -89,7 +89,8 @@ final class FakeAPI: AskAPI {
         calls.append("remind:\(invoiceID)"); keys.append(key); try fail(); stored.insert(key); return remindReply
     }
 
-    func refund(_ body: [String: JSONValue], key: String) async throws -> RefundResponse {
+    func refund(_ body: [String: JSONValue], key: String, lookup: Bool) async throws -> RefundResponse {
+        if lookup { try lookUp("refund", key); return body["confirm_token"] == nil ? refundAskReply : refundDoneReply }
         calls.append("refund"); refunded.append(body); keys.append(key); try fail()
         return body["confirm_token"] == nil ? refundAskReply : refundDoneReply
     }
@@ -109,7 +110,6 @@ final class FakeStore: KeyboardStore {
     var appointments: [Appointment] = []
     var notes: [Note] = []
     var actionShortcuts: [ActionShortcut] = ActionShortcut.defaults
-    var chipKeys: [String: ChipKey] = [:]
     var pendingAction: PendingAction?
 }
 

@@ -90,9 +90,9 @@ enum BarItems {
         return [chip.kind == "invoice" ? "Invoice" : "Pay link", money(chip), string(chip, "item") ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    /// Every invoice, and a pay link the server is unsure of, takes one confirm tap before anything is sent.
+    /// Every invoice, and a pay link or reminder the server is unsure of, takes one confirm tap before anything is sent.
     static func asksFirst(_ chip: Chip) -> Bool {
-        chip.kind == "invoice" || (chip.kind == "paylink" && chip.needs_confirm)
+        chip.kind == "invoice" || (["paylink", "remind"].contains(chip.kind) && chip.needs_confirm)
     }
 
     /// Who an invoice goes to: the email, else the client name, else nobody named.
@@ -100,9 +100,13 @@ enum BarItems {
         chip.kind == "invoice" ? string(chip, "client_email") ?? string(chip, "client_name") ?? "" : ""
     }
 
-    /// The confirm shows what the tap sends: "Send $45 invoice to bob@x.com?", "Create $45 pay link?".
+    /// The confirm shows what the tap does: "Send $45 invoice to bob@x.com?", "Create $45 invoice for Sam?",
+    /// "Create $45 pay link?", "Remind Ana · $90?". Only an invoice with an email is sent.
     static func confirmTitle(_ chip: Chip, recipient: String) -> String {
-        let words = chip.kind == "paylink" ? ["Create", money(chip), "pay link"] : ["Send", money(chip), "invoice"] + (recipient.isEmpty ? [] : ["to", recipient])
+        if chip.kind == "remind" { return chip.label + "?" }
+        let words = if chip.kind == "paylink" { ["Create", money(chip), "pay link"] }
+            else if recipient.contains("@") { ["Send", money(chip), "invoice", "to", recipient] }
+            else { ["Create", money(chip), "invoice"] + (recipient.isEmpty ? [] : ["for", recipient]) }
         return words.filter { !$0.isEmpty }.joined(separator: " ") + "?"
     }
 

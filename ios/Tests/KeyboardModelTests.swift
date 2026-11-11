@@ -63,6 +63,18 @@ final class KeyboardModelTests: XCTestCase {
                                              "item": .string("haircut"), "amount": .string("45.00"), "currency": .string("USD")],
                                    needs_confirm: true)
 
+    func testTwoPayShortcutsInTwoChatsGetDifferentKeys() async {
+        for chat in ["Hi Ana ", "Hi Bo "] {
+            host.text = chat
+            type(";pay 45 ")
+            guard case .chips(let chips, _) = model.bar, let link = chips.first else { return XCTFail("no pay chip: \(model.bar)") }
+            model.tapChip(link)
+            await until("link sent") { api.keys.count == (chat == "Hi Ana " ? 1 : 2) }
+        }
+        XCTAssertEqual(api.calls.filter { $0 == "paylink" }.count, 2)
+        XCTAssertNotEqual(api.keys[0], api.keys[1], "two ;pay chips are two requests")
+    }
+
     func testTypedSentenceGivesInvoiceChipAndTapInsertsLink() async {
         let chip = invoiceChip
         api.suggestReply = SuggestResponse(chips: [chip], intent: "invoice", timings: nil)

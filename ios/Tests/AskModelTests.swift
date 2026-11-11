@@ -35,11 +35,13 @@ final class AskModelTests: XCTestCase {
     }
 
     func testAReTapOnTheSameChipSendsTheSameKey() async {
+        let invoice = invoice
         await ask("invoice Sam $45 for a haircut sam@example.com", "invoice", .chips([invoice]))
         XCTAssertEqual(model.state, .chips([invoice]))
         api.failures = [URLError(.timedOut)]
         await tap(invoice, confirmed: "sam@example.com")
         XCTAssertEqual(model.state, .error("Took too long. Try again."))
+        now += PendingAction.ttl + 1
         await tap(invoice, confirmed: "sam@example.com")
         XCTAssertEqual(api.calls, ["ask", "invoice", "invoice"])
         XCTAssertEqual(api.keys.count, 2)
@@ -48,18 +50,21 @@ final class AskModelTests: XCTestCase {
         XCTAssertEqual(r.link, "https://fake.pay/INV-1")
     }
 
-    func testTheSameRequestAskedAgainKeepsItsKeyAndAnotherChipGetsItsOwn() async {
-        await ask("invoice Sam $45", "invoice", .chips([invoice]))
-        await tap(invoice, confirmed: "sam@example.com")
-        await ask("invoice Sam $45", "invoice", .chips([invoice]))
-        await tap(invoice, confirmed: "sam@example.com")
-        let other = Chip(kind: "paylink", label: "Pay link $45 · Haircut", payload: ["amount": .string("45.00"), "item": .string("Haircut")], needs_confirm: false)
-        await tap(other)
-        XCTAssertEqual(api.keys[0], api.keys[1])
-        XCTAssertNotEqual(api.keys[1], api.keys[2])
-        now += ChipKeys.ttl + 1
-        await tap(invoice, confirmed: "sam@example.com")
-        XCTAssertNotEqual(api.keys[3], api.keys[0], "after the key expires the chip is a new request")
+    func testEachAskReplyGivesItsChipsNewKeys() async {
+        let first = invoice, second = invoice // two replies: two decoded chips with the same fields
+        await ask("invoice Sam $45", "invoice", .chips([first]))
+        await tap(first, confirmed: "sam@example.com")
+        await ask("invoice Sam $45", "invoice", .chips([second]))
+        await tap(second, confirmed: "sam@example.com")
+        XCTAssertEqual(api.keys.count, 2)
+        XCTAssertNotEqual(api.keys[0], api.keys[1], "a new reply is a new request")
+    }
+
+    func testARemindThatNeedsAConfirmAsksBeforeAnyCall() async {
+        let chip = Chip(kind: "remind", label: "Remind Ana · $90", payload: ["invoice_id": .string("INV-A")], needs_confirm: true)
+        model.run(chip)
+        XCTAssertEqual(model.state, .confirm(chip, ""))
+        XCTAssertEqual(api.calls, [])
     }
 
     func testAnUnconfirmedInvoiceAsksBeforeAnyCall() async {

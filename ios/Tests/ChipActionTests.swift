@@ -187,10 +187,11 @@ final class ChipActionTests: XCTestCase {
     private let inProgress = APIError.http(409, #"{"error":"request with this Idempotency-Key is in progress"}"#)
 
     func testTwoTapsOfTheSameChipShareOneKey() async {
-        send(invoice)
+        let c = invoice
+        send(c)
         await settled()
         host.text = "" // the same chip over the same field text
-        send(invoice)
+        send(c)
         await settled()
         XCTAssertEqual(api.keys.count, 2)
         XCTAssertEqual(api.keys[0], api.keys[1])
@@ -206,24 +207,37 @@ final class ChipActionTests: XCTestCase {
         XCTAssertNotEqual(api.keys[0], api.keys[1])
     }
 
-    func testTheKeyExpiresAfterTheTTL() async {
-        send(invoice)
+    func testAReTapOfTheSameChipAfterATimeoutSendsTheSameKey() async {
+        let c = invoice
+        api.failures = [URLError(.timedOut)]
+        send(c)
         await settled()
-        clock.advance(ChipKeys.ttl + 1)
-        send(invoice)
+        XCTAssertEqual(model.bar, .error("Took too long. Try again."))
+        clock.advance(PendingAction.ttl + 1)
+        send(c)
         await settled()
         XCTAssertEqual(api.keys.count, 2)
-        XCTAssertNotEqual(api.keys[0], api.keys[1])
+        XCTAssertEqual(api.keys[0], api.keys[1], "the same chip is the same request, however late the re-tap")
+    }
+
+    func testEachServerReplyGivesNewKeysAndASavedChipKeepsItsKey() throws {
+        let json = Data(#"{"chips":[{"kind":"paylink","label":"Pay link $45","payload":{"amount":"45.00"},"needs_confirm":false}],"intent":"pay_link"}"#.utf8)
+        let a = try JSONDecoder().decode(SuggestResponse.self, from: json).chips[0]
+        let b = try JSONDecoder().decode(SuggestResponse.self, from: json).chips[0]
+        XCTAssertNotEqual(a.key, b.key, "a new reply is a new request")
+        let saved = try JSONDecoder().decode(Chip.self, from: JSONEncoder().encode(a))
+        XCTAssertEqual(saved, a, "a pending call read back from disk is still the same chip")
     }
 
     func testDisappearMidCallThenReTapUsesTheSameKey() async {
+        let c = invoice
         host.text = "Thanks Sam"
         api.failures = [URLError(.networkConnectionLost)]
-        send(invoice)
+        send(c)
         await until("retry wait") { clock.sleeping > 0 }
         model.keyboardDisappeared()
         for _ in 0..<50 { await Task.yield() }
-        send(invoice)
+        send(c)
         await settled()
         XCTAssertEqual(api.keys.count, 2)
         XCTAssertEqual(Set(api.keys).count, 1, "the re-tap replays the first call, it does not send a new invoice")
@@ -348,7 +362,7 @@ final class ChipActionTests: XCTestCase {
                                                 "client_name": .string("Sam")])
         model.tapChip(c)
         XCTAssertEqual(api.calls, [])
-        XCTAssertEqual(titles(), ["Send $45 invoice to Sam?", "Cancel"])
+        XCTAssertEqual(titles(), ["Create $45 invoice for Sam?", "Cancel"], "a name-only invoice is not emailed")
         guard case .confirm(let next, let recipient) = model.bar else { return XCTFail("expected the confirm slot, got \(model.bar)") }
         model.confirm(next, recipient: recipient)
         await settled()
@@ -368,7 +382,7 @@ final class ChipActionTests: XCTestCase {
         model.tapChip(link)
         await settled()
         host.text = "Hi Bo,"
-        model.tapChip(link)
+        model.tapChip(chip("paylink", link.label, link.payload))
         await settled()
         var named = link.payload
         named["client_name"] = .string("Cy")
@@ -419,6 +433,32 @@ final class ChipActionTests: XCTestCase {
         await settled()
         XCTAssertEqual(api.calls, ["lookup:invoice"])
         XCTAssertEqual(host.text, "Thanks Sam\nHere's your invoice for Haircut ($45): https://fake.pay/INV-1")
+    }
+
+    func testARemindNamedOnlyInCopiedTextAsksFirst() async {
+        model.tapChip(chip("remind", "Remind Ana · $90", ["invoice_id": .string("INV-A")], confirm: true))
+        XCTAssertEqual(api.calls, [], "no reminder goes out on the first tap")
+        XCTAssertEqual(titles(), ["Remind Ana · $90?", "Cancel"])
+        guard case .confirm(let next, let recipient) = model.bar else { return XCTFail("expected the confirm slot, got \(model.bar)") }
+        model.confirm(next, recipient: recipient)
+        await settled()
+        XCTAssertEqual(api.calls, ["remind:INV-A"])
+    }
+
+    func testAPendingRefundOnAppearOnlyLooksUp() async {
+        let refund = chip("refund", "Refund $45 to Sam?", ["confirm_token": .string("rf_token_123")])
+        store.pendingAction = PendingAction(chip: refund, confirmed: nil, before: "", key: "stale-refund-1", expires: clock.now + 60)
+        model.keyboardAppeared()
+        await until("lookup") { store.pendingAction == nil }
+        await settled()
+        XCTAssertEqual(api.calls, ["lookup:refund"], "a replay never sends a refund")
+        api.stored = ["stale-refund-2"]
+        store.pendingAction = PendingAction(chip: refund, confirmed: nil, before: "", key: "stale-refund-2", expires: clock.now + 60)
+        model.keyboardAppeared()
+        await until("lookup") { store.pendingAction == nil }
+        await settled()
+        XCTAssertEqual(api.calls, ["lookup:refund", "lookup:refund"])
+        XCTAssertEqual(model.bar, .done("Refunded $45 \u{2713}"))
     }
 
     func testTappingAnotherChipClearsThePendingCall() async {

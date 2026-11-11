@@ -462,8 +462,8 @@ final class AskModel: ObservableObject {
             return
         }
         state = .working
-        // The key belongs to the chip: a second tap on the same chip replays the first call on the server.
-        let key = ChipActions.sendsMoney.contains(chip.kind) ? ChipKeys.key(for: chip, confirmed: confirmed, before: text, in: store, now: now()) : UUID().uuidString
+        // The key belongs to this chip: a second tap on it replays the first call on the server.
+        let key = chip.key
         task = Task {
             do {
                 switch try await ChipActions.run(chip, confirmed: confirmed, source: text, api: api(), key: key) {

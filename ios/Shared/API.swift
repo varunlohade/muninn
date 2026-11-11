@@ -32,7 +32,30 @@ struct Chip: Codable, Hashable, Identifiable {
     let label: String
     let payload: [String: JSONValue]
     let needs_confirm: Bool
+    /// The Idempotency-Key of this one chip. A chip decoded from a server reply or built on the phone gets a new
+    /// key; every tap of the same chip, and its pending call, sends it, so the server replays instead of sending twice.
+    let key: String
     var id: String { kind + label }
+
+    private enum CodingKeys: String, CodingKey { case kind, label, payload, needs_confirm, key }
+
+    init(kind: String, label: String, payload: [String: JSONValue], needs_confirm: Bool, key: String = UUID().uuidString) {
+        self.kind = kind
+        self.label = label
+        self.payload = payload
+        self.needs_confirm = needs_confirm
+        self.key = key
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(String.self, forKey: .kind)
+        label = try c.decode(String.self, forKey: .label)
+        payload = try c.decode([String: JSONValue].self, forKey: .payload)
+        needs_confirm = try c.decode(Bool.self, forKey: .needs_confirm)
+        // A server reply has no key: each reply gives new chips. A saved pending call keeps its own.
+        key = try c.decodeIfPresent(String.self, forKey: .key) ?? UUID().uuidString
+    }
 }
 
 struct SuggestResponse: Decodable {
@@ -285,8 +308,8 @@ struct APIClient {
     }
 
     /// `body` is {id, amount} to get a confirm token, or {confirm_token} to run the refund.
-    func refund(_ body: [String: JSONValue], key: String) async throws -> RefundResponse {
-        try await send(request("POST", "/v1/actions/refund", body: body, tap: true, key: key), as: RefundResponse.self)
+    func refund(_ body: [String: JSONValue], key: String, lookup: Bool) async throws -> RefundResponse {
+        try await send(request("POST", "/v1/actions/refund", body: body, tap: true, key: key, lookup: lookup), as: RefundResponse.self)
     }
 
     func reply(_ text: String) async throws -> ReplyResponse {

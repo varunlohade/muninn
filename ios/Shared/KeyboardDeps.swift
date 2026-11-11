@@ -8,7 +8,7 @@ protocol KeyboardAPI {
     func invoice(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> InvoiceResponse
     func payLink(_ payload: [String: JSONValue], key: String, lookup: Bool) async throws -> PayLinkResponse
     func remind(invoiceID: String, key: String, lookup: Bool) async throws -> RemindResponse
-    func refund(_ body: [String: JSONValue], key: String) async throws -> RefundResponse
+    func refund(_ body: [String: JSONValue], key: String, lookup: Bool) async throws -> RefundResponse
     func reply(_ text: String) async throws -> ReplyResponse
     func fix(_ text: String) async throws -> WriteResponse
     func refine(_ text: String, tone: String) async throws -> WriteResponse
@@ -26,8 +26,6 @@ protocol KeyboardStore: AnyObject {
     var appointments: [Appointment] { get }
     var notes: [Note] { get set }
     var actionShortcuts: [ActionShortcut] { get }
-    /// One Idempotency-Key per chip for a short time, so a second tap replays the first call.
-    var chipKeys: [String: ChipKey] { get set }
     /// A money call still waiting for its answer, kept when the keyboard closes.
     var pendingAction: PendingAction? { get set }
 }
@@ -48,10 +46,6 @@ final class SharedKeyboardStore: KeyboardStore {
         set { SharedStore.notes = newValue }
     }
     var actionShortcuts: [ActionShortcut] { SharedStore.actionShortcuts }
-    var chipKeys: [String: ChipKey] {
-        get { SharedStore.chipKeys }
-        set { SharedStore.chipKeys = newValue }
-    }
     var pendingAction: PendingAction? {
         get { SharedStore.pendingAction }
         set { SharedStore.pendingAction = newValue }

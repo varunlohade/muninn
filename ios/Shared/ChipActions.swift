@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// What a tapped chip produced: the link, and the line we insert or show.
@@ -12,12 +11,6 @@ struct ActionResult: Equatable {
     let message: String
 }
 
-/// The Idempotency-Key a chip uses until `expires`.
-struct ChipKey: Codable, Equatable {
-    let key: String
-    let expires: Date
-}
-
 /// A money call that has not answered yet. `before` is what the field held at the tap.
 struct PendingAction: Codable, Equatable {
     let chip: Chip
@@ -25,35 +18,9 @@ struct PendingAction: Codable, Equatable {
     let before: String
     let key: String
     let expires: Date
-}
 
-/// The key belongs to the chip in its field, not the tap: the same chip over the same text within `ttl` sends
-/// the same key, so the server replays its stored answer instead of sending a second invoice.
-enum ChipKeys {
+    /// How long a keyboard appear still looks up a call the keyboard closed on.
     static let ttl: TimeInterval = 600
-
-    /// `before` is the field text before the cursor, so the same chip typed to another client gets another key.
-    static func key(for chip: Chip, confirmed: String?, before: String, in store: KeyboardStore, now: Date) -> String {
-        var keys = store.chipKeys.filter { $0.value.expires > now }
-        let id = fingerprint(chip, confirmed: confirmed, before: before)
-        let k = keys[id] ?? ChipKey(key: UUID().uuidString, expires: now + ttl)
-        keys[id] = k
-        store.chipKeys = keys
-        return k.key
-    }
-
-    /// Kind, payload (amount, currency, item, email, client name), recipient and a hash of the field text.
-    private static func fingerprint(_ chip: Chip, confirmed: String?, before: String) -> String {
-        let enc = JSONEncoder()
-        enc.outputFormatting = .sortedKeys
-        let value: JSONValue = .object(["kind": .string(chip.kind), "payload": .object(chip.payload),
-                                        "confirmed": confirmed.map { .string($0) } ?? .null, "before": .string(hex(Data(before.utf8)))])
-        return hex((try? enc.encode(value)) ?? Data())
-    }
-
-    private static func hex(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
 }
 
 /// Where a chip's result goes.
@@ -70,7 +37,7 @@ enum ChipOutcome: Equatable {
 
 /// One place that runs a chip's action, for the keyboard and the app's Ask bar.
 /// Throws APIError.needsConfirm when the server wants the recipient confirmed first.
-/// `lookup` asks the server only for the stored answer of `key` and never runs the action (refunds always run).
+/// `lookup` asks the server only for the stored answer of `key` and never runs the action.
 enum ChipActions {
     static let retryDelay: Duration = .milliseconds(1200)
     static let inProgressDelay: Duration = .seconds(2)
@@ -131,12 +98,12 @@ enum ChipActions {
             return .line("Reminder sent \u{2713}")
         case "refund":
             if let token = string(chip, "confirm_token") {
-                let res = try await call { try await api.refund(["confirm_token": .string(token)], key: key) }
+                let res = try await call { try await api.refund(["confirm_token": .string(token)], key: key, lookup: lookup) }
                 let money = if let a = res.amount, let c = res.currency { " " + formatMoney(a, c) } else { "" }
                 return .line("Refunded\(money) \u{2713}")
             }
             let body = chip.payload.filter { ["id", "amount"].contains($0.key) && $0.value != .null }
-            let res = try await call { try await api.refund(body, key: key) }
+            let res = try await call { try await api.refund(body, key: key, lookup: lookup) }
             guard let token = res.confirm_token else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
             let question = res.summary ?? chip.label
             return .ask(question, chip: Chip(kind: "refund", label: question, payload: ["confirm_token": .string(token)], needs_confirm: false))

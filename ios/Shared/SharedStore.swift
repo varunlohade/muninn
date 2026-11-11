@@ -63,11 +63,6 @@ enum SharedStore {
         set { save(newValue, file: "shortcuts.json") }
     }
 
-    static var chipKeys: [String: ChipKey] {
-        get { load([String: ChipKey].self, file: "chip-keys.json") ?? [:] }
-        set { save(newValue, file: "chip-keys.json") }
-    }
-
     static var pendingAction: PendingAction? {
         get { load(PendingAction.self, file: "pending-action.json") }
         set { save(newValue, file: "pending-action.json") }
