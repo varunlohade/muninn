@@ -81,6 +81,8 @@ struct AskResponse {
         case payments([Payment])
         case brief([String])
         case clients([Client])
+        /// One client's latest records, or an item's price: "invoice for sam". Read only.
+        case lookup(LookupResult)
         case disputes([Dispute])
         /// The phone saves this note. The server keeps nothing.
         case addNote(String)
@@ -114,6 +116,7 @@ extension AskResponse: Decodable {
         case "who_paid": result = .payments(try get(PaymentsResponse.self).payments)
         case "brief": result = .brief(try get(Lines.self).lines)
         case "clients": result = .clients(try get(ClientsResponse.self).clients)
+        case "lookup": result = .lookup(try get(LookupResult.self))
         case "disputes": result = .disputes(try get(DisputesResponse.self).disputes)
         case "add_note": result = .addNote(try get(WriteResponse.self).text)
         case "today_calendar": result = .showCalendar

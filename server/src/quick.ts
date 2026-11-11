@@ -193,3 +193,187 @@ export function deviceTitle(sentence: string): string {
     .trim();
   return t ? t[0].toUpperCase() + t.slice(1) : '';
 }
+
+// ---- Lookup: "invoice for sam", "did sam pay", "ana's booking". The owner asks about their own records.
+// Regex only. A sentence that is a lookup phrase from end to end is sure; "invoice sam" (a command or a lookup) is unsure.
+
+/** money: invoices, bills, receipts, payments. any: the client's latest record of any kind. catalog: an item and its price. */
+export type LookupKind = 'money' | 'any' | 'catalog';
+export type Lookup = {
+  sure: boolean;
+  /** The name or item as typed, lowercased. */
+  name: string;
+  kind: LookupKind;
+  /** The typed noun in its plain form: "invoice", "booking", "receipt". Null when the sentence has none ("did sam pay"). */
+  noun: string | null;
+  /** owe → unpaid only; receipt → paid only. */
+  want: 'unpaid' | 'paid' | null;
+  cents: number | null;
+  /** [from, to) in ms, from "last week", "yesterday", "in november". */
+  range: { from: number; to: number; words: string } | null;
+  /** The typed words the chip quotes. */
+  trigger: string;
+};
+
+const MONEY_NOUNS = new Set(['invoice', 'bill', 'receipt', 'payment', 'balance']);
+// Long nouns a typo may hit: "invocie", "recipt", "apointment". Short or common-looking ones (order, class, quote) stay as typed.
+const FUZZY_NOUNS = ['invoice', 'receipt', 'payment', 'booking', 'appointment', 'session', 'delivery', 'reservation', 'lesson'];
+const NOUN = String.raw`(?<noun>invoices?|bills?|receipts?|payments?|balance|orders?|bookings?|appointments?|appts?|jobs?|quotes?|estimates?|sessions?|class(?:es)?|lessons?|tables?|reservations?|deliver(?:y|ies)|visits?|projects?)`;
+// One or two name words. Lazy, so a date or amount after the name is not read as a second word.
+const NAME = String.raw`(?<name>[a-z][a-z.-]*(?: [a-z][a-z.-]*)??)`;
+const MOD = String.raw`(?:(?:the|my|our|his|her|their|a|an|any) )?(?:(?<mod>latest|last|recent|most recent|newest|current|open|unpaid|outstanding|pending|previous|old) )?`;
+const AMT = String.raw`(?<amt>[$€£]\d+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})? ?(?:dollars?|bucks|usd|eur|gbp))`;
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const DATE = String.raw`(?:(?:from|in|on|of|since|for) )?(?<date>(?:the )?last week|this week|yesterday|today|last month|this month|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*|(?:last )?(?:mon|tues|wednes|thurs|fri|satur|sun)day)`;
+const TAIL = String.raw`(?: ${DATE})?`;
+// "sam's invoice for $120" looks up by amount. "invoice for sam for $45" is a new invoice, so only the possessive takes a trailing amount.
+const AMT_TAIL = String.raw`(?: (?:for |of )?(?<amt2>[$€£]\d+(?:\.\d{1,2})?))?`;
+// "..., the $85 one": an amount that picks one record, after any lookup phrase.
+const THE_ONE = String.raw`(?: the (?<amt3>[$€£]\d+(?:\.\d{1,2})?) one)?`;
+const PREP = '(?:for|from|of|to|with|by)';
+const PAID_TAIL = String.raw`(?: (?:me|us|you|yet|up|already|back|it|(?:for )?(?:the|my|a|an|her|his|that) [a-z]+|for [a-z]+))*`;
+
+type Template = { re: RegExp; sure: boolean; kind?: LookupKind; want?: 'unpaid'; possessive?: true };
+const tpl = (s: string, sure = true, extra: Omit<Template, 're' | 'sure'> = {}): Template => ({ re: new RegExp(`^${s}$`), sure, ...extra });
+const TEMPLATES: Template[] = [
+  // invoice for sam, last order from ana lopez, the receipt for bo from last week, the $120 invoice for sam
+  tpl(`${MOD}(?:${AMT} )?${NOUN} ${PREP} ${NAME}${TAIL}${THE_ONE}`),
+  // sam's invoice, sams invoce, ana's last booking, sam's $120 invoice from last week. "sam invoice" (no 's) is unsure.
+  tpl(`${NAME}(?<poss>'s|s'|')? ${MOD}(?:${AMT} )?${NOUN}${TAIL}${AMT_TAIL}${THE_ONE}`, true, { possessive: true }),
+  // the $120 one for sam
+  tpl(`(?:the )?${AMT} (?:one|${NOUN}) ${PREP} ${NAME}${TAIL}`),
+  // did sam pay, has sam paid yet, did sam ever pay me, is sam paid up
+  tpl(`(?:did|has|have|had) ${NAME} (?:ever |already |actually |finally |even )?(?:pay|paid)${PAID_TAIL}`, true, { kind: 'money' }),
+  tpl(`is ${NAME} paid(?: up)?(?: yet)?`, true, { kind: 'money' }),
+  tpl(`${NAME} (?:paid|pay) yet`, true, { kind: 'money' }),
+  // what does sam owe, how much does sam owe me, does sam still owe me anything, what sam owes
+  tpl(`(?:what|how much) (?:does|do|did) ${NAME} (?:still )?owe(?: me| us)?(?: still)?`, true, { kind: 'money', want: 'unpaid' }),
+  tpl(`(?:does|do) ${NAME} (?:still )?owe(?: me| us)?(?: anything| money| still)?`, true, { kind: 'money', want: 'unpaid' }),
+  tpl(`(?:what|how much) ${NAME} (?:still )?owes(?: me| us)?`, true, { kind: 'money', want: 'unpaid' }),
+  // what did ana order last time, when did bo last book
+  tpl(`(?:what|when) did ${NAME} (?:last )?(?:order|book|buy|get|have|come in)(?: last time| last)?`, true, { kind: 'any' }),
+  // invoice sam: a command or a lookup, so the router decides.
+  tpl(`${NOUN} ${NAME}`, false),
+];
+const CATALOG_TEMPLATES = [
+  /^(?:the )?(?:price|prices|cost) (?:of|for) (?:a |an |the )?(?<name>[a-z][a-z' -]{1,40})$/,
+  /^how much (?:is|are|for|does) (?:a |an |the )?(?<name>[a-z][a-z' -]{1,40}?)(?: cost)?$/,
+  /^(?:the )?(?:price|cost|rate) on (?:a |an |the )?(?<name>[a-z][a-z' -]{1,40})$/,
+  /^(?:the )?(?<name>[a-z][a-z' -]{1,40}?) (?:price|cost|rate)$/,
+];
+const LEAD_IN = /^(?:hey|hi|hello|yo|ok|okay|so|um|uh|hmm|lol|lmao|haha|btw|quick q|quick question|pls|please|can you|could you|can u|would you|will you|show me|show|find me|find|get me|get|pull up|open|check|look up|lookup|what's|whats|what is|where's|wheres|where is|when's|when is|when was|give me|gimme|i need|need|see|send me|bring up|remind me)\b[ ,:]*/;
+const TRAIL = /(?:[ ,]+(?:lol|lmao|haha|pls|please|thanks|thx|again|rn|right now|now|real quick|quickly|asap|for me|then))+$/;
+// Words that are never a client's name in these phrases.
+const NOT_NAME = new Set([
+  'me', 'you', 'u', 'him', 'her', 'them', 'it', 'this', 'that', 'the', 'my', 'a', 'an', 'our', 'your', 'his', 'their', 'we', 'i', 'they', 'he', 'she',
+  'someone', 'anyone', 'everyone', 'somebody', 'anybody', 'everybody', 'nobody', 'who', 'what', 'which', 'one', 'ones', 'all', 'any', 'each',
+  'today', 'tomorrow', 'yesterday', 'tonight', 'week', 'month', 'now', 'later', 'next', 'last', 'template', 'templates', 'ideas', 'idea',
+  'for', 'from', 'of', 'to', 'with', 'by', 'in', 'on', 'and', 'or', 'not', 'is', 'was', 'be', 'yet', 'ever', 'there', 'here', 'pay', 'paid',
+  'new', 'send', 'make', 'create', 'number', 'amount', 'total', 'due', 'late', 'link', 'email', 'sent', 'more', 'some', 'free', 'online',
+]);
+
+/** Optimal string alignment distance: an insert, a delete, a change or a swap of two neighbours each cost 1. */
+export function editDistance(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
+}
+
+/** "invocie" → "invoice", "recipts" → "receipts": one typo in a long record noun. Other words stay as typed. */
+function fixNoun(word: string): string {
+  if (word.length < 5) return word;
+  for (const n of FUZZY_NOUNS) {
+    if (word === n || word === n + 's') return word;
+    if (editDistance(word, n) <= 1) return n;
+    if (editDistance(word, n + 's') <= 1) return n + 's';
+  }
+  return word;
+}
+
+const singular = (noun: string) => (noun === 'deliveries' ? 'delivery' : noun === 'classes' ? 'class' : noun === 'appt' || noun === 'appts' ? 'appointment'
+  : noun.endsWith('s') && noun !== 'class' ? noun.slice(0, -1) : noun);
+
+function rangeOf(words: string, now: number): Lookup['range'] {
+  const day = 86_400_000;
+  const d = new Date(now);
+  const today = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const week = today - ((d.getUTCDay() + 6) % 7) * day;
+  const month = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  const w = words.replace(/^the /, '');
+  const span = (from: number, to: number) => ({ from, to, words: w });
+  if (w === 'today') return span(today, today + day);
+  if (w === 'yesterday') return span(today - day, today);
+  if (w === 'this week') return span(week, now + 1);
+  if (w === 'last week') return span(week - 7 * day, week);
+  if (w === 'this month') return span(month, now + 1);
+  if (w === 'last month') return span(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1), month);
+  // "friday", "last friday": the most recent such day before today.
+  const wd = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].indexOf(w.replace(/^last /, '').slice(0, 3));
+  if (w.endsWith('day') && wd >= 0) {
+    const back = (d.getUTCDay() - wd + 7) % 7 || 7;
+    return span(today - back * day, today - back * day + day);
+  }
+  const mi = MONTHS.indexOf(w.slice(0, 3));
+  if (mi < 0) return null;
+  // The most recent such month: "in november" typed in March means last November.
+  const year = mi <= d.getUTCMonth() ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+  return span(Date.UTC(year, mi, 1), Date.UTC(year, mi + 1, 1));
+}
+
+const amountCents = (a: string | undefined) => {
+  const n = a ? Number(a.replace(/[^\d.]/g, '')) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : null;
+};
+
+/** The core of the last sentence: lowercase, no lead-in ("hey can you show me"), no tail ("lol", "?"), record nouns spelled right. */
+// A lead-in that asks to see something. After one, "bo chen order" is a lookup, not a command.
+const LOOK_VERB = /^(?:show|find|get|pull up|open|check|look up|lookup|what's|whats|what is|where's|wheres|where is|give me|gimme|see|bring up)\b/;
+
+function lookupCore(text: string): { core: string; trigger: string; asked: boolean } {
+  const sentence = lastSentence(text).replace(/[’‘`]/g, "'");
+  let s = sentence.toLowerCase().replace(/[^a-z0-9$€£'.\s-]/g, ' ').replace(/\.(?!\d)/g, ' ').replace(/\s+/g, ' ').trim();
+  let asked = false;
+  for (let prev = ''; prev !== s;) { prev = s; asked ||= LOOK_VERB.test(s); s = s.replace(LEAD_IN, '').trim(); }
+  s = s.replace(TRAIL, '').trim();
+  s = s.split(' ').map((w) => {
+    const poss = /^(.*?)('s|')$/.exec(w);
+    return poss ? fixNoun(poss[1]) + poss[2] : fixNoun(w);
+  }).join(' ');
+  return { core: s, trigger: sentence.replace(/[\s?!.,]+$/, '').trim(), asked };
+}
+
+/** A lookup phrase in the owner's last sentence, or null. It says nothing about whether the name is a real client. */
+export function detectLookup(text: string, now: number): Lookup | null {
+  if (!text.trim() || amountsIn(text).length > 1) return null;
+  const { core, trigger, asked } = lookupCore(text);
+  if (!core || core.split(' ').length > 9) return null;
+  for (const t of TEMPLATES) {
+    const m = t.re.exec(core);
+    const g = m?.groups;
+    if (!g?.name) continue;
+    const name = g.name.trim();
+    if (name.split(' ').some((w) => NOT_NAME.has(w))) continue;
+    const noun = g.noun ? singular(g.noun) : null;
+    // "sam invoice" has no 's: a command or a lookup. "sams invoice" reads as a possessive.
+    // "sam invoice" alone is a command or a lookup. A possessive, a lookup verb, "latest", a date or an amount makes it a lookup.
+    const sure = t.sure && (!t.possessive || g.poss !== undefined || /s$/.test(name) || asked || !!(g.mod ?? g.date ?? g.amt ?? g.amt2 ?? g.amt3));
+    return {
+      sure, name, kind: t.kind ?? (noun && MONEY_NOUNS.has(noun) ? 'money' : 'any'), noun,
+      want: t.want ?? (noun === 'receipt' ? 'paid' : noun === 'balance' ? 'unpaid' : null),
+      cents: amountCents(g.amt ?? g.amt2 ?? g.amt3), range: g.date ? rangeOf(g.date, now) : null, trigger,
+    };
+  }
+  for (const re of CATALOG_TEMPLATES) {
+    const name = re.exec(core)?.groups?.name?.trim();
+    if (name && !name.split(' ').every((w) => NOT_NAME.has(w))) {
+      return { sure: true, name, kind: 'catalog', noun: null, want: null, cents: null, range: null, trigger };
+    }
+  }
+  return null;
+}

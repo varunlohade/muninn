@@ -8,7 +8,7 @@ export type AskGroup = (typeof ASK_GROUPS)[number];
 export const ASK_ROUTES = {
   money: ['invoice', 'paylink', 'subscribe', 'remind', 'refund', 'none'],
   writing: ['fix', 'refine', 'tone', 'reply', 'review_ask', 'none'],
-  info: ['who_paid', 'brief', 'clients', 'disputes', 'none'],
+  info: ['who_paid', 'brief', 'clients', 'lookup', 'disputes', 'none'],
   device: ['add_note', 'today_calendar', 'none'],
 } as const;
 export type AskRoute = (typeof ASK_ROUTES)[Exclude<AskGroup, 'none'>][number];

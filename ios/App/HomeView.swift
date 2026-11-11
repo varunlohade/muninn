@@ -397,7 +397,7 @@ extension APIClient: AskAPI {}
 @MainActor
 final class AskModel: ObservableObject {
     enum State: Equatable {
-        case idle, loading, chips([Chip]), clients([Client]), unpaid([UnpaidClient]), review(String), confirm(Chip, String), ask(Chip, String), working, result(ActionResult), line(String), error(String)
+        case idle, loading, chips([Chip]), clients([Client]), lookup(LookupResult), unpaid([UnpaidClient]), review(String), confirm(Chip, String), ask(Chip, String), working, result(ActionResult), line(String), error(String)
         /// A money call that may not have run and no lookup found. A tap sends it again with the same key.
         case retry(Chip, String?)
     }
@@ -454,6 +454,8 @@ final class AskModel: ObservableObject {
             state = .line(lines.joined(separator: "\n"))
         case .clients(let clients):
             state = clients.isEmpty ? .line("No clients yet") : .clients(clients)
+        case .lookup(let found):
+            state = .lookup(found)
         case .disputes(let disputes):
             let money = disputes.compactMap(\.amount).map { formatMoney($0.value, $0.currency_code) }
             state = .line(disputes.isEmpty ? "No disputes \u{2713}"
@@ -614,6 +616,12 @@ struct AskBar: View {
                 .padding(.horizontal, Theme.Space.xs)
             }
             .padding(.bottom, Theme.Space.xxs)
+        case .lookup(let found):
+            // The keyboard's lookup card: Copy instead of Insert; Remind and New invoice go through the usual confirm.
+            LookupCard(result: found, palette: LookupCard.appPalette, insertWord: "Copy", onInsert: { model.copy($0.line) },
+                       onRemind: { model.run($0) }, onNewInvoice: { model.prefill(LookupCopy.newInvoiceRequest($0)) },
+                       onClose: { model.state = .idle; model.copied = false })
+                .padding(.bottom, Theme.Space.xxs)
         case .unpaid(let clients):
             ScrollView {
                 UnpaidListView(clients: clients, fill: Theme.Color.bg) { model.run($0) }
