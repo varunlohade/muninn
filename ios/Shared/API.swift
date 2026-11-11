@@ -171,6 +171,10 @@ struct DisputesResponse: Decodable { let disputes: [Dispute] }
 /// status is "connected", "not_connected", "on_device" (the phone does the work) or "coming_soon".
 struct Integration: Decodable, Identifiable, Equatable { let id: String; let name: String; let description: String?; let status: String }
 struct IntegrationsResponse: Decodable { let integrations: [Integration] }
+/// The owner's own PayPal. `demo` is true while money runs on the shared sandbox demo account. `account` is masked, like "s•••@shop.com".
+struct PayPalStatus: Decodable, Equatable { let connected: Bool; let demo: Bool; let pending: Bool; let email_confirmed: Bool; let payments_receivable: Bool; let account: String? }
+/// The PayPal sign-up link, and the URL scheme the server sends the browser back to.
+struct PayPalConnectStart: Decodable { let action_url: String; let return_scheme: String }
 struct IntegrationResponse: Decodable { let integration: Integration }
 struct Profile: Codable, Equatable {
     var business_name: String
@@ -382,6 +386,11 @@ struct APIClient {
     func integrations() async throws -> [Integration] {
         try await send(request("GET", "/v1/integrations"), as: IntegrationsResponse.self).integrations
     }
+
+    func paypalStatus() async throws -> PayPalStatus { try await send(request("GET", "/v1/paypal/status"), as: PayPalStatus.self) }
+    func paypalConnect() async throws -> PayPalConnectStart { try await send(request("POST", "/v1/paypal/connect"), as: PayPalConnectStart.self) }
+    func paypalDisconnect() async throws { _ = try await send(request("POST", "/v1/paypal/disconnect"), as: PayPalStatusLite.self) }
+    private struct PayPalStatusLite: Decodable { let connected: Bool }
 
     /// "Save your details": attaches the Apple account to this device account. The server checks the identity token and the raw nonce.
     func linkApple(identityToken: String, nonce: String) async throws -> AppleLinkResponse {

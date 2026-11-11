@@ -73,6 +73,7 @@ final class AppearanceShots: XCTestCase {
         token.typeText("pkd_fake")
         shot("02-onboarding-dev-pairing")
         app.buttons["Pair"].tap()
+        if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
         dismissPrompts(app)
 
         XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15), app.debugDescription)

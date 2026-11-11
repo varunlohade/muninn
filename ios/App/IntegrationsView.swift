@@ -17,6 +17,7 @@ struct IntegrationsView: View {
                         switch i.id {
                         case "google_reviews": NavigationLink { ReviewLinkView() } label: { row(i, opens: true) }.buttonStyle(PressScale())
                         case "slack": NavigationLink { SlackAlertsView(connected: i.status == "connected") } label: { row(i, opens: true) }.buttonStyle(PressScale())
+                        case "paypal": PayPalIntegrationRow()
                         default: row(i, opens: false)
                         }
                     }

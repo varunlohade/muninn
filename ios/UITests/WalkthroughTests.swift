@@ -123,6 +123,7 @@ final class WalkthroughTests: XCTestCase {
         if start.waitForExistence(timeout: 3) {
             shot("00-get-started")
             start.tap()
+            if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
         } else {
             XCUIDevice.shared.system.open(URL(string: "muninn-dev://pair?token=pkd_fake&server=\(fake.absoluteString)")!)
             let open = springboard.buttons["Open"]

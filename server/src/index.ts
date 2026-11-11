@@ -6,6 +6,7 @@ import { createCipher, parseMasterKey } from './crypto.ts';
 import { openDb } from './db.ts';
 import { log } from './log.ts';
 import { createPayPalProvider } from './paypal.ts';
+import { sellerLookup } from './connect.ts';
 import { ensureDemoUser, seedDemo, todaySpecs } from './seed.ts';
 
 function need(name: string): string {
@@ -16,7 +17,7 @@ function need(name: string): string {
 
 const db = openDb(config.dbPath);
 const cipher = createCipher(parseMasterKey(process.env.DATA_ENCRYPTION_KEY));
-const paypal = createPayPalProvider({ clientId: need('PAYPAL_CLIENT_ID'), clientSecret: need('PAYPAL_CLIENT_SECRET') });
+const paypal = createPayPalProvider({ clientId: need('PAYPAL_CLIENT_ID'), clientSecret: need('PAYPAL_CLIENT_SECRET') }, sellerLookup(db, cipher));
 const demoSeed = process.env.DEMO_SEED === '1' && config.paypal.sandbox;
 const seeding = new Set<string>();
 // Idempotent: profile and catalog first (no network), then the sandbox invoices.
@@ -25,7 +26,8 @@ async function seedUser(userId: string, full: boolean) {
   seeding.add(userId);
   try {
     const now = Date.now();
-    const o = { db, cipher, paypal: paypal.forUser(userId), userId, now };
+    // Demo invoices live on the shared demo merchant, never on an account the owner connects later.
+    const o = { db, cipher, paypal: paypal.platform(), userId, now };
     const base = full ? await seedDemo(o) : null;
     const today = await seedDemo({ ...o, specs: todaySpecs(now) });
     log('demo_seed', { user_id: userId, base, today });

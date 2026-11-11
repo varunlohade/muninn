@@ -6,11 +6,11 @@ import type { Ai, Classification, DeviceAction, Extraction, ToneCheck } from '..
 import type { AskGroup, AskRoute } from '../src/config.ts';
 import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
-import type { PayPal, PayPalDispute, PayPalDisputeDetail, PayPalTxn } from '../src/paypal.ts';
+import type { PayPal, PayPalDispute, PayPalDisputeDetail, PayPalPartner, PayPalTxn } from '../src/paypal.ts';
 
 export const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
-export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number } | Error; route?: { route?: AskRoute; confidence?: number }; device?: { kind?: DeviceAction; confidence?: number } | Error; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void } = {}) {
+export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number } | Error; route?: { route?: AskRoute; confidence?: number }; device?: { kind?: DeviceAction; confidence?: number } | Error; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void; partner?: PayPalPartner } = {}) {
   const db = openDb(':memory:');
   const cipher = createCipher(randomBytes(32));
   const calls: { fn: string; args: unknown[] }[] = [];
@@ -94,7 +94,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     async refine(...args) { aiCalls.push({ fn: 'refine', args }); return rewrite(args[0]); },
     async toneCheck(...args) { aiCalls.push({ fn: 'toneCheck', args }); return opts.tone ?? { tone: 'ok', calm: null }; },
   };
-  const app = createApp({ db, cipher, ai, paypal: { forUser, platform: () => pp }, now: opts.now, apple: opts.apple, onNewUser: opts.onNewUser });
+  const app = createApp({ db, cipher, ai, paypal: { forUser, forAccount: (userId) => forUser(userId), platform: () => pp, partner: () => opts.partner ?? noPartner }, now: opts.now, apple: opts.apple, onNewUser: opts.onNewUser });
   const device = () => {
     const userId = db.createUser();
     const token = randomToken('pkd');
@@ -116,6 +116,12 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     });
   return { db, cipher, app, calls, aiCalls, device, call, ppData, mockPayPal: pp };
 }
+
+const noPartner: PayPalPartner = {
+  async createReferral() { throw new Error('no partner mock'); },
+  async merchantStatus() { return null; },
+  async merchantIdForTracking() { return null; },
+};
 
 export const webhookHeaders = {
   'paypal-auth-algo': 'SHA256withRSA', 'paypal-cert-url': 'https://api.sandbox.paypal.com/cert', 'paypal-transmission-id': 't1',

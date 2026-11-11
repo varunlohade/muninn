@@ -105,6 +105,7 @@ final class OnboardingWalkthroughVideo: XCTestCase {
         XCTAssertTrue(start.waitForExistence(timeout: 10), app.debugDescription)
         pause(2)
         start.tap()
+        if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { pause(2); id(app, "onboarding.paypal.demo").tap() }
         XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 20), app.debugDescription)
         dismissPrompts(app)
         _ = id(app, "home.brief").waitForExistence(timeout: 10)

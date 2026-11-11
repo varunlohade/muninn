@@ -64,6 +64,7 @@ final class Build3Shots: XCTestCase {
         shot("intro-10-get-started")
         // One tap makes the device account on the fake server. Nothing to type.
         start.tap()
+        if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
         XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 20), app.debugDescription)
         dismissPrompts(app)
         shot("intro-11-home")

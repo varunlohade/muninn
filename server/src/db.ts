@@ -19,11 +19,11 @@ CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), status TEXT NOT NULL,
   amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, item TEXT NOT NULL,
   client_name_enc TEXT, client_email_enc TEXT, pay_link TEXT, due_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL, paid_at INTEGER, capture_id TEXT, source TEXT NOT NULL DEFAULT 'app', seed_key TEXT);
+  created_at INTEGER NOT NULL, paid_at INTEGER, capture_id TEXT, source TEXT NOT NULL DEFAULT 'app', seed_key TEXT, pp_account TEXT);
 CREATE TABLE IF NOT EXISTS orders (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), status TEXT NOT NULL,
   amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, item TEXT NOT NULL,
-  client_name_enc TEXT, approve_link TEXT, created_at INTEGER NOT NULL, paid_at INTEGER, capture_id TEXT);
+  client_name_enc TEXT, approve_link TEXT, created_at INTEGER NOT NULL, paid_at INTEGER, capture_id TEXT, pp_account TEXT);
 CREATE TABLE IF NOT EXISTS reminders (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), invoice_id TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS refunds (
@@ -40,12 +40,17 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), status TEXT NOT NULL,
   amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, interval TEXT NOT NULL, item TEXT NOT NULL,
   client_name_enc TEXT, client_email_enc TEXT, approve_link TEXT, plan_id TEXT NOT NULL, created_at INTEGER NOT NULL,
-  activated_at INTEGER, last_paid_at INTEGER, paid_count INTEGER NOT NULL DEFAULT 0);
+  activated_at INTEGER, last_paid_at INTEGER, paid_count INTEGER NOT NULL DEFAULT 0, pp_account TEXT);
 CREATE TABLE IF NOT EXISTS billing_plans (
   user_id TEXT NOT NULL REFERENCES users(id), plan_key TEXT NOT NULL, product_id TEXT NOT NULL, plan_id TEXT NOT NULL,
   PRIMARY KEY (user_id, plan_key));
 CREATE TABLE IF NOT EXISTS subscription_payments (
   sale_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), subscription_id TEXT NOT NULL, paid_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS paypal_connections (
+  user_id TEXT PRIMARY KEY REFERENCES users(id), tracking_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL,
+  merchant_hash TEXT, merchant_enc TEXT, email_enc TEXT, payments_receivable INTEGER NOT NULL DEFAULT 0, email_confirmed INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, connected_at INTEGER);
+CREATE UNIQUE INDEX IF NOT EXISTS paypal_connections_merchant ON paypal_connections(merchant_hash) WHERE merchant_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS subscriptions_user ON subscriptions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS refunds_target ON refunds(user_id, target_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS invoices_seed ON invoices(user_id, seed_key) WHERE seed_key IS NOT NULL;
@@ -61,11 +66,12 @@ export type InvoiceRow = {
   id: string; user_id: string; status: string; amount_cents: number; currency: string; item: string;
   client_name_enc: string | null; client_email_enc: string | null; pay_link: string | null;
   due_at: number; created_at: number; paid_at: number | null; capture_id: string | null;
-  source: 'app' | 'demo_seed'; seed_key: string | null;
+  source: 'app' | 'demo_seed'; seed_key: string | null; pp_account: string | null;
 };
 export type OrderRow = {
   id: string; user_id: string; status: string; amount_cents: number; currency: string; item: string;
   client_name_enc: string | null; approve_link: string | null; created_at: number; paid_at: number | null; capture_id: string | null;
+  pp_account: string | null;
 };
 export type RefundRow = {
   id: string; user_id: string; target_kind: 'invoice' | 'order'; target_id: string; amount_cents: number; currency: string;
@@ -75,10 +81,15 @@ export type RefundRow = {
 export type SubscriptionRow = {
   id: string; user_id: string; status: string; amount_cents: number; currency: string; interval: string; item: string;
   client_name_enc: string | null; client_email_enc: string | null; approve_link: string | null; plan_id: string; created_at: number;
-  activated_at: number | null; last_paid_at: number | null; paid_count: number;
+  activated_at: number | null; last_paid_at: number | null; paid_count: number; pp_account: string | null;
 };
 
 export type IntegrationRow = { provider: string; status: string; connected_at: number | null; config_enc: string | null };
+// status: 'pending' from Connect until PayPal sends the seller back, then 'connected'. Disconnect or a revoke deletes the row.
+export type PayPalConnectionRow = {
+  user_id: string; tracking_hash: string; status: 'pending' | 'connected'; merchant_hash: string | null; merchant_enc: string | null;
+  email_enc: string | null; payments_receivable: number; email_confirmed: number; created_at: number; connected_at: number | null;
+};
 
 export type Db = ReturnType<typeof openDb>;
 export type IdemRow = { route: string; body_hash: string; status: 'pending' | 'done'; response: string | null };
@@ -97,6 +108,11 @@ export function openDb(path: string) {
   if (userCols.length && !userCols.some((c) => c.name === 'apple_sub_hash')) db.exec('ALTER TABLE users ADD COLUMN apple_sub_hash TEXT');
   const profileCols = db.prepare('PRAGMA table_info(profiles)').all() as { name: string }[];
   if (profileCols.length && !profileCols.some((c) => c.name === 'review_url')) db.exec('ALTER TABLE profiles ADD COLUMN review_url TEXT');
+  // pp_account: the merchant hash of the connected PayPal account that made the row, or NULL for the shared demo merchant.
+  for (const t of ['invoices', 'orders', 'subscriptions']) {
+    const cols = db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[];
+    if (cols.length && !cols.some((c) => c.name === 'pp_account')) db.exec(`ALTER TABLE ${t} ADD COLUMN pp_account TEXT`);
+  }
   db.exec(SCHEMA);
   const now = () => Date.now();
   const q = (sql: string) => db.prepare(sql);
@@ -179,11 +195,11 @@ export function openDb(path: string) {
       return q('DELETE FROM catalog_items WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
     },
 
-    insertInvoice(r: Omit<InvoiceRow, 'paid_at' | 'capture_id' | 'source' | 'seed_key'> & Partial<Pick<InvoiceRow, 'source' | 'seed_key'>>) {
-      q(`INSERT OR IGNORE INTO invoices (id, user_id, status, amount_cents, currency, item, client_name_enc, client_email_enc, pay_link, due_at, created_at, source, seed_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    insertInvoice(r: Omit<InvoiceRow, 'paid_at' | 'capture_id' | 'source' | 'seed_key' | 'pp_account'> & Partial<Pick<InvoiceRow, 'source' | 'seed_key' | 'pp_account'>>) {
+      q(`INSERT OR IGNORE INTO invoices (id, user_id, status, amount_cents, currency, item, client_name_enc, client_email_enc, pay_link, due_at, created_at, source, seed_key, pp_account)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(r.id, r.user_id, r.status, r.amount_cents, r.currency, r.item, r.client_name_enc, r.client_email_enc, r.pay_link, r.due_at, r.created_at,
-          r.source ?? 'app', r.seed_key ?? null);
+          r.source ?? 'app', r.seed_key ?? null, r.pp_account ?? null);
     },
     invoiceBySeedKey(userId: string, key: string): InvoiceRow | undefined {
       return q('SELECT * FROM invoices WHERE user_id = ? AND seed_key = ?').get(userId, key) as InvoiceRow | undefined;
@@ -199,10 +215,10 @@ export function openDb(path: string) {
         .run(status, paidAt, captureId, id, userId);
     },
 
-    insertOrder(r: Omit<OrderRow, 'paid_at' | 'capture_id'>) {
-      q(`INSERT OR IGNORE INTO orders (id, user_id, status, amount_cents, currency, item, client_name_enc, approve_link, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(r.id, r.user_id, r.status, r.amount_cents, r.currency, r.item, r.client_name_enc, r.approve_link, r.created_at);
+    insertOrder(r: Omit<OrderRow, 'paid_at' | 'capture_id' | 'pp_account'> & Partial<Pick<OrderRow, 'pp_account'>>) {
+      q(`INSERT OR IGNORE INTO orders (id, user_id, status, amount_cents, currency, item, client_name_enc, approve_link, created_at, pp_account)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(r.id, r.user_id, r.status, r.amount_cents, r.currency, r.item, r.client_name_enc, r.approve_link, r.created_at, r.pp_account ?? null);
     },
     getOrder(userId: string, id: string): OrderRow | undefined {
       return q('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(id, userId) as OrderRow | undefined;
@@ -222,10 +238,10 @@ export function openDb(path: string) {
       return (q('SELECT user_id FROM orders WHERE id = ?').get(id) as { user_id: string } | undefined)?.user_id;
     },
 
-    insertSubscription(r: Omit<SubscriptionRow, 'activated_at' | 'last_paid_at' | 'paid_count'>) {
-      q(`INSERT OR IGNORE INTO subscriptions (id, user_id, status, amount_cents, currency, interval, item, client_name_enc, client_email_enc, approve_link, plan_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(r.id, r.user_id, r.status, r.amount_cents, r.currency, r.interval, r.item, r.client_name_enc, r.client_email_enc, r.approve_link, r.plan_id, r.created_at);
+    insertSubscription(r: Omit<SubscriptionRow, 'activated_at' | 'last_paid_at' | 'paid_count' | 'pp_account'> & Partial<Pick<SubscriptionRow, 'pp_account'>>) {
+      q(`INSERT OR IGNORE INTO subscriptions (id, user_id, status, amount_cents, currency, interval, item, client_name_enc, client_email_enc, approve_link, plan_id, created_at, pp_account)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(r.id, r.user_id, r.status, r.amount_cents, r.currency, r.interval, r.item, r.client_name_enc, r.client_email_enc, r.approve_link, r.plan_id, r.created_at, r.pp_account ?? null);
     },
     getSubscription(userId: string, id: string): SubscriptionRow | undefined {
       return q('SELECT * FROM subscriptions WHERE id = ? AND user_id = ?').get(id, userId) as SubscriptionRow | undefined;
@@ -252,8 +268,12 @@ export function openDb(path: string) {
     getBillingPlan(userId: string, planKey: string): { product_id: string; plan_id: string } | undefined {
       return q('SELECT product_id, plan_id FROM billing_plans WHERE user_id = ? AND plan_key = ?').get(userId, planKey) as { product_id: string; plan_id: string } | undefined;
     },
-    anyBillingProduct(userId: string): string | null {
-      return (q('SELECT product_id FROM billing_plans WHERE user_id = ? LIMIT 1').get(userId) as { product_id: string } | undefined)?.product_id ?? null;
+    // account: '' for the demo merchant, or the 'm:<id>:' prefix a connected seller's plan keys carry. Products never cross accounts.
+    anyBillingProduct(userId: string, account = ''): string | null {
+      const r = account
+        ? q('SELECT product_id FROM billing_plans WHERE user_id = ? AND substr(plan_key, 1, ?) = ? LIMIT 1').get(userId, account.length, account)
+        : q("SELECT product_id FROM billing_plans WHERE user_id = ? AND plan_key NOT LIKE 'm:%' LIMIT 1").get(userId);
+      return (r as { product_id: string } | undefined)?.product_id ?? null;
     },
     putBillingPlan(userId: string, planKey: string, productId: string, planId: string) {
       q('INSERT OR IGNORE INTO billing_plans (user_id, plan_key, product_id, plan_id) VALUES (?, ?, ?, ?)').run(userId, planKey, productId, planId);
@@ -332,6 +352,39 @@ export function openDb(path: string) {
       q(`INSERT INTO integrations (user_id, provider, status, connected_at, config_enc) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(user_id, provider) DO UPDATE SET status = excluded.status, connected_at = excluded.connected_at, config_enc = excluded.config_enc`)
         .run(userId, r.provider, r.status, r.connected_at, r.config_enc);
+    },
+
+    getPayPalConnection(userId: string): PayPalConnectionRow | undefined {
+      return q('SELECT * FROM paypal_connections WHERE user_id = ?').get(userId) as PayPalConnectionRow | undefined;
+    },
+    payPalConnectionByTracking(trackingHash: string): PayPalConnectionRow | undefined {
+      return q('SELECT * FROM paypal_connections WHERE tracking_hash = ?').get(trackingHash) as PayPalConnectionRow | undefined;
+    },
+    // A new Connect replaces a pending one. False when this user is already connected.
+    startPayPalConnect(userId: string, trackingHash: string, at: number): boolean {
+      return q(`INSERT INTO paypal_connections (user_id, tracking_hash, status, created_at) VALUES (?, ?, 'pending', ?)
+                ON CONFLICT(user_id) DO UPDATE SET tracking_hash = excluded.tracking_hash, created_at = excluded.created_at
+                WHERE paypal_connections.status = 'pending'`).run(userId, trackingHash, at).changes > 0;
+    },
+    // Only the pending row with this tracking id becomes connected. False when another user already holds this merchant.
+    finishPayPalConnect(userId: string, trackingHash: string, r: Pick<PayPalConnectionRow, 'merchant_hash' | 'merchant_enc' | 'email_enc' | 'payments_receivable' | 'email_confirmed'>): boolean {
+      try {
+        return q(`UPDATE paypal_connections SET status = 'connected', merchant_hash = ?, merchant_enc = ?, email_enc = ?, payments_receivable = ?, email_confirmed = ?, connected_at = ?
+                  WHERE user_id = ? AND tracking_hash = ? AND status = 'pending'`)
+          .run(r.merchant_hash, r.merchant_enc, r.email_enc, r.payments_receivable, r.email_confirmed, now(), userId, trackingHash).changes > 0;
+      } catch {
+        return false;
+      }
+    },
+    setPayPalFlags(userId: string, receivable: boolean, confirmed: boolean) {
+      q(`UPDATE paypal_connections SET payments_receivable = ?, email_confirmed = ? WHERE user_id = ? AND status = 'connected'`).run(Number(receivable), Number(confirmed), userId);
+    },
+    removePayPalConnection(userId: string): boolean {
+      return q('DELETE FROM paypal_connections WHERE user_id = ?').run(userId).changes > 0;
+    },
+    removePayPalByMerchant(merchantHash: string): string | undefined {
+      const r = q('DELETE FROM paypal_connections WHERE merchant_hash = ? RETURNING user_id').get(merchantHash) as { user_id: string } | undefined;
+      return r?.user_id;
     },
 
     paidSince(userId: string, since: number): { currency: string; cents: number }[] {

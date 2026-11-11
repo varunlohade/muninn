@@ -41,9 +41,35 @@ export type PayPalDisputeDetail = PayPalDispute & {
   messages: { posted_by: string; time: string; content: string }[];
 };
 export type PayPalProvider = {
+  /** The user's current account: their connected PayPal, or the shared demo merchant. Use it to make new objects. */
   forUser(userId: string): PayPal;
+  /**
+   * The account that made an object: null is the demo merchant, otherwise the seller's account key.
+   * An object stays on the account that made it, so old demo invoices keep working after the owner connects.
+   */
+  forAccount(userId: string, account: string | null): PayPal;
   platform(): PayPal;
+  partner(): PayPalPartner;
 };
+// A connected seller: money calls run on the platform's credentials for this merchant, through PayPal-Auth-Assertion.
+// account: a keyed hash of the merchant id, stored on each row the seller's account made.
+export type Seller = { merchantId: string; email: string | null; account: string };
+export type MerchantStatus = {
+  merchantId: string; trackingId: string | null; paymentsReceivable: boolean; emailConfirmed: boolean;
+  primaryEmail: string | null; permissionsGranted: boolean;
+};
+// Partner Referrals v2 and the merchant-integrations lookups, always on the platform's own credentials.
+export type PayPalPartner = {
+  createReferral(trackingId: string, returnUrl: string): Promise<{ actionUrl: string }>;
+  merchantStatus(merchantId: string): Promise<MerchantStatus | null>;
+  merchantIdForTracking(trackingId: string): Promise<string | null>;
+};
+// Every feature the app uses, in one referral, so the seller consents once. All are values of the
+// rest_endpoint_features enum in the Partner Referrals v2 spec (PAYPAL_BALANCE and BILLING_AGREEMENT included).
+export const PARTNER_FEATURES = [
+  'PAYMENT', 'REFUND', 'INVOICE_READ_WRITE', 'PAYOUTS', 'ADVANCED_TRANSACTIONS_SEARCH', 'READ_SELLER_DISPUTE', 'UPDATE_SELLER_DISPUTE',
+  'TRACKING_SHIPMENT_READWRITE', 'ACCESS_MERCHANT_INFORMATION', 'PAYPAL_BALANCE', 'BILLING_AGREEMENT',
+] as const;
 
 export class PayPalError extends Error {
   status: number;
@@ -57,7 +83,13 @@ export class PayPalError extends Error {
 
 type Creds = { clientId: string; clientSecret: string };
 
-function createClient(creds: Creds): PayPal {
+// Unsigned, as PayPal's partner docs show: base64 header and payload, an empty signature.
+export function authAssertion(clientId: string, merchantId: string): string {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64');
+  return `${b64({ alg: 'none' })}.${b64({ iss: clientId, payer_id: merchantId })}.`;
+}
+
+function createTokenSource(creds: Creds) {
   let token: { value: string; exp: number } | null = null;
   let tokenInFlight: Promise<string> | null = null;
 
@@ -77,15 +109,19 @@ function createClient(creds: Creds): PayPal {
     return token.value;
   }
 
-  async function accessToken(): Promise<string> {
+  return async function accessToken(): Promise<string> {
     if (token && token.exp > Date.now()) return token.value;
     tokenInFlight ??= fetchToken().finally(() => { tokenInFlight = null; });
     return tokenInFlight;
-  }
+  };
+}
 
-  async function rest(method: string, path: string, body?: unknown, requestId?: string): Promise<any> {
+function createRest(creds: Creds, accessToken: () => Promise<string>, seller: Seller | null) {
+  return async function rest(method: string, path: string, body?: unknown, requestId?: string): Promise<any> {
     const headers: Record<string, string> = { Authorization: `Bearer ${await accessToken()}`, 'Content-Type': 'application/json' };
     if (requestId) headers['PayPal-Request-Id'] = requestId;
+    if (seller) headers['PayPal-Auth-Assertion'] = authAssertion(creds.clientId, seller.merchantId);
+    if (config.paypal.bnCode) headers['PayPal-Partner-Attribution-Id'] = config.paypal.bnCode;
     if (method !== 'GET') headers.Prefer = 'return=representation';
     const res = await fetch(`${config.paypal.baseUrl}${path}`, {
       method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(config.paypal.timeoutMs),
@@ -94,11 +130,16 @@ function createClient(creds: Creds): PayPal {
     const data = text ? JSON.parse(text) : {};
     if (!res.ok) throw new PayPalError(`PayPal ${method} ${path.split('/').slice(0, 4).join('/')} failed (${res.status}): ${data?.name ?? ''} ${data?.details?.[0]?.issue ?? ''}`.trim(), 502, res.status);
     return data;
-  }
+  };
+}
+
+// The Agent Toolkit sends no PayPal-Auth-Assertion, so it runs the demo merchant's invoices; a connected seller's go through rest.
+function createClient(creds: Creds, accessToken: () => Promise<string>, seller: Seller | null): PayPal {
+  const rest = createRest(creds, accessToken, seller);
 
   // One toolkit per PayPal client. The toolkit keeps its own token forever and takes the request id
   // from its context, so each call gets our cached token and its own PayPal-Request-Id. Calls run one at a time.
-  const toolkit = new PayPalAgentToolkit({
+  const toolkit = seller ? null : new PayPalAgentToolkit({
     clientId: creds.clientId,
     clientSecret: creds.clientSecret,
     configuration: {
@@ -106,8 +147,8 @@ function createClient(creds: Creds): PayPal {
       context: { sandbox: config.paypal.sandbox },
     },
   });
-  const tkClient = toolkit.client as unknown as { _accessToken?: string; _context: Record<string, unknown> };
-  const tools = toolkit.getTools();
+  const tkClient = toolkit?.client as unknown as { _accessToken?: string; _context: Record<string, unknown> };
+  const tools = toolkit?.getTools() ?? {};
   let queue: Promise<unknown> = Promise.resolve();
 
   async function toolkitCall(tool: string, args: Record<string, unknown>, requestId: string): Promise<any> {
@@ -142,12 +183,32 @@ function createClient(creds: Creds): PayPal {
     stage: d.dispute_life_cycle_stage ?? null,
   });
 
+  // The invoice the toolkit makes, with the seller as invoicer. PayPal's partner invoicing guide sets the seller's primary email there.
+  async function sellerInvoice(i: InvoiceInput, requestId: string) {
+    const recipient = i.clientName || i.clientEmail
+      ? [{ billing_info: { ...(i.clientName ? { name: { given_name: i.clientName } } : {}), ...(i.clientEmail ? { email_address: i.clientEmail } : {}) } }]
+      : undefined;
+    const invoicer = { ...(i.businessName ? { business_name: i.businessName } : {}), ...(seller?.email ? { email_address: seller.email } : {}) };
+    const created = await rest('POST', '/v2/invoicing/invoices', {
+      detail: { currency_code: i.currency },
+      ...(Object.keys(invoicer).length ? { invoicer } : {}),
+      ...(recipient ? { primary_recipients: recipient } : {}),
+      items: [{ name: i.item, quantity: '1', unit_amount: { currency_code: i.currency, value: i.value } }],
+    }, `${requestId}-create`);
+    const id: string | undefined = created.id ?? String(created.href ?? '').split('/').pop();
+    if (!id || !/^INV2-[A-Z0-9-]+$/.test(id)) throw new PayPalError('PayPal returned no invoice id', 502);
+    const sent = await rest('POST', `/v2/invoicing/invoices/${id}/send`, { send_to_recipient: Boolean(i.clientEmail) }, `${requestId}-send`);
+    const payLink = typeof sent?.href === 'string' && sent.rel === 'payer-view' ? sent.href : `${config.paypal.webUrl}/invoice/p/#${id}`;
+    return { id, status: 'SENT', payLink };
+  }
+
   async function getInvoiceRaw(id: string) {
     return rest('GET', `/v2/invoicing/invoices/${encodeURIComponent(id)}`);
   }
 
   return {
     async createAndSendInvoice(i, requestId) {
+      if (seller) return sellerInvoice(i, requestId);
       const recipient = i.clientName || i.clientEmail
         ? [{ billing_info: { ...(i.clientName ? { name: { given_name: i.clientName } } : {}), ...(i.clientEmail ? { email_address: i.clientEmail } : {}) } }]
         : undefined;
@@ -201,6 +262,10 @@ function createClient(creds: Creds): PayPal {
     },
 
     async remind(id, requestId) {
+      if (seller) {
+        await rest('POST', `/v2/invoicing/invoices/${encodeURIComponent(id)}/remind`, {}, requestId);
+        return;
+      }
       await toolkitCall('send_invoice_reminder', { invoice_id: id }, requestId);
     },
 
@@ -320,12 +385,80 @@ function createClient(creds: Creds): PayPal {
   };
 }
 
-// One sandbox merchant for the hackathon. Real "Connect PayPal" swaps this lookup for per-user credentials.
-export function createPayPalProvider(creds: Creds): PayPalProvider {
-  const platform = createClient(creds);
+function createPartner(creds: Creds, accessToken: () => Promise<string>): PayPalPartner {
+  const rest = createRest(creds, accessToken, null);
+  const partnerId = () => {
+    if (!config.paypal.partnerMerchantId) throw new PayPalError('PAYPAL_PARTNER_MERCHANT_ID is not set', 503);
+    return encodeURIComponent(config.paypal.partnerMerchantId);
+  };
+  const orNullOn404 = async <T>(run: () => Promise<T>): Promise<T | null> => {
+    try {
+      return await run();
+    } catch (e) {
+      if (e instanceof PayPalError && e.upstream === 404) return null;
+      throw e;
+    }
+  };
   return {
-    forUser: (_userId: string) => platform,
+    async createReferral(trackingId, returnUrl) {
+      const r = await rest('POST', '/v2/customer/partner-referrals', {
+        tracking_id: trackingId,
+        operations: [{
+          operation: 'API_INTEGRATION',
+          api_integration_preference: {
+            rest_api_integration: {
+              integration_method: 'PAYPAL', integration_type: 'THIRD_PARTY',
+              third_party_details: { features: [...PARTNER_FEATURES] },
+            },
+          },
+        }],
+        products: ['EXPRESS_CHECKOUT'],
+        legal_consents: [{ type: 'SHARE_DATA_CONSENT', granted: true }],
+        partner_config_override: { return_url: returnUrl },
+      });
+      const actionUrl = (r?.links as { rel: string; href: string }[] | undefined)?.find((l) => l.rel === 'action_url')?.href;
+      if (!actionUrl || !actionUrl.startsWith(`${config.paypal.webUrl}/`)) throw new PayPalError('PayPal returned no sign-up link', 502);
+      return { actionUrl };
+    },
+
+    async merchantIdForTracking(trackingId) {
+      const r = await orNullOn404(() => rest('GET', `/v1/customer/partners/${partnerId()}/merchant-integrations?tracking_id=${encodeURIComponent(trackingId)}`));
+      return typeof r?.merchant_id === 'string' && r.merchant_id ? r.merchant_id : null;
+    },
+
+    async merchantStatus(merchantId) {
+      const r = await orNullOn404(() => rest('GET', `/v1/customer/partners/${partnerId()}/merchant-integrations/${encodeURIComponent(merchantId)}`));
+      if (!r || r.merchant_id !== merchantId) return null;
+      // The seller granted this app's third-party permissions.
+      const granted = (r.oauth_integrations ?? []).some((o: any) =>
+        o?.integration_type === 'OAUTH_THIRD_PARTY' && (o?.oauth_third_party ?? []).some((t: any) => t?.partner_client_id === creds.clientId));
+      return {
+        merchantId, trackingId: typeof r.tracking_id === 'string' ? r.tracking_id : null,
+        paymentsReceivable: r.payments_receivable === true, emailConfirmed: r.primary_email_confirmed === true,
+        primaryEmail: typeof r.primary_email === 'string' ? r.primary_email : null, permissionsGranted: granted,
+      };
+    },
+  };
+}
+
+// sellerOf: the user's connected PayPal account, or null. Without one, the user runs on the shared sandbox demo merchant.
+export function createPayPalProvider(creds: Creds, sellerOf: (userId: string) => Seller | null = () => null): PayPalProvider {
+  const accessToken = createTokenSource(creds);
+  const platform = createClient(creds, accessToken, null);
+  const partner = createPartner(creds, accessToken);
+  return {
+    forUser: (userId: string) => {
+      const seller = sellerOf(userId);
+      return seller ? createClient(creds, accessToken, seller) : platform;
+    },
+    forAccount: (userId: string, account: string | null) => {
+      if (!account) return platform;
+      const seller = sellerOf(userId);
+      if (seller?.account !== account) throw new PayPalError('the PayPal account that made this is no longer connected', 409);
+      return createClient(creds, accessToken, seller);
+    },
     platform: () => platform,
+    partner: () => partner,
   };
 }
 

@@ -107,6 +107,7 @@ struct HomeView: View {
                 if !model.brief.isEmpty { briefCard }
                 if !calendar.today.isEmpty { todaySection }
                 summaryCard
+                ConnectPayPalCard()
                 if !session.appleLinked {
                     SaveDetailsCard().padding(.horizontal, Theme.Metric.cardInset)
                 } else if let notice = session.notice {
@@ -132,9 +133,9 @@ struct HomeView: View {
         // No navigation bar here, so cover the status bar: scrolled cards never run under the clock.
         .overlay(alignment: .top) { Theme.Color.bg.frame(height: 0).ignoresSafeArea(edges: .top) }
         .toolbar(.hidden, for: .navigationBar)
-        .refreshable { await model.load() }
+        .refreshable { await model.load(); await PayPalConnector.shared.refresh() }
         // Loads again when the account changes: "Welcome back" brings the earlier account's data.
-        .task(id: session.account) { await model.load() }
+        .task(id: session.account) { await model.load(); await PayPalConnector.shared.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in calendar.refresh() }
         .overlay {
             if let p = model.raven {
