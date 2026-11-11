@@ -2,7 +2,7 @@ process.env.LOG_SILENT = '1';
 import { randomBytes } from 'node:crypto';
 import { createApp } from '../src/app.ts';
 import type { AppleVerifier } from '../src/apple.ts';
-import type { Ai, Classification, Extraction, ToneCheck } from '../src/ai.ts';
+import type { Ai, Classification, DeviceAction, Extraction, ToneCheck } from '../src/ai.ts';
 import type { AskGroup, AskRoute } from '../src/config.ts';
 import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
@@ -10,7 +10,7 @@ import type { PayPal, PayPalDispute, PayPalDisputeDetail, PayPalTxn } from '../s
 
 export const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
-export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number } | Error; route?: { route?: AskRoute; confidence?: number }; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void } = {}) {
+export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number } | Error; route?: { route?: AskRoute; confidence?: number }; device?: { kind?: DeviceAction; confidence?: number } | Error; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void } = {}) {
   const db = openDb(':memory:');
   const cipher = createCipher(randomBytes(32));
   const calls: { fn: string; args: unknown[] }[] = [];
@@ -77,6 +77,11 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       aiCalls.push({ fn: 'askGroup', args: [text] });
       if (opts.group instanceof Error) throw opts.group;
       return { group: 'money', confidence: 0.92, ...opts.group };
+    },
+    async deviceAction(text) {
+      aiCalls.push({ fn: 'deviceAction', args: [text] });
+      if (opts.device instanceof Error) throw opts.device;
+      return { kind: 'none', confidence: 0.92, ...opts.device };
     },
     async askRoute(text, group) { aiCalls.push({ fn: 'askRoute', args: [text, group] }); return { route: 'invoice', confidence: 0.92, ...opts.route }; },
     async reply(...args) { aiCalls.push({ fn: 'reply', args }); return 'Haircut is $45. Want a slot tomorrow?'; },
