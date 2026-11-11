@@ -54,6 +54,9 @@ enum WhoPaid {
         }
     }
 
+    /// How many clients owe money. The header and the keyboard's "Who paid?" chip both show this number.
+    static func count(_ clients: [UnpaidClient]) -> Int { Set(clients.map(\.name)).count }
+
     /// "$165 unpaid · 2 clients". One total per currency, in the order of the list.
     static func header(_ clients: [UnpaidClient]) -> String {
         guard !clients.isEmpty else { return empty }
@@ -64,7 +67,7 @@ enum WhoPaid {
             totals[c.currency, default: 0] += cents(c.amount)
         }
         let money = order.map { formatMoney(value(totals[$0] ?? 0), $0) }.joined(separator: " + ")
-        let people = Set(clients.map(\.name)).count
+        let people = count(clients)
         return "\(money) unpaid \u{00B7} \(people) client\(people == 1 ? "" : "s")"
     }
 

@@ -16,6 +16,16 @@ final class WhoPaidTests: XCTestCase {
         XCTAssertEqual(WhoPaid.header(WhoPaid.clients([payment("Ana", "90.50", days: 1, id: "A")])), "$90.50 unpaid \u{00B7} 1 client")
     }
 
+    func testTheReadyChipAndTheHeaderCountTheSameClients() {
+        let clients = WhoPaid.clients([payment("Jordan", "120.00", days: 2, id: "A"), payment("Jordan", "45.00", days: 5, id: "B"),
+                                       payment("Maya", "30.00", days: 0, id: "C", kind: "link"), payment("Ana", "10.00", days: 0, id: "D", currency: "EUR"),
+                                       payment("Ana", "15.00", days: 1, id: "E"), payment("Sam", "500.00", days: 0, id: "F", state: "paid")])
+        let n = WhoPaid.count(clients)
+        XCTAssertEqual(n, 3)
+        XCTAssertTrue(WhoPaid.header(clients).hasSuffix("\u{00B7} 3 clients"))
+        XCTAssertEqual(ReadyChips.build(.init(unpaidCount: n)).first { $0.id == "whopaid" }?.detail, "3 unpaid")
+    }
+
     func testNothingUnpaidSaysEveryoneHasPaid() {
         XCTAssertEqual(WhoPaid.clients([payment("Sam", "45.00", days: 0, id: "A", state: "paid")]), [])
         XCTAssertEqual(WhoPaid.header([]), "Everyone's paid \u{2713}")

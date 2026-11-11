@@ -7,7 +7,7 @@ enum ReadyChips {
         var toBill: Appointment?
         var nextUp: Appointment?
         var today: [Appointment] = []
-        /// Unpaid invoices in the app's last snapshot. Nil when the app has not written one yet.
+        /// Clients who owe money in the app's last snapshot (`WhoPaid.count`). Nil when the app has not written one yet.
         var unpaidCount: Int?
         var watch: Watch?
     }

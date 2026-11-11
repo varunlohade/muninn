@@ -37,7 +37,7 @@ final class CalendarModel: ObservableObject {
     func refresh(clients: [Client], payments: [Payment]) {
         self.clients = clients
         self.payments = payments
-        SharedStore.unpaidCount = payments.filter { $0.kind == "invoice" && $0.state == "unpaid" }.count
+        SharedStore.unpaidCount = WhoPaid.count(WhoPaid.clients(payments))
         refresh()
     }
 

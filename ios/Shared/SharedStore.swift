@@ -36,7 +36,7 @@ enum SharedStore {
         set { defaults?.set(newValue, forKey: keyboardSeenKey) }
     }
 
-    /// How many invoices were unpaid when the app last loaded payments. Nil before the first load.
+    /// How many clients owed money when the app last loaded payments (`WhoPaid.count`). Nil before the first load.
     static var unpaidCount: Int? {
         get { defaults?.object(forKey: unpaidKey) as? Int }
         set { defaults?.set(newValue, forKey: unpaidKey) }
