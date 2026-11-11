@@ -95,45 +95,45 @@ final class SuggestionBarTextTests: XCTestCase {
     }
 
     func testOtherKindsUseLabel() {
-        XCTAssertEqual(SuggestionBar.title(chip("tone", ["amount": "45.00"], label: "Calm reply")), "Calm reply")
+        XCTAssertEqual(BarItems.title(chip("tone", ["amount": "45.00"], label: "Calm reply")), "Calm reply")
     }
 
     func testInvoiceTitle() {
         let c = chip("invoice", ["amount": "90.00", "currency": "USD", "item": "logo design"])
-        XCTAssertEqual(SuggestionBar.title(c), "Invoice $90 logo design")
+        XCTAssertEqual(BarItems.title(c), "Invoice $90 logo design")
     }
 
     func testPayLinkWithoutCurrencyShowsBareAmount() {
-        XCTAssertEqual(SuggestionBar.title(chip("paylink", ["amount": "45.00"])), "Pay link 45")
+        XCTAssertEqual(BarItems.title(chip("paylink", ["amount": "45.00"])), "Pay link 45")
     }
 
     func testPayLinkWithNothing() {
-        XCTAssertEqual(SuggestionBar.title(chip("paylink", [:])), "Pay link")
-        XCTAssertEqual(SuggestionBar.title(chip("paylink", ["amount": "", "item": ""])), "Pay link")
+        XCTAssertEqual(BarItems.title(chip("paylink", [:])), "Pay link")
+        XCTAssertEqual(BarItems.title(chip("paylink", ["amount": "", "item": ""])), "Pay link")
     }
 
     func testInvoiceDetailPrefersEmail() {
         let c = chip("invoice", ["client_email": "ana@example.com", "client_name": "Ana"])
-        XCTAssertEqual(SuggestionBar.detail(c, fromCopied: false), "→ ana@example.com")
+        XCTAssertEqual(BarItems.detail(c, fromCopied: false), "→ ana@example.com")
     }
 
     func testInvoiceDetailFallsBackToName() {
-        XCTAssertEqual(SuggestionBar.detail(chip("invoice", ["client_name": "Ana"]), fromCopied: false), "→ Ana")
+        XCTAssertEqual(BarItems.detail(chip("invoice", ["client_name": "Ana"]), fromCopied: false), "→ Ana")
     }
 
     func testInvoiceDetailFromCopied() {
         let c = chip("invoice", ["client_email": "ana@example.com"])
-        XCTAssertEqual(SuggestionBar.detail(c, fromCopied: true), "→ ana@example.com · from copied message")
+        XCTAssertEqual(BarItems.detail(c, fromCopied: true), "→ ana@example.com · from copied message")
     }
 
     func testInvoiceWithNoRecipientAndNotCopied() {
-        XCTAssertNil(SuggestionBar.detail(chip("invoice", [:]), fromCopied: false))
+        XCTAssertNil(BarItems.detail(chip("invoice", [:]), fromCopied: false))
     }
 
     func testPayLinkDetailIgnoresRecipient() {
         let c = chip("paylink", ["client_email": "ana@example.com"])
-        XCTAssertNil(SuggestionBar.detail(c, fromCopied: false))
-        XCTAssertEqual(SuggestionBar.detail(c, fromCopied: true), "from copied message")
+        XCTAssertNil(BarItems.detail(c, fromCopied: false))
+        XCTAssertEqual(BarItems.detail(c, fromCopied: true), "from copied message")
     }
 }
 

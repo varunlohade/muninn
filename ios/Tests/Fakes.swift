@@ -18,7 +18,8 @@ final class FakeHost: TextHost {
     func playClick() {}
 }
 
-/// Answers with canned replies and records every call.
+/// Answers with canned replies and records every call. Main-actor bound, so the model's tasks and the test never race on it.
+@MainActor
 final class FakeAPI: KeyboardAPI {
     struct Failure: Error {}
 
@@ -34,9 +35,14 @@ final class FakeAPI: KeyboardAPI {
     private(set) var calls: [String] = []
     private(set) var suggested: [(text: String, context: String?)] = []
     private(set) var invoiced: [[String: JSONValue]] = []
+    /// When set, suggest() runs this before it answers, so a test can change the text mid-request.
+    var duringSuggest: (() -> Void)?
+
+    nonisolated init() {}
 
     func suggest(_ text: String, context: String?) async throws -> SuggestResponse {
         calls.append("suggest"); suggested.append((text, context))
+        duringSuggest?()
         return suggestReply
     }
 
@@ -71,21 +77,45 @@ final class FakePasteboard: Pasteboard {
     func copy(_ s: String) { string = s; changeCount += 1 }
 }
 
-/// A clock the test moves by hand. sleep records the wait, gives other tasks a turn, and returns.
-/// Main-actor bound so tasks that sleep at the same time do not race on `sleeps`.
+/// A clock the test moves by hand. sleep waits until advance() moves `now` past its deadline,
+/// so a loop that sleeps does not spin and a debounce really waits.
+/// Main-actor bound so tasks that sleep at the same time do not race on the waiters.
 @MainActor
 final class FakeClock {
     var now = Date(timeIntervalSince1970: 1_800_000_000)
     private(set) var sleeps: [Duration] = []
+    private var waiters: [(id: UUID, until: Date, cont: CheckedContinuation<Void, Error>)] = []
 
     nonisolated init() {}
 
-    func advance(_ seconds: TimeInterval) { now += seconds }
+    /// Tasks asleep right now.
+    var sleeping: Int { waiters.count }
 
+    func advance(_ seconds: TimeInterval) {
+        now += seconds
+        let due = waiters.filter { $0.until <= now }
+        waiters.removeAll { $0.until <= now }
+        for w in due { w.cont.resume() }
+    }
+
+    /// `sleeps` records only the waits that began, not those of tasks already cancelled.
     func sleep(_ d: Duration) async throws {
-        sleeps.append(d)
-        await Task.yield()
-        try Task.checkCancellation()
+        let id = UUID()
+        let until = now + Double(d.components.seconds) + Double(d.components.attoseconds) * 1e-18
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled { cont.resume(throwing: CancellationError()); return }
+                sleeps.append(d)
+                waiters.append((id, until, cont))
+            }
+        } onCancel: {
+            Task { @MainActor in self.wake(id, throwing: CancellationError()) }
+        }
+    }
+
+    private func wake(_ id: UUID, throwing error: Error) {
+        guard let i = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: i).cont.resume(throwing: error)
     }
 }
 

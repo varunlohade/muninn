@@ -131,6 +131,7 @@ final class KeyboardModel: ObservableObject {
     private var suggestTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var lastSent = ""
+    private var suggest = SuggestPolicy()
     private var actions: [ActionShortcut] = ActionShortcut.defaults
     private var writeTask: Task<Void, Never>?
     private var undoTask: Task<Void, Never>?
@@ -367,11 +368,20 @@ final class KeyboardModel: ObservableObject {
         guard paired, suggestsWhileTyping else { return }
         if case .working = bar { return }
         if case .confirm = bar { return }
-        let text = (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text != lastSent else { return }
-        suggestTask?.cancel()
-        guard !text.isEmpty else { lastSent = ""; billing = nil; bar = .idle; return }
-        requestSuggest(text: billing.map { $0.invoicePrefix + " " + text } ?? text, context: nil, debounce: true, sentAs: text)
+        let text = typed
+        suggest.observe(text)
+        switch SuggestPolicy.ask(text, lastAsked: lastSent, prefix: billing?.invoicePrefix) {
+        case .keep:
+            return
+        case .skip:
+            suggestTask?.cancel()
+            lastSent = text
+            if text.isEmpty { billing = nil }
+            bar = .idle
+        case .ask(let sent, let after):
+            suggestTask?.cancel()
+            requestSuggest(text: sent, context: nil, debounce: after, sentAs: text)
+        }
     }
 
     /// Tap on "Use copied message". Reading may show the system paste prompt once, so the read runs
@@ -391,7 +401,7 @@ final class KeyboardModel: ObservableObject {
             }
             let text = (self.host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             self.bar = .idle
-            self.requestSuggest(text: text, context: String(copied.prefix(1000)), debounce: false)
+            self.requestSuggest(text: text, context: String(copied.prefix(1000)), debounce: nil)
             self.checkCopiedTone(String(copied.prefix(1000)))
         }
     }
@@ -413,16 +423,9 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
-    /// The latest ended appointment with a known client and no invoice today.
-    var toBill: Appointment? {
-        let now = deps.now()
-        return appointments.last { $0.end <= now && !$0.billed && !billedHere.contains($0.id) && ($0.clientName ?? $0.clientEmail) != nil }
-    }
+    var toBill: Appointment? { AppointmentRules.toBill(appointments, now: deps.now(), billed: billedHere) }
 
-    var nextUp: Appointment? {
-        let now = deps.now()
-        return appointments.first { $0.start > now }
-    }
+    var nextUp: Appointment? { AppointmentRules.nextUp(appointments, now: deps.now()) }
 
     /// Tap on "Invoice Sam": from now on the client goes in front of the typed amount and item.
     func invoiceAppointment(_ a: Appointment) {
@@ -431,26 +434,34 @@ final class KeyboardModel: ObservableObject {
         billing = a
         guard !typed.isEmpty else { bar = .done("Type the amount for \(a.who)"); return }
         bar = .working("Invoice for \(a.who)…")
-        requestSuggest(text: a.invoicePrefix + " " + typed, context: nil, debounce: false, sentAs: typed)
+        requestSuggest(text: a.invoicePrefix + " " + typed, context: nil, debounce: nil, sentAs: typed)
     }
 
-    private func requestSuggest(text: String, context: String?, debounce: Bool, sentAs: String? = nil) {
+    private func requestSuggest(text: String, context: String?, debounce: Duration?, sentAs: String? = nil) {
         let typedAt = ContinuousClock.now
-        lastSent = sentAs ?? text
+        let askedFor = sentAs ?? text
+        lastSent = askedFor
         let sleep = deps.sleep
         suggestTask = Task { [weak self] in
-            if debounce { try? await sleep(AppConfig.suggestDebounce) }
+            if let debounce { try? await sleep(debounce) }
             guard let self, !Task.isCancelled else { return }
             do {
                 let res = try await self.deps.api().suggest(text, context: context)
                 guard !Task.isCancelled else { return }
+                guard let chips = self.suggest.show(res.chips, askedFor: askedFor, current: self.typed) else {
+                    // The text moved on while the server thought. Ask again for what is there now.
+                    self.log.notice("MUNINN_SUGGEST stale reply dropped")
+                    if case .working = self.bar { self.bar = .idle }
+                    self.textChanged()
+                    return
+                }
                 let ms = Int((ContinuousClock.now - typedAt) / .milliseconds(1))
                 self.lastLatencyMs = ms
-                self.log.notice("MUNINN_TIMING keystroke_to_chip_ms=\(ms, privacy: .public) chips=\(res.chips.count, privacy: .public) server_ms=\(res.timings?["total_ms"] ?? -1, privacy: .public) copied=\(context != nil, privacy: .public)")
-                if res.chips.isEmpty, let a = self.billing {
+                self.log.notice("MUNINN_TIMING keystroke_to_chip_ms=\(ms, privacy: .public) chips=\(chips.count, privacy: .public) server_ms=\(res.timings?["total_ms"] ?? -1, privacy: .public) copied=\(context != nil, privacy: .public)")
+                if chips.isEmpty, let a = self.billing {
                     self.bar = .done("Type the amount for \(a.who)")
                 } else {
-                    self.bar = res.chips.isEmpty ? .idle : .chips(res.chips, fromCopied: context != nil)
+                    self.bar = chips.isEmpty ? .idle : .chips(chips, fromCopied: context != nil)
                 }
             } catch is CancellationError {
             } catch let e as URLError where e.code == .cancelled {
@@ -652,48 +663,21 @@ final class KeyboardModel: ObservableObject {
 
     /// Runs on space and return. If the last word is a trigger, the shortcut replaces it and the key is used up.
     private func expandShortcut() -> Bool {
-        guard hasFullAccess, let host else { return false }
-        let before = host.contextBeforeInput ?? ""
-        let words = before.split(omittingEmptySubsequences: false, whereSeparator: \.isWhitespace)
-        guard let last = words.last, last.count >= 2 else { return false }
-        let key = last.lowercased()
-        func remove(_ count: Int) { for _ in 0..<count { host.deleteBackward() } }
-        func finish() {
-            lastShortcut = key
-            lastSent = typed
-            updateAutoShift()
-            updateFixable()
+        guard hasFullAccess, let host,
+              let m = ShortcutEngine.match(before: host.contextBeforeInput ?? "", notes: notes, actions: actions) else { return false }
+        for _ in 0..<m.delete { host.deleteBackward() }
+        if case .insert(let text) = m.action { host.insert(text) }
+        lastShortcut = m.trigger
+        lastSent = typed
+        updateAutoShift()
+        updateFixable()
+        switch m.action {
+        case .insert: break
+        case .late: showLate()
+        case .fix: fix()
+        case .payLink(let amount, let currency): offerPayLink(amount, currency: currency)
         }
-
-        if let note = notes.first(where: { $0.trigger == key }) {
-            remove(last.count)
-            host.insert(note.text)
-            finish()
-            return true
-        }
-        let on = actions.filter(\.enabled)
-        if let a = on.first(where: { $0.trigger == key }) {
-            switch a.action {
-            case .pay: return false
-            case .late:
-                remove(last.count)
-                finish()
-                showLate()
-            case .fix:
-                remove(last.count + (words.count > 1 && before.dropLast(last.count).last == " " ? 1 : 0))
-                finish()
-                fix()
-            }
-            return true
-        }
-        if words.count >= 2, let pay = on.first(where: { $0.action == .pay }), words[words.count - 2].lowercased() == pay.trigger,
-           before.hasSuffix(" " + last), let amount = Shortcuts.amount(String(last)) {
-            remove(last.count + 1 + pay.trigger.count)
-            finish()
-            offerPayLink(amount.value, currency: amount.currency)
-            return true
-        }
-        return false
+        return true
     }
 
     /// The pay shortcut only offers the chip. Money moves on the owner's tap, through the same path as a suggested chip.
@@ -730,6 +714,25 @@ final class KeyboardModel: ObservableObject {
         return shown.joined(separator: ", ") + (unpaid.count > 2 ? " +\(unpaid.count - 2) more" : "")
     }
 
+    // MARK: bar
+
+    var barItems: [BarItems.Item] {
+        BarItems.build(.init(hasFullAccess: hasFullAccess, paired: paired, undo: undo, hasCalmOffer: calmOffer != nil, watch: watch,
+                             bar: bar, copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp))
+    }
+
+    func perform(_ action: BarItems.Action) {
+        switch action {
+        case .useCopied: useCopied()
+        case .bill(let a): invoiceAppointment(a)
+        case .chip(let chip): tapChip(chip)
+        case .confirm(let chip, let recipient): confirm(chip, recipient: recipient)
+        case .cancelConfirm: cancelConfirm()
+        case .undo: undoWrite()
+        case .openCalm: openCalmOffer()
+        }
+    }
+
     // MARK: actions
 
     func tapChip(_ chip: Chip) {
@@ -742,7 +745,12 @@ final class KeyboardModel: ObservableObject {
 
     func confirm(_ chip: Chip, recipient: String) { run(chip, confirmed: recipient) }
 
-    func cancelConfirm() { bar = .idle; lastSent = "" }
+    /// Cancel turns the chip away: it stays off the bar until the text changes.
+    func cancelConfirm() {
+        if case .confirm(let chip, _) = bar { suggest.dismiss(chip, on: typed) }
+        bar = .idle
+        lastSent = ""
+    }
 
     private func run(_ chip: Chip, confirmed: String?) {
         suggestTask?.cancel()

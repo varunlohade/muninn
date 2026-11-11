@@ -475,7 +475,7 @@ struct AskBar: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(chips) { chip in
-                        AskChip(title: SuggestionBar.title(chip), detail: SuggestionBar.detail(chip, fromCopied: false)) { model.run(chip) }
+                        AskChip(title: BarItems.title(chip), detail: BarItems.detail(chip, fromCopied: false)) { model.run(chip) }
                             .accessibilityIdentifier("ask.chip.\(chip.kind)")
                     }
                 }
