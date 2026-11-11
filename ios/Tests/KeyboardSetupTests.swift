@@ -47,6 +47,12 @@ final class KeyboardSetupTests: XCTestCase {
         XCTAssertEqual(KeyboardState.notFirst.homeTitle, "Make Muninn your first keyboard")
     }
 
+    /// Full Access can be on before the heartbeat lands, so the card asks to finish setup, not to allow it again.
+    func testNeedsFullAccessAsksToFinishSetup() {
+        XCTAssertEqual(KeyboardState.needsFullAccess.homeTitle, "Finish keyboard setup")
+        XCTAssertEqual(KeyboardState.finishSetupLine, "Turn on Allow Full Access, then open Muninn once in any chat")
+    }
+
     /// Onboarding's Settings button says where it goes. Reordering lives in Settings › General, which no link can open.
     func testSettingsButtonSaysWhereItGoes() {
         XCTAssertEqual(KeyboardState.needsFullAccess.settingsButton, "Open Muninn settings")

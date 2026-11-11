@@ -333,6 +333,10 @@ struct EnableKeyboardSteps: View {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     Text(setup.state == .ready ? "Make it your default" : setup.state.homeTitle)
                         .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                    if setup.state == .needsFullAccess {
+                        Text(KeyboardState.finishSetupLine).font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     KeyboardDefaultGuide()
                     OpenSettingsButton()
                 }

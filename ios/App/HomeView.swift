@@ -253,7 +253,9 @@ struct HomeView: View {
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                         Text(keyboard.state.homeTitle)
                             .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
-                        if keyboard.state == .notFirst {
+                        if keyboard.state == .needsFullAccess {
+                            Text(KeyboardState.finishSetupLine).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                        } else if keyboard.state == .notFirst {
                             Text("Drag it to the top in Settings").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
                         } else if !keyboard.state.isOn {
                             Text("Make it your default keyboard").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)

@@ -12,7 +12,8 @@ enum KeyboardState: Equatable {
     var homeTitle: String {
         switch self {
         case .notAdded: "Add the \(AppConfig.displayName) keyboard"
-        case .needsFullAccess: "Allow Full Access"
+        // Full Access may be on already: iOS only tells the app once the keyboard has opened with it.
+        case .needsFullAccess: "Finish keyboard setup"
         case .notFirst: "Make \(AppConfig.displayName) your first keyboard"
         case .ready: "Keyboard is on"
         }
@@ -29,6 +30,8 @@ enum KeyboardState: Equatable {
         case .ready: nil
         }
     }
+
+    static let finishSetupLine = "Turn on Allow Full Access, then open \(AppConfig.displayName) once in any chat"
 
     static let reorderSteps = "Settings › General › Keyboard › Keyboards › Edit, then drag \(AppConfig.displayName) to the top."
 }

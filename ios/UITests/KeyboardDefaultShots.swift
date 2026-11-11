@@ -153,7 +153,7 @@ final class KeyboardDefaultShots: XCTestCase {
 
         addKeyboard()
         app.activate()
-        XCTAssertTrue(app.staticTexts["Allow Full Access"].waitForExistence(timeout: 5), "Home did not see the new keyboard: \(app.debugDescription)")
+        XCTAssertTrue(app.staticTexts["Finish keyboard setup"].waitForExistence(timeout: 5), "Home did not see the new keyboard: \(app.debugDescription)")
         shot("kb-06-home-needs-full-access")
 
         id(app, "home.keyboard").tap()
