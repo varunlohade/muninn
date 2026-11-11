@@ -283,7 +283,7 @@ struct NotesPanel: View {
     }
 }
 
-/// Rewrite, in place of the keys: five one-tap rewrites and a tone check. The result shows first; a tap puts it in the message.
+/// Rewrite, in place of the keys: five one-tap rewrites and a grammar fix. The result shows first; a tap puts it in the message.
 struct WritePanelView: View {
     @ObservedObject var model: KeyboardModel
     let palette: Theme.SystemKeyboard.Palette
@@ -310,7 +310,7 @@ struct WritePanelView: View {
                 HStack(spacing: M.keyGap) { option(.professional); option(.friendly) }
                 HStack(spacing: M.keyGap) {
                     option(.firmer)
-                    wide("Check the tone", id: "write.tone", action: model.checkTone)
+                    wide("Fix grammar", id: "write.grammar", action: model.fixGrammar)
                 }
             } else {
                 note("Type a message first. Then pick how to rewrite it.")

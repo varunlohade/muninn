@@ -1,11 +1,11 @@
 import UIKit
 
-/// What the Fix chip offers for the text before the cursor. `fixed` is the on-device result; nil sends the text to the server.
+/// What the Fix chip offers for the text before the cursor, and the text after the fix, made on the phone.
 struct FixPlan: Equatable {
     let title: String
     /// The line beside Undo after the fix went in.
     let done: String
-    let fixed: String?
+    let fixed: String
 }
 
 /// Finds typos, capitals and spacing on the phone, before any tap. Names, links, emails and amounts are never touched.
@@ -13,8 +13,6 @@ enum FixCheck {
     enum Spell: Equatable { case ok, wrong(guess: String?) }
     typealias Speller = (String) -> Spell
 
-    /// Below this many words, clean text shows no chip. At or above it, clean text offers a grammar check on the server.
-    static let grammarWords = 8
     static let maxChars = 600
 
     static let slips: [String: String] = [
@@ -40,7 +38,7 @@ enum FixCheck {
         let known = Set(names.flatMap { $0.lowercased().split(separator: " ").map(String.init) })
         var chunks = split(text)
         let lastWord = chunks.lastIndex { !$0.space }
-        var typos: [(String, String)] = [], capitals = 0, spacing = 0, checked = 0, misspelled = 0, unsure = 0
+        var typos: [(String, String)] = [], capitals = 0, spacing = 0, checked = 0, misspelled = 0
         var atStart = true
         for i in chunks.indices {
             if chunks[i].space {
@@ -68,8 +66,6 @@ enum FixCheck {
                         let out = word.first!.isUppercase ? guess.prefix(1).uppercased() + guess.dropFirst() : guess
                         typos.append((word, out))
                         word = out
-                    } else {
-                        unsure += 1
                     }
                 }
             }
@@ -79,12 +75,9 @@ enum FixCheck {
             }
             chunks[i].text = parts.lead + word + parts.trail
         }
-        let words = chunks.filter { !$0.space }.count
-        let grammar = words >= 3 && (unsure > 0 || words >= grammarWords)
-            ? FixPlan(title: "Fix grammar", done: "Fixed grammar \u{2713}", fixed: nil) : nil
         // Mostly "wrong" words: another language, not typos.
-        if checked >= 3, misspelled * 2 >= checked { return grammar }
-        guard !typos.isEmpty || capitals > 0 || spacing > 0 else { return grammar }
+        if checked >= 3, misspelled * 2 >= checked { return nil }
+        guard !typos.isEmpty || capitals > 0 || spacing > 0 else { return nil }
         var fixed = chunks.map(\.text).joined()
         if let last = fixed.last, last.isLetter, let l = lastWord, isWord(pieces(chunks[l].text).core) {
             let clause = fixed.split(whereSeparator: { ",.!?;".contains($0) }).last ?? ""

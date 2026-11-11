@@ -669,16 +669,16 @@ final class KeyboardModel: ObservableObject {
         if replace(u.replacement, with: u.original) { lastFixed = u.original.trimmingCharacters(in: .whitespaces) }
     }
 
-    /// Tap on the Fix chip, or the fix shortcut. Typos, capitals and spacing are fixed on the phone; only grammar goes to the server.
+    /// Tap on the Fix chip, or the fix shortcut. Typos, capitals and spacing are fixed on the phone.
+    /// The shortcut on text with none of those asks the server for a grammar fix.
     func fix() {
         let d = draft
         guard !d.text.isEmpty else { return }
         host?.playClick()
         suggestTask?.cancel()
         writeTask?.cancel()
-        let plan = FixCheck.plan(d.text, names: appointments.compactMap(\.clientName))
-        if let plan, let fixed = plan.fixed {
-            apply(WritePreview(kind: "fix", title: plan.title, original: d.original, text: fixed), label: plan.done)
+        if let plan = FixCheck.plan(d.text, names: appointments.compactMap(\.clientName)) {
+            apply(WritePreview(kind: "fix", title: plan.title, original: d.original, text: plan.fixed), label: plan.done)
             return
         }
         bar = .working("Fixing\u{2026}")
@@ -718,14 +718,14 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
-    /// Tap on Tone check: is the draft blunt? If so, show a calm version.
-    func checkTone() {
+    /// Tap on Fix grammar in the Rewrite panel: the server fixes grammar and spelling, and the result shows first.
+    func fixGrammar() {
         let d = draft
         guard !d.text.isEmpty else { return }
-        runPanel("Checking the tone\u{2026}") { api in
-            let res = try await api.toneCheck(draft: d.text, client: nil)
-            guard res.tone != "ok", let calm = res.calm else { return .message("The tone is fine \u{2713}") }
-            return .preview(WritePreview(kind: "tone", title: "Calmer version", original: d.original, text: calm))
+        runPanel("Checking the grammar\u{2026}") { api in
+            let res = try await api.fix(d.text)
+            guard res.text != d.text else { return .message("The grammar looks good \u{2713}") }
+            return .preview(WritePreview(kind: "fix", title: "Fix grammar", original: d.original, text: res.text))
         }
     }
 

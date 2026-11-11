@@ -55,7 +55,7 @@ struct ActionShortcut: Codable, Equatable, Identifiable {
         switch action {
         case .pay: "Offers a PayPal link for the amount. You still tap to send."
         case .late: "Shows unpaid invoices in the keyboard bar."
-        case .fix: "Fixes typos, capitals and spacing before the cursor, on your phone. Longer text gets a grammar check."
+        case .fix: "Fixes typos, capitals and spacing before the cursor, on your phone. If it finds none, it checks the grammar."
         }
     }
 

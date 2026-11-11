@@ -47,10 +47,8 @@ final class FixCheckTests: XCTestCase {
         XCTAssertNil(plan("Ok sounds good lol"), "chat words are not typos")
     }
 
-    func testLongCleanTextOffersGrammarOnTheServer() {
-        let p = plan("The cut and color will take about two hours on Friday")
-        XCTAssertEqual(p?.title, "Fix grammar")
-        XCTAssertNil(p?.fixed)
+    func testLongCleanTextShowsNoChip() {
+        XCTAssertNil(plan("The cut and color will take about two hours on Friday"), "grammar lives in the Rewrite panel, not the bar")
     }
 
     func testNamesLinksEmailsAmountsAreNotTypos() {
@@ -69,14 +67,12 @@ final class FixCheckTests: XCTestCase {
     }
 
     func testTheWordBeingTypedIsLeftAlone() {
-        XCTAssertNil(plan("See you at the availa", skipLast: true))
-        XCTAssertNotNil(plan("See you at the availa"))
+        XCTAssertNil(plan("See you at noon teh", skipLast: true))
+        XCTAssertNotNil(plan("See you at noon teh"))
     }
 
     func testAnotherLanguageIsNotFullOfTypos() {
-        let p = plan("hola que tal estoy bien gracias")
-        XCTAssertNotEqual(p?.title.hasPrefix("Fix 5"), true)
-        XCTAssertNil(p?.fixed)
+        XCTAssertNil(plan("hola que tal estoy bien gracias"))
     }
 
     func testSpellerIsOnlyAskedAboutRealWords() {
@@ -125,14 +121,21 @@ final class FixModelTests: XCTestCase {
         XCTAssertNil(model.fixPlan)
     }
 
-    func testGrammarGoesToTheServer() async {
-        host.text = "The cut and color will take about two hours on Friday"
+    func testFixGrammarInRewriteGoesToTheServerAndPreviewsFirst() async {
+        let text = "The cut and color will take about two hours on Friday"
+        host.text = text
         model.textChanged()
-        XCTAssertEqual(model.fixPlan?.title, "Fix grammar")
+        XCTAssertNil(model.fixPlan, "no grammar chip in the bar")
         api.writeReply = WriteResponse(text: "The cut and colour will take about two hours on Friday.", changed: true)
-        model.fix()
-        for _ in 0..<500 where model.undo == nil { await Task.yield() }
+        model.toggleWrite()
+        model.fixGrammar()
+        for _ in 0..<500 where api.calls.filter({ $0 == "fix" }).isEmpty || model.writePanel == .busy("Checking the grammar\u{2026}") { await Task.yield() }
         XCTAssertEqual(api.calls.filter { $0 == "fix" }.count, 1)
-        XCTAssertEqual(model.undo?.label, "Fixed grammar \u{2713}")
+        guard case .preview(let p) = model.writePanel else { return XCTFail("no preview: \(model.writePanel)") }
+        XCTAssertEqual(p.title, "Fix grammar")
+        XCTAssertEqual(host.text, text, "a preview does not change the message")
+        model.usePreview()
+        XCTAssertEqual(host.text, "The cut and colour will take about two hours on Friday.")
+        XCTAssertEqual(model.undo?.label, "Replaced \u{2713}")
     }
 }
