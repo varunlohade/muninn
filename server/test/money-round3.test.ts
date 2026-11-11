@@ -64,3 +64,28 @@ test('a reminder whose client name came only from copied text needs a confirm', 
   const typed = await (await s.call(token, 'POST', '/v1/suggest', { text: 'send Ana a reminder', context: 'hey, Ana here' })).json();
   assert.deepEqual(typed.chips.map((c: C) => [c.kind, c.needs_confirm]), [['remind', false]]);
 });
+
+async function knownClients(rows: [string, string | null][], ext: Record<string, unknown>) {
+  const s = setup({ cls: { intent: 'create_invoice' }, ext: { amount: 45, item: 'haircut', ...ext } });
+  const { userId, token } = s.device();
+  s.db.addItem(userId, { name: 'haircut', price_cents: 4500, currency: 'USD' });
+  rows.forEach(([name, email], i) => s.db.insertInvoice({ id: `INV-K${i}`, user_id: userId, status: 'PAID', amount_cents: 4500, currency: 'USD', item: 'haircut', client_name_enc: s.cipher.encrypt(userId, name), client_email_enc: email && s.cipher.encrypt(userId, email), pay_link: 'l', due_at: 0, created_at: 0 }));
+  const r = await (await s.call(token, 'POST', '/v1/suggest', { text: 'invoice Sam $45 haircut' })).json();
+  return (r.chips as C[]).find((c) => c.kind === 'invoice')!;
+}
+
+test('a known client named by the owner gets the email from the owner records', async () => {
+  const inv = await knownClients([['Sam', 'sam@example.com'], ['Ana', 'ana@example.com']], { client_name: 'Sam', client_email: null });
+  assert.equal(inv.payload.client_email, 'sam@example.com');
+  assert.equal(inv.needs_confirm, true, 'still the one confirm with amount and recipient');
+});
+
+test('the records beat a model email for a known client', async () => {
+  const inv = await knownClients([['Sam', 'sam@example.com']], { client_name: 'Sam', client_email: 'evil@x.com' });
+  assert.equal(inv.payload.client_email, 'sam@example.com');
+});
+
+test('two clients with the same name give no email', async () => {
+  const inv = await knownClients([['Sam', 'sam@example.com'], ['sam', 'sam.other@example.com']], { client_name: 'Sam', client_email: null });
+  assert.equal(inv.payload.client_email, null);
+});

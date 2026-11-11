@@ -383,6 +383,17 @@ export function createApp(deps: Deps) {
   /** The one row that matches, or null when none or several do: a reminder or refund never guesses. */
   const onlyOne = <T>(rows: T[]) => (rows.length === 1 ? rows[0] : null);
 
+  /** The email of the one known client with exactly this name, named in the owner's own text. 0 or 2+ emails: null. */
+  function recordEmail(userId: string, name: string | null, text: string): string | null {
+    const want = name?.trim().toLowerCase();
+    if (!want || !mentions(text, want)) return null;
+    const emails = new Set(db.listInvoices(userId)
+      .filter((r) => dec(userId, r.client_name_enc)?.trim().toLowerCase() === want)
+      .map((r) => dec(userId, r.client_email_enc)?.trim().toLowerCase())
+      .filter((e): e is string => !!e));
+    return emails.size === 1 ? [...emails][0] : null;
+  }
+
   function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, context: string, items: CatalogItem[], defaultCurrency: string, unsure = false): Chip[] {
     const ext = rawExt && { ...rawExt, item: cleanOrNull(rawExt.item, 120), client_name: cleanOrNull(rawExt.client_name, 100) };
     // Copied client text may only help match the catalog.
@@ -397,8 +408,10 @@ export function createApp(deps: Deps) {
       const item = ext?.item ? ext.item.charAt(0).toUpperCase() + ext.item.slice(1) : match?.name ?? 'Payment';
       const money = formatMoney(cents, currency);
       const base = { amount: centsToValue(cents), currency, item, client_name: ext?.client_name ?? null };
-      // An email counts only if the owner typed it: never one the model read from copied client text.
-      const email = ext?.client_email && typedEmails(text).includes(ext.client_email.toLowerCase()) ? ext.client_email : null;
+      // An email the owner typed, else the one email the owner's records hold for the client named in the owner's
+      // text. Never an email the model read from copied client text or made up.
+      const typed = ext?.client_email && typedEmails(text).includes(ext.client_email.toLowerCase()) ? ext.client_email : null;
+      const email = typed ?? recordEmail(userId, ext?.client_name ?? null, text);
       const recipient = email ?? ext?.client_name ?? null;
       // Every invoice gets one confirm tap that shows the amount and the recipient; the server checks both.
       const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`, { ...base, client_email: email }, true);
