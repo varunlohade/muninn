@@ -641,86 +641,30 @@ final class FlowTests: XCTestCase {
         for _ in 0..<6 where text.label != "Type with the keyboard below" { id(app, "delete").press(forDuration: 3.5) }
     }
 
-    /// The intro after sign-in: Get paid, Fix, Refine, Tone check, Shortcuts. Each scene ends by itself. Needs a fresh keychain.
+    /// The intro: eight scenes, each held at its end ("-introHold") until a tap. The write scene leaves Fix done
+    /// and the Rewrite panel open. The intro runs on demo data, so no server or model is needed.
     func test19IntroScenes() throws {
-        try requireWriting()
-        let token = try XCTUnwrap(env["DEVICE_TOKEN"])
         let app = XCUIApplication()
+        app.launchArguments = ["-introHold", "-intro_seen", "NO"]
         app.launch()
-        try XCTSkipUnless(id(app, "onboarding.mark").waitForExistence(timeout: 5), "already signed in; reset the simulator keychain to run onboarding")
-        devPair(app, token: token)
-        if id(app, "onboarding.step.2").waitForExistence(timeout: 6) {
-            Thread.sleep(forTimeInterval: 0.8)
-            // After the developer pairing sheet closes, the first tap can be lost, so tap until the step changes.
-            for _ in 0..<3 where !id(app, "onboarding.step.3").exists {
-                Thread.sleep(forTimeInterval: 1)
-                id(app, "onboarding.later").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        try XCTSkipUnless(id(app, "onboarding.skip").waitForExistence(timeout: 8), "already signed in; reset the simulator keychain first")
+        let scenes = [("paylink", "Invoice or pay link"), ("remind", "Reminders"), ("ask", "Ask Muninn"), ("write", "Fix and Rewrite"),
+                      ("notes", "Notes"), ("calendar", "Calendar"), ("repeat", "Repeat billing"), ("review", "Review link")]
+        for (i, (scene, title)) in scenes.enumerated() {
+            XCTAssertTrue(id(app, "intro.done.\(scene)").waitForExistence(timeout: 15), "scene \(scene) did not finish")
+            XCTAssertEqual(id(app, "intro.done.\(scene)").label, title)
+            if scene == "write" {
+                for option in ["polite", "shorter", "professional", "friendly", "firmer", "grammar"] {
+                    XCTAssertTrue(id(app, "write.\(option)").exists, "Rewrite option \(option)")
+                }
             }
+            shot(String(format: "%02d-intro-%@", 50 + i, scene))
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
         }
-        XCTAssertTrue(id(app, "onboarding.step.3").waitForExistence(timeout: 10), String(app.debugDescription.suffix(4000)))
-        let example = id(app, "onboarding.example")
-        let message = id(app, "onboarding.message")
-        func start(_ title: String, _ shotName: String) {
-            let found = app.staticTexts[title].waitForExistence(timeout: 8)
-            Thread.sleep(forTimeInterval: 0.7)
-            shot(shotName)
-            XCTAssertTrue(found, "scene \(title) did not start\n\(app.debugDescription.prefix(5000))")
-            let skip = id(app, "onboarding.skip").frame
-            XCTAssertTrue(skip.height > 0 && skip.maxY < id(app, "write.toggle").frame.minY, "Skip stays visible above the keyboard")
-            example.tap()
-        }
-        func gotIt(_ shotName: String) {
-            XCTAssertTrue(app.staticTexts["Got it"].waitForExistence(timeout: 10), app.debugDescription)
-            Thread.sleep(forTimeInterval: 0.5)
-            shot(shotName)
-        }
-
-        start("Try it", "50-intro-paylink")
-        let chip = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "chip.", "Pay link")).firstMatch
-        XCTAssertTrue(chip.waitForExistence(timeout: 15), "no pay link chip")
-        chip.tap()
-        gotIt("51-intro-paylink-done")
-
-        start("Fix", "52-intro-fix")
-        XCTAssertTrue(id(app, "chip.fix").waitForExistence(timeout: 5))
-        Thread.sleep(forTimeInterval: 0.5)
-        shot("53-intro-fix-chip")
-        id(app, "chip.fix").tap()
-        gotIt("54-intro-fix-done")
-
-        start("Refine", "55-intro-refine")
-        id(app, "write.toggle").tap()
-        XCTAssertTrue(id(app, "write.friendly").waitForExistence(timeout: 5))
-        Thread.sleep(forTimeInterval: 0.5)
-        shot("56-intro-refine-panel")
-        id(app, "write.friendly").tap()
-        XCTAssertTrue(id(app, "write.use").waitForExistence(timeout: 10))
-        Thread.sleep(forTimeInterval: 0.5)
-        shot("57-intro-refine-preview")
-        id(app, "write.use").tap()
-        gotIt("58-intro-refine-done")
-
-        start("Tone check", "59-intro-tone")
-        id(app, "write.toggle").tap()
-        id(app, "write.tone").tap()
-        XCTAssertTrue(id(app, "write.use").waitForExistence(timeout: 10))
-        Thread.sleep(forTimeInterval: 0.5)
-        shot("60-intro-tone-preview")
-        id(app, "write.use").tap()
-        gotIt("61-intro-tone-done")
-
-        start("Shortcuts", "62-intro-shortcuts")
-        XCTAssertEqual(message.label, ";prices")
-        Thread.sleep(forTimeInterval: 0.5)
-        shot("63-intro-shortcuts-typed")
-        id(app, "space").tap()
-        XCTAssertTrue(app.staticTexts["Got it"].waitForExistence(timeout: 10))
-        XCTAssertEqual(message.label, "Prices: cut $45, color $120, blowout $35")
-        shot("64-intro-shortcuts-done")
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15), "the intro ends on Home")
+        XCTAssertTrue(id(app, "onboarding.step.2").waitForExistence(timeout: 8), "the intro ends on the next onboarding step")
     }
 
-    /// Keyboard Lab: Fix with Undo, the Refine panel, Tone check, and the three kinds of shortcut.
+    /// Keyboard Lab: Fix with Undo, the Rewrite panel with Fix grammar, and the three kinds of shortcut.
     func test20WritingAndShortcuts() throws {
         try requireWriting()
         let app = XCUIApplication()
@@ -748,7 +692,7 @@ final class FlowTests: XCTestCase {
 
         id(app, "write.toggle").tap()
         XCTAssertTrue(id(app, "write.professional").waitForExistence(timeout: 5))
-        for tone in ["friendly", "shorter", "firmer", "tone"] { XCTAssertTrue(id(app, "write.\(tone)").exists, tone) }
+        for tone in ["polite", "friendly", "shorter", "firmer", "grammar"] { XCTAssertTrue(id(app, "write.\(tone)").exists, tone) }
         Thread.sleep(forTimeInterval: 0.5)
         shot("42-refine-panel")
         id(app, "write.shorter").tap()
@@ -760,19 +704,16 @@ final class FlowTests: XCTestCase {
         XCTAssertEqual(text.label, "Please pay today.")
         XCTAssertTrue(id(app, "muninn.more").waitForExistence(timeout: 3), "keys come back")
 
-        id(app, "write.toggle").tap()
-        id(app, "write.tone").tap()
-        XCTAssertTrue(element(app, "label BEGINSWITH %@", "The tone is fine").waitForExistence(timeout: 10), "a polite message passes the tone check")
-        id(app, "write.toggle").tap()
         clearLab(app, text)
-        typeOnKeys(app, "pay me now")
+        typeOnKeys(app, "me and him is coming at noon")
         id(app, "write.toggle").tap()
-        id(app, "write.tone").tap()
-        XCTAssertTrue(id(app, "write.use").waitForExistence(timeout: 10), app.debugDescription)
+        id(app, "write.grammar").tap()
+        let grammarUse = id(app, "write.use")
+        let grammarFine = element(app, "label BEGINSWITH %@", "The grammar looks good")
+        XCTAssertTrue(grammarUse.waitForExistence(timeout: 10) || grammarFine.exists, app.debugDescription)
         Thread.sleep(forTimeInterval: 0.5)
-        shot("44-tone-check")
-        id(app, "write.use").tap()
-        XCTAssertTrue(text.label.hasPrefix("Hi, I am following up"), text.label)
+        shot("44-fix-grammar")
+        id(app, "write.toggle").tap()
 
         clearLab(app, text)
         typeOnKeys(app, ";prices")

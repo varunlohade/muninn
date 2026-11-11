@@ -287,12 +287,12 @@ final class WalkthroughTests: XCTestCase {
         print("AFTER_REFINE", field.value as? String ?? "")
 
         id(messages, "write.toggle").tap()
-        id(messages, "write.tone").tap()
-        let toneUse = id(messages, "write.use")
-        let toneFine = label(messages, "label BEGINSWITH %@", "The tone is fine")
-        _ = toneUse.waitForExistence(timeout: 10) || toneFine.exists
-        shot("05e-keyboard-tone-check")
-        print("TONE", toneFine.exists ? toneFine.label : "use button: \(toneUse.exists)")
+        id(messages, "write.grammar").tap()
+        let grammarUse = id(messages, "write.use")
+        let grammarFine = label(messages, "label BEGINSWITH %@", "The grammar looks good")
+        _ = grammarUse.waitForExistence(timeout: 10) || grammarFine.exists
+        shot("05e-keyboard-fix-grammar")
+        print("GRAMMAR", grammarFine.exists ? grammarFine.label : "use button: \(grammarUse.exists)")
         _ = dumpLog("05e", from: mark)
         if id(messages, "write.toggle").exists { id(messages, "write.toggle").tap() }
     }

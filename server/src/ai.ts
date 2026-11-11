@@ -36,7 +36,8 @@ const DEVICE_CRITERIA: Record<DeviceAction, string> = {
 };
 
 const REFINE: Record<Tone, string> = {
-  professional: 'more professional and polite',
+  polite: 'more polite and gentle, with please and thank you where they fit',
+  professional: 'more professional and businesslike',
   friendly: 'warmer and friendlier',
   shorter: 'shorter, about half the length',
   firmer: 'firmer about being paid on time, and still polite. Never threaten',

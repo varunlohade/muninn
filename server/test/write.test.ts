@@ -54,12 +54,12 @@ test('write: validation and size caps', async () => {
 test('write/refine: every tone reaches the model; the answer comes back', async () => {
   const { call, device, aiCalls } = setup({ write: 'Could you pay by Friday, please?' });
   const { token } = device();
-  for (const tone of ['professional', 'friendly', 'shorter', 'firmer']) {
+  for (const tone of ['polite', 'professional', 'friendly', 'shorter', 'firmer']) {
     const res = await call(token, 'POST', '/v1/write/refine', { text: 'pay me by friday', tone });
     assert.equal(res.status, 200);
     assert.equal((await res.json()).text, 'Could you pay by Friday, please?');
   }
-  assert.deepEqual(aiCalls.map((c) => c.args[1]), ['professional', 'friendly', 'shorter', 'firmer']);
+  assert.deepEqual(aiCalls.map((c) => c.args[1]), ['polite', 'professional', 'friendly', 'shorter', 'firmer']);
 });
 
 test('write/tone: draft, copied client message, or both', async () => {

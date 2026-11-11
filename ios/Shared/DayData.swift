@@ -46,7 +46,7 @@ struct ActionShortcut: Codable, Equatable, Identifiable {
         switch action {
         case .pay: "Pay link"
         case .late: "Who owes you"
-        case .fix: "Fix the text"
+        case .fix: "Fix typos"
         }
     }
     /// How to type it, with the current trigger.
@@ -55,7 +55,7 @@ struct ActionShortcut: Codable, Equatable, Identifiable {
         switch action {
         case .pay: "Offers a PayPal link for the amount. You still tap to send."
         case .late: "Shows unpaid invoices in the keyboard bar."
-        case .fix: "Fixes spelling and grammar before the cursor."
+        case .fix: "Fixes typos, capitals and spacing before the cursor, on your phone. If it finds none, it checks the grammar."
         }
     }
 

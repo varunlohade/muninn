@@ -55,16 +55,17 @@ enum BarState: Equatable {
     case retry(Chip, confirmed: String?)
 }
 
-/// The one-tap rewrites in the Refine panel. The raw value is the server's tone name.
+/// The one-tap rewrites in the Rewrite panel. The raw value is the server's tone name.
 enum RefineTone: String, CaseIterable, Identifiable {
-    case professional, friendly, shorter, firmer
+    case polite, shorter, professional, friendly, firmer
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .polite: "More polite"
+        case .shorter: "Shorter"
         case .professional: "More professional"
         case .friendly: "Friendlier"
-        case .shorter: "Shorter"
-        case .firmer: "Firmer"
+        case .firmer: "Firm (for late payers)"
         }
     }
 }
@@ -121,8 +122,9 @@ final class KeyboardModel: ObservableObject {
     @Published var writeOpen = false
     @Published var writePanel: WritePanel = .menu
     @Published var undo: WriteUndo?
-    /// A sentence is before the cursor, so the bar offers Fix.
-    @Published var fixable = false
+    /// What Fix would change in the text before the cursor. Nil when it looks clean.
+    @Published var fixPlan: FixPlan?
+    var fixable: Bool { fixPlan != nil }
     /// A calm reply for an upset copied message, ready to preview.
     @Published var calmOffer: WritePreview?
     /// "fix", "refine" or "tone" after a rewrite went into the field, and the trigger of the last shortcut. The intro watches both.
@@ -628,8 +630,9 @@ final class KeyboardModel: ObservableObject {
     }
 
     private func updateFixable() {
-        let text = draft.text
-        fixable = paired && text != lastFixed && text.split(separator: " ").count >= 3
+        let d = draft
+        guard paired, d.text != lastFixed, d.text.split(separator: " ").count >= 3 else { fixPlan = nil; return }
+        fixPlan = FixCheck.plan(d.text, names: appointments.compactMap(\.clientName), skipLast: d.original.last?.isLetter ?? false)
     }
 
     /// Deletes exactly `original` before the cursor and types `new`. False when the text is no longer there.
@@ -645,7 +648,7 @@ final class KeyboardModel: ObservableObject {
     private func apply(_ p: WritePreview, label: String) {
         guard replace(p.original, with: p.text) else { bar = .error("The text changed. Try again."); return }
         lastFixed = p.text
-        fixable = false
+        fixPlan = nil
         bar = .idle
         lastWrite = p.kind
         undo = WriteUndo(label: label, original: p.original, replacement: p.text)
@@ -666,23 +669,28 @@ final class KeyboardModel: ObservableObject {
         if replace(u.replacement, with: u.original) { lastFixed = u.original.trimmingCharacters(in: .whitespaces) }
     }
 
-    /// Tap on the Fix chip, or the fix shortcut.
+    /// Tap on the Fix chip, or the fix shortcut. Typos, capitals and spacing are fixed on the phone.
+    /// The shortcut on text with none of those asks the server for a grammar fix.
     func fix() {
         let d = draft
         guard !d.text.isEmpty else { return }
         host?.playClick()
         suggestTask?.cancel()
         writeTask?.cancel()
+        if let plan = FixCheck.plan(d.text, names: appointments.compactMap(\.clientName)) {
+            apply(WritePreview(kind: "fix", title: plan.title, original: d.original, text: plan.fixed), label: plan.done)
+            return
+        }
         bar = .working("Fixing\u{2026}")
         writeTask = Task { [weak self] in
             do {
                 guard let res = try await self?.deps.api().fix(d.text), let self, !Task.isCancelled else { return }
                 if res.text == d.text {
                     self.lastFixed = d.text
-                    self.fixable = false
+                    self.fixPlan = nil
                     self.bar = .done("Looks good \u{2713}")
                 } else {
-                    self.apply(WritePreview(kind: "fix", title: "Fix", original: d.original, text: res.text), label: "Fixed \u{2713}")
+                    self.apply(WritePreview(kind: "fix", title: "Fix grammar", original: d.original, text: res.text), label: "Fixed grammar \u{2713}")
                 }
             } catch {
                 guard let self, !Task.isCancelled else { return }
@@ -710,14 +718,14 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
-    /// Tap on Tone check: is the draft blunt? If so, show a calm version.
-    func checkTone() {
+    /// Tap on Fix grammar in the Rewrite panel: the server fixes grammar and spelling, and the result shows first.
+    func fixGrammar() {
         let d = draft
         guard !d.text.isEmpty else { return }
-        runPanel("Checking the tone\u{2026}") { api in
-            let res = try await api.toneCheck(draft: d.text, client: nil)
-            guard res.tone != "ok", let calm = res.calm else { return .message("The tone is fine \u{2713}") }
-            return .preview(WritePreview(kind: "tone", title: "Calmer version", original: d.original, text: calm))
+        runPanel("Checking the grammar\u{2026}") { api in
+            let res = try await api.fix(d.text)
+            guard res.text != d.text else { return .message("The grammar looks good \u{2713}") }
+            return .preview(WritePreview(kind: "fix", title: "Fix grammar", original: d.original, text: res.text))
         }
     }
 

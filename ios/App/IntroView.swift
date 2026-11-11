@@ -126,10 +126,10 @@ struct IntroScene: Identifiable {
             try await p.pause(250)
             p.ask.submit()
         },
-        IntroScene(id: "write", title: "Fix, Refine, Tone", line: "Type fast. One tap fixes it or changes how it sounds.",
+        IntroScene(id: "write", title: "Fix and Rewrite", line: "Type fast. Fix shows the typos. Rewrite makes it polite or short.",
                    surface: .chat(.marketplace, contact: "Dana", lines: [.them("Is this still available?")]),
-                   fixed: "Yes, it's available. Can you pick it up today?") { p in
-            try await p.type("yes its availble, can u pick up today")
+                   fixed: "Yes it's available, can you pick it up today?") { p in
+            try await p.type("yes it's availble, can u pick it up today")
             try await p.pause(300)
             try await p.tapBar(0.72)
             p.keyboard.fix()
