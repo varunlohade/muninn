@@ -127,7 +127,7 @@ final class KeyboardModel: ObservableObject {
     weak var host: TextHost?
     /// False in the intro scenes about writing, where a payment chip would get in the way. Then typing sends nothing.
     var suggestsWhileTyping = true
-    var api: () -> APIClient = APIClient.shared
+    private let deps: KeyboardDeps
     private var suggestTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var lastSent = ""
@@ -144,9 +144,13 @@ final class KeyboardModel: ObservableObject {
     static let pollInterval: Duration = .seconds(10)
     static let pasteTimeout: TimeInterval = 8
 
+    init(deps: KeyboardDeps = .live()) {
+        self.deps = deps
+    }
+
     func refreshAccess() {
         hasFullAccess = host?.hasFullAccess ?? false
-        paired = hasFullAccess && SharedStore.deviceToken != nil
+        paired = hasFullAccess && deps.store.deviceToken != nil
         returnStyle = ReturnStyle(host?.returnKeyType ?? .default)
     }
 
@@ -212,7 +216,7 @@ final class KeyboardModel: ObservableObject {
             lastSpaceTap = nil
             afterEdit()
         case .shift:
-            let now = Date()
+            let now = deps.now()
             if shift == .locked { shift = .off }
             else if let last = lastShiftTap, now.timeIntervalSince(last) < 0.35 { shift = .locked }
             else { shift = shift == .off ? .once : .off }
@@ -236,7 +240,7 @@ final class KeyboardModel: ObservableObject {
 
     /// Double space after a word types ". ", like iOS. Space in 123 or #+= goes back to letters.
     private func tapSpace() {
-        let now = Date()
+        let now = deps.now()
         let before = host?.contextBeforeInput ?? ""
         if let last = lastSpaceTap, now.timeIntervalSince(last) < 0.45, before.hasSuffix(" "),
            let prev = before.dropLast().last, prev.isLetter || prev.isNumber {
@@ -256,14 +260,15 @@ final class KeyboardModel: ObservableObject {
         host?.deleteBackward()
         afterEdit()
         deleteTask?.cancel()
+        let sleep = deps.sleep
         deleteTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
+            try? await sleep(.milliseconds(500))
             var n = 0
             while !Task.isCancelled, let self {
                 if n < 20 { self.host?.deleteBackward() } else { self.deleteWord() }
                 self.afterEdit()
                 n += 1
-                try? await Task.sleep(for: .milliseconds(n < 20 ? 100 : 250))
+                try? await sleep(.milliseconds(n < 20 ? 100 : 250))
             }
         }
     }
@@ -303,13 +308,13 @@ final class KeyboardModel: ObservableObject {
         layout = .letters
         updateAutoShift()
         guard hasFullAccess else { copiedAvailable = false; return }
-        SharedStore.keyboardLastSeen = Date()
+        deps.store.keyboardLastSeen = deps.now()
         reloadShortcuts()
         guard paired else { return }
-        appointments = SharedStore.appointments
+        appointments = deps.store.appointments
         // hasStrings and changeCount do not trigger the paste prompt; only reading the string does.
-        let pasteboard = UIPasteboard.general
-        copiedAvailable = pasteboard.hasStrings && pasteboard.changeCount != SharedStore.lastPasteboardChange
+        let pasteboard = deps.pasteboard
+        copiedAvailable = pasteboard.hasStrings && pasteboard.changeCount != deps.store.lastPasteboardChange
         if let watch, !watch.paid { startPolling() }
     }
 
@@ -327,7 +332,7 @@ final class KeyboardModel: ObservableObject {
     func toggleNotes() {
         host?.playClick()
         writeOpen = false
-        if !notesOpen { notes = SharedStore.notes }
+        if !notesOpen { notes = deps.store.notes }
         notesOpen.toggle()
     }
 
@@ -348,7 +353,7 @@ final class KeyboardModel: ObservableObject {
         guard canSaveNote else { return }
         host?.playClick()
         notes.insert(Note(text: typed), at: 0)
-        SharedStore.notes = notes
+        deps.store.notes = notes
     }
 
     // MARK: suggestions
@@ -372,13 +377,13 @@ final class KeyboardModel: ObservableObject {
     /// Tap on "Use copied message". Reading may show the system paste prompt once, so the read runs
     /// off the main thread with a timeout; the keyboard never waits on it.
     func useCopied() {
-        let pasteboard = UIPasteboard.general
-        SharedStore.lastPasteboardChange = pasteboard.changeCount
+        let pasteboard = deps.pasteboard
+        deps.store.lastPasteboardChange = pasteboard.changeCount
         copiedAvailable = false
         suggestTask?.cancel()
         bar = .working("Reading copied message…")
         suggestTask = Task { [weak self] in
-            let copied = await Self.readPasteboard(timeout: Self.pasteTimeout)
+            let copied = await Self.readPasteboard(pasteboard, timeout: Self.pasteTimeout)
             guard let self, !Task.isCancelled else { return }
             guard let copied = copied?.trimmingCharacters(in: .whitespacesAndNewlines), !copied.isEmpty else {
                 self.bar = .error("Copied text not available")
@@ -391,7 +396,7 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
-    nonisolated static func readPasteboard(timeout: TimeInterval) async -> String? {
+    nonisolated static func readPasteboard(_ pasteboard: Pasteboard, timeout: TimeInterval) async -> String? {
         final class Once: @unchecked Sendable {
             private let lock = NSLock()
             private var cont: CheckedContinuation<String?, Never>?
@@ -403,19 +408,19 @@ final class KeyboardModel: ObservableObject {
         }
         return await withCheckedContinuation { cont in
             let once = Once(cont)
-            DispatchQueue.global(qos: .userInitiated).async { once.resume(UIPasteboard.general.string) }
+            DispatchQueue.global(qos: .userInitiated).async { once.resume(pasteboard.string) }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { once.resume(nil) }
         }
     }
 
     /// The latest ended appointment with a known client and no invoice today.
     var toBill: Appointment? {
-        let now = Date()
+        let now = deps.now()
         return appointments.last { $0.end <= now && !$0.billed && !billedHere.contains($0.id) && ($0.clientName ?? $0.clientEmail) != nil }
     }
 
     var nextUp: Appointment? {
-        let now = Date()
+        let now = deps.now()
         return appointments.first { $0.start > now }
     }
 
@@ -432,11 +437,12 @@ final class KeyboardModel: ObservableObject {
     private func requestSuggest(text: String, context: String?, debounce: Bool, sentAs: String? = nil) {
         let typedAt = ContinuousClock.now
         lastSent = sentAs ?? text
+        let sleep = deps.sleep
         suggestTask = Task { [weak self] in
-            if debounce { try? await Task.sleep(for: AppConfig.suggestDebounce) }
+            if debounce { try? await sleep(AppConfig.suggestDebounce) }
             guard let self, !Task.isCancelled else { return }
             do {
-                let res = try await self.api().suggest(text, context: context)
+                let res = try await self.deps.api().suggest(text, context: context)
                 guard !Task.isCancelled else { return }
                 let ms = Int((ContinuousClock.now - typedAt) / .milliseconds(1))
                 self.lastLatencyMs = ms
@@ -489,8 +495,9 @@ final class KeyboardModel: ObservableObject {
         lastWrite = p.kind
         undo = WriteUndo(label: label, original: p.original, replacement: p.text)
         undoTask?.cancel()
+        let sleep = deps.sleep
         undoTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.undoWindow)
+            try? await sleep(Self.undoWindow)
             guard !Task.isCancelled else { return }
             self?.undo = nil
         }
@@ -514,7 +521,7 @@ final class KeyboardModel: ObservableObject {
         bar = .working("Fixing\u{2026}")
         writeTask = Task { [weak self] in
             do {
-                guard let res = try await self?.api().fix(d.text), let self, !Task.isCancelled else { return }
+                guard let res = try await self?.deps.api().fix(d.text), let self, !Task.isCancelled else { return }
                 if res.text == d.text {
                     self.lastFixed = d.text
                     self.fixable = false
@@ -559,13 +566,13 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
-    private func runPanel(_ label: String, _ work: @escaping (APIClient) async throws -> WritePanel) {
+    private func runPanel(_ label: String, _ work: @escaping (KeyboardAPI) async throws -> WritePanel) {
         host?.playClick()
         writeTask?.cancel()
         writePanel = .busy(label)
         writeTask = Task { [weak self] in
             do {
-                guard let api = self?.api() else { return }
+                guard let api = self?.deps.api() else { return }
                 let next = try await work(api)
                 guard let self, !Task.isCancelled else { return }
                 self.writePanel = next
@@ -598,7 +605,7 @@ final class KeyboardModel: ObservableObject {
         calmOffer = nil
         writeTask?.cancel()
         writeTask = Task { [weak self] in
-            guard let res = try? await self?.api().toneCheck(draft: d.text, client: copied), let self, !Task.isCancelled,
+            guard let res = try? await self?.deps.api().toneCheck(draft: d.text, client: copied), let self, !Task.isCancelled,
                   res.tone != "ok", let calm = res.calm else { return }
             self.calmOffer = WritePreview(kind: "tone", title: "Calm reply", original: d.original, text: calm)
         }
@@ -628,17 +635,17 @@ final class KeyboardModel: ObservableObject {
     // MARK: shortcuts
 
     func reloadShortcuts() {
-        notes = SharedStore.notes
-        actions = SharedStore.actionShortcuts
+        notes = deps.store.notes
+        actions = deps.store.actionShortcuts
     }
 
     /// The intro's shortcut scene types ";prices". This makes sure the demo price note answers to it.
     func addDemoShortcut() {
         let demo = Note.demo[0]
-        var all = SharedStore.notes
+        var all = deps.store.notes
         if !all.contains(where: { $0.trigger == demo.trigger }) {
             if let i = all.firstIndex(where: { $0.text == demo.text }) { all[i].trigger = demo.trigger } else { all.insert(demo, at: 0) }
-            SharedStore.notes = all
+            deps.store.notes = all
         }
         reloadShortcuts()
     }
@@ -704,7 +711,7 @@ final class KeyboardModel: ObservableObject {
         bar = .working("Checking who owes you\u{2026}")
         suggestTask = Task { [weak self] in
             do {
-                guard let payments = try await self?.api().payments(), let self, !Task.isCancelled else { return }
+                guard let payments = try await self?.deps.api().payments(), let self, !Task.isCancelled else { return }
                 self.bar = .done(Self.lateLine(payments))
             } catch {
                 guard let self, !Task.isCancelled else { return }
@@ -742,7 +749,7 @@ final class KeyboardModel: ObservableObject {
         bar = .working(chip.kind == "invoice" ? "Creating invoice…" : "Creating link…")
         Task {
             do {
-                let r = try await ChipActions.run(chip, confirmed: confirmed, api: api())
+                let r = try await ChipActions.run(chip, confirmed: confirmed, api: deps.api())
                 let before = host?.contextBeforeInput ?? ""
                 let needsGap = !(before.last?.isWhitespace ?? true)
                 host?.insert((needsGap ? (r.kind == "invoice" ? "\n" : " ") : "") + r.message)
@@ -763,11 +770,12 @@ final class KeyboardModel: ObservableObject {
     /// Light polling, only while the keyboard is visible: at most one /v1/payments call every 10 s.
     private func startPolling() {
         pollTask?.cancel()
+        let sleep = deps.sleep
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: Self.pollInterval)
+                try? await sleep(Self.pollInterval)
                 guard let self, !Task.isCancelled, let w = self.watch, !w.paid else { return }
-                guard let payments = try? await self.api().payments() else { continue }
+                guard let payments = try? await self.deps.api().payments() else { continue }
                 if payments.first(where: { $0.id == w.id })?.state == "paid" {
                     self.watch?.paid = true
                     return

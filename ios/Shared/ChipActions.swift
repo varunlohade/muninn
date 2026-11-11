@@ -14,7 +14,7 @@ struct ActionResult: Equatable {
 /// One place that runs a chip's action, for the keyboard and the app's Ask bar.
 /// Throws APIError.needsConfirm when the server wants the recipient confirmed first.
 enum ChipActions {
-    static func run(_ chip: Chip, confirmed: String?, api: APIClient) async throws -> ActionResult {
+    static func run(_ chip: Chip, confirmed: String?, api: KeyboardAPI) async throws -> ActionResult {
         let who = if case .string(let v)? = chip.payload["client_name"] { v } else { "Client" }
         switch chip.kind {
         case "invoice":
