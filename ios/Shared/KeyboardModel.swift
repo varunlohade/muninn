@@ -117,6 +117,8 @@ final class KeyboardModel: ObservableObject {
     @Published var notesOpen = false
     /// The "Who hasn't paid" list, open above the keys. Nil when closed.
     @Published var whoPaid: [UnpaidClient]?
+    /// The card a lookup chip opened ("invoice for sam"), above the keys.
+    @Published var lookup: LookupResult?
     @Published var notes: [Note] = []
     @Published var writeOpen = false
     @Published var writePanel: WritePanel = .menu
@@ -856,6 +858,47 @@ final class KeyboardModel: ObservableObject {
         whoPaid = nil
     }
 
+    // MARK: lookup ("invoice for sam")
+
+    /// The typed words the open lookup came from. Insert puts the line in their place.
+    private var lookupTrigger: String?
+
+    /// A lookup chip opens its card above the keys. Nothing is sent.
+    func openLookup(_ chip: Chip) {
+        guard let r = LookupResult(chip: chip) else { return }
+        host?.playClick()
+        whoPaid = nil
+        lookup = r
+        lookupTrigger = chip.trigger
+        bar = .idle
+    }
+
+    func closeLookup() {
+        host?.playClick()
+        lookup = nil
+    }
+
+    /// Types the record's line. The typed lookup words were for Muninn, not the client, so the line takes their place.
+    func insertLookup(_ rec: LookupResult.Record) {
+        lookup = nil
+        if let t = lookupTrigger, typed.hasSuffix(t), replace(t, with: rec.line) { bar = .idle; return }
+        place(rec.line, gap: " ", readAt: host?.contextBeforeInput ?? "")
+    }
+
+    /// The same Remind chip and confirm as everywhere else.
+    func remindFromLookup(_ chip: Chip) {
+        lookup = nil
+        tapChip(chip)
+    }
+
+    /// No record yet: start the "Invoice Sam" flow. The owner types the amount, and the invoice chip still asks to confirm.
+    func newInvoiceFromLookup(_ name: String) {
+        lookup = nil
+        if let t = lookupTrigger, typed.hasSuffix(t) { _ = replace(t, with: "") }
+        let at = deps.now()
+        invoiceAppointment(Appointment(start: at, end: at, title: name, clientName: name))
+    }
+
     /// "Ana $90 · 2d late, Sam $45 +1 more"
     nonisolated static func lateLine(_ payments: [Payment]) -> String {
         let unpaid = payments.filter { $0.kind == "invoice" && $0.state == "unpaid" }.sorted { $0.days_overdue > $1.days_overdue }
@@ -959,6 +1002,7 @@ final class KeyboardModel: ObservableObject {
         // A new tap ends any call left from before: it is never sent or shown again.
         deps.store.pendingAction = nil
         if chip.kind == "payments" { return openWhoPaid() }
+        if chip.kind == "lookup" { return openLookup(chip) }
         if chip.kind == Self.insertKind, case .string(let text)? = chip.payload["text"] {
             place(text, gap: " ", readAt: host?.contextBeforeInput ?? "")
             return

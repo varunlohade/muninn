@@ -35,9 +35,22 @@ struct SuggestPolicy {
         guard !typed.isEmpty, !typed.hasPrefix(shortcutPrefix), SecretScan.scan(typed) == .clean else { return .skip }
         let text = prefix.map { $0 + " " + typed } ?? typed
         let words = text.split(whereSeparator: \.isWhitespace).count
-        guard hasMoneySignal(text), words >= minMoneyWords else { return .skip }
+        guard hasMoneySignal(text) || hasLookupSignal(text), words >= minMoneyWords else { return .skip }
         if clear, prefix == nil, !hasStrongMoneySignal(text) { return .skip }
         return .ask(text, after: debounce)
+    }
+
+    /// A record word the server's lookup reads ("last order from ana", "ana's booking"), or a misspelt invoice or receipt
+    /// ("invocie for sam"). Same nouns as server/src/quick.ts detectLookup.
+    static func hasLookupSignal(_ text: String) -> Bool {
+        let noun = #"\b(?:orders?|bookings?|appointments?|appts?|jobs?|quotes?|estimates?|sessions?|class(?:es)?|lessons?|tables?|reservations?|deliver(?:y|ies)|visits?|projects?)\b"#
+        let typo = #"\b(?:inv[a-z]{3,5}|rec[a-z]{2,4}pts?|re[a-z]{0,2}ipts?|bo{1,2}k[a-z]{2,4}|ap+oint[a-z]*|ses+ion?s?|pay[a-z]{3,5})\b"#
+        guard text.range(of: noun + "|" + typo, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
+        // Only a lookup shape goes: a possessive, "… for/from/with Ana" at the end, a question start, or 3 words or fewer.
+        // So "class is cancelled tomorrow" stays on the phone.
+        let shape = #"\p{L}['’]s?\s|\b(?:for|from|with|of|by)\s+\p{L}+(?:\s+\p{L}+)?\s*[?!.]*$|^(?:did|has|what|when|where|show|find)\b"#
+        return text.range(of: shape, options: [.regularExpression, .caseInsensitive]) != nil
+            || text.split(whereSeparator: \.isWhitespace).count <= 3
     }
 
     /// An amount, a price shape or a billing word: money even when the text is also a reminder.
@@ -51,7 +64,7 @@ struct SuggestPolicy {
     /// Text with no money signal and no clear on-device match, but action-ish signals ("can we do Ana's thing Friday"):
     /// the last sentence goes to the server once, after the pause. Nil for plain chat, a clear match, or a sentence already sent.
     func maybe(_ typed: String, clear: Bool) -> String? {
-        guard !clear, !typed.hasPrefix(Self.shortcutPrefix), !Self.hasMoneySignal(typed), SmartDetect.maybe(typed) else { return nil }
+        guard !clear, !typed.hasPrefix(Self.shortcutPrefix), !Self.hasMoneySignal(typed), !Self.hasLookupSignal(typed), SmartDetect.maybe(typed) else { return nil }
         let sentence = SmartDetect.lastSentence(typed)
         return askedSentences.contains(Self.sentenceKey(sentence)) ? nil : sentence
     }

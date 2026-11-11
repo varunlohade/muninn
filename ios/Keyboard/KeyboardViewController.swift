@@ -33,9 +33,9 @@ final class KeyboardViewController: UIInputViewController, TextHost {
             hosting.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             height,
         ])
-        // The keyboard grows while the "Who hasn't paid" list is open above the keys.
-        heightWatch = model.$whoPaid.sink { [weak self] list in
-            height.constant = KeyboardView.height(whoPaid: list)
+        // The keyboard grows while the "Who hasn't paid" list or a lookup card is open above the keys.
+        heightWatch = model.$whoPaid.combineLatest(model.$lookup).sink { [weak self] list, found in
+            height.constant = KeyboardView.height(whoPaid: list, lookup: found != nil)
             self?.view.setNeedsLayout()
         }
         hosting.didMove(toParent: self)

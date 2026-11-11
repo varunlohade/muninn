@@ -9,16 +9,21 @@ struct KeyboardView: View {
         let p = model.isDark ? M.dark : M.light
         VStack(spacing: 0) {
             if let clients = model.whoPaid { WhoPaidStrip(model: model, clients: clients, palette: p) }
+            if let found = model.lookup {
+                LookupCard(result: found, palette: p, onInsert: model.insertLookup, onRemind: model.remindFromLookup,
+                           onNewInvoice: model.newInvoiceFromLookup, onClose: model.closeLookup)
+                    .id(found.query + found.match)
+            }
             keyboard(p)
         }
-        .frame(height: Self.height(whoPaid: model.whoPaid))
+        .frame(height: Self.height(whoPaid: model.whoPaid, lookup: model.lookup != nil))
         .background(p.bed)
         .environment(\.colorScheme, model.isDark ? .dark : .light)
     }
 
-    /// The keyboard grows by the list's height while "Who hasn't paid" is open. The keys keep their size and place.
-    static func height(whoPaid: [UnpaidClient]?) -> CGFloat {
-        M.height + (whoPaid.map { WhoPaidStrip.height(rows: $0.count) } ?? 0)
+    /// The keyboard grows by the list's height while "Who hasn't paid" or a lookup card is open. The keys keep their size and place.
+    static func height(whoPaid: [UnpaidClient]?, lookup: Bool = false) -> CGFloat {
+        M.height + (whoPaid.map { WhoPaidStrip.height(rows: $0.count) } ?? 0) + (lookup ? LookupCard.height : 0)
     }
 
     private func keyboard(_ p: M.Palette) -> some View {
