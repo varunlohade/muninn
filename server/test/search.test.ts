@@ -101,6 +101,11 @@ test('suggest: kinds across a salon, a restaurant, a tutor and a contractor', as
   assert.equal((await rest.lookup('did theo pay'))?.label, "Theo Park's invoice · $850 · unpaid · Nov 8");
   const tutor = seeded(BUSINESSES.tutor);
   assert.equal((await tutor.lookup("priya's lessons"))?.label, "Priya Shah's repeat bill · $200 · active · Oct 22");
+  tutor.s.db.raw.prepare("UPDATE subscriptions SET status = 'SUSPENDED' WHERE user_id = ?").run(tutor.userId);
+  const paused = await tutor.lookup("priya's lessons");
+  assert.equal(paused?.label, "Priya Shah's repeat bill · $200 · paused · Oct 22");
+  assert.match(paused?.payload.candidates[0].records[0].line, /plan for \$200 is paused\.$/);
+  tutor.s.db.raw.prepare("UPDATE subscriptions SET status = 'ACTIVE' WHERE user_id = ?").run(tutor.userId);
   assert.equal((await tutor.lookup('what does leo owe'))?.payload.candidates[0].records.length, 1, 'owe: unpaid only');
   const noor = await tutor.lookup('does noor owe me anything');
   assert.equal(noor?.label, 'Noor Haddad owes you nothing right now');

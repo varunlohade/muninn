@@ -69,7 +69,7 @@ export type LookupResult = {
 
 export const invoiceState = (s: string) => (['PAID', 'MARKED_AS_PAID'].includes(s) ? 'paid' : ['REFUNDED', 'PARTIALLY_REFUNDED', 'MARKED_AS_REFUNDED'].includes(s) ? 'refunded' : s === 'CANCELLED' ? 'cancelled' : 'unpaid');
 export const orderState = (s: string) => (s === 'COMPLETED' ? 'paid' : ['REFUNDED', 'PARTIALLY_REFUNDED'].includes(s) ? 'refunded' : 'unpaid');
-const subState = (s: string) => (s === 'ACTIVE' ? 'active' : ['CANCELLED', 'EXPIRED', 'SUSPENDED'].includes(s) ? 'cancelled' : 'pending');
+const subState = (s: string) => (s === 'ACTIVE' ? 'active' : s === 'SUSPENDED' ? 'paused' : ['CANCELLED', 'EXPIRED'].includes(s) ? 'cancelled' : 'pending');
 const EVERY: Record<string, string> = { week: 'weekly', month: 'monthly', year: 'yearly' };
 const label = (at: number) => new Date(at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const plural = (noun: string) => (noun === 'delivery' ? 'deliveries' : noun === 'class' ? 'classes' : `${noun}s`);
@@ -106,7 +106,7 @@ function record(row: Row, name: string): Rec {
   const state = subState(row.r.status);
   const every = EVERY[row.r.interval] ?? row.r.interval;
   const link = state === 'pending' ? row.r.approve_link : null;
-  const line = state === 'active' ? `Your ${every} plan for ${money} is active.` : state === 'cancelled' ? `Your ${every} plan for ${money} was cancelled.`
+  const line = state === 'active' ? `Your ${every} plan for ${money} is active.` : state === 'paused' ? `Your ${every} plan for ${money} is paused.` : state === 'cancelled' ? `Your ${every} plan for ${money} was cancelled.`
     : link ? `Your ${every} plan for ${money} is here: ${link}` : `Your ${every} plan for ${money} is waiting for approval.`;
   return { kind: 'repeat', ...base, state, link, line };
 }
