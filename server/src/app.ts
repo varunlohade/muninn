@@ -942,6 +942,21 @@ export function createApp(deps: Deps) {
         db.setOrderStatus(owner, res.id, cap.status, cap.status === 'COMPLETED' ? now() : null, cap.captureId);
         handled = true;
       }
+    } else if (type === 'BILLING.SUBSCRIPTION.ACTIVATED') {
+      const owner = res.id && db.ownerOfSubscription(res.id);
+      if (owner) {
+        db.setSubscriptionActive(owner, res.id, now());
+        handled = true;
+      }
+    } else if (type === 'PAYMENT.SALE.COMPLETED') {
+      // A payment on a subscription: the sale's billing_agreement_id is the subscription id.
+      const subId = res.billing_agreement_id;
+      const owner = subId && res.id && db.ownerOfSubscription(subId);
+      if (owner) {
+        db.setSubscriptionActive(owner, subId, now());
+        db.addSubscriptionPayment(owner, subId, String(res.id), now());
+        handled = true;
+      }
     } else if (type === 'PAYMENT.CAPTURE.COMPLETED') {
       const orderId = res.supplementary_data?.related_ids?.order_id;
       const owner = orderId && db.ownerOfOrder(orderId);

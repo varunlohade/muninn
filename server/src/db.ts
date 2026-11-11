@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 CREATE TABLE IF NOT EXISTS billing_plans (
   user_id TEXT NOT NULL REFERENCES users(id), plan_key TEXT NOT NULL, product_id TEXT NOT NULL, plan_id TEXT NOT NULL,
   PRIMARY KEY (user_id, plan_key));
+CREATE TABLE IF NOT EXISTS subscription_payments (
+  sale_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), subscription_id TEXT NOT NULL, paid_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS subscriptions_user ON subscriptions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS refunds_target ON refunds(user_id, target_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS invoices_seed ON invoices(user_id, seed_key) WHERE seed_key IS NOT NULL;
@@ -217,8 +219,12 @@ export function openDb(path: string) {
     setSubscriptionActive(userId: string, id: string, at: number) {
       q(`UPDATE subscriptions SET status = 'ACTIVE', activated_at = COALESCE(activated_at, ?) WHERE id = ? AND user_id = ?`).run(at, id, userId);
     },
-    addSubscriptionPayment(userId: string, id: string, at: number) {
-      q(`UPDATE subscriptions SET last_paid_at = ?, paid_count = paid_count + 1 WHERE id = ? AND user_id = ?`).run(at, id, userId);
+    // One row per PayPal sale, so a webhook PayPal sends twice counts once. True when this sale is new.
+    addSubscriptionPayment(userId: string, id: string, saleId: string, at: number): boolean {
+      const added = q('INSERT OR IGNORE INTO subscription_payments (sale_id, user_id, subscription_id, paid_at) VALUES (?, ?, ?, ?)')
+        .run(saleId, userId, id, at).changes > 0;
+      if (added) q(`UPDATE subscriptions SET last_paid_at = ?, paid_count = paid_count + 1 WHERE id = ? AND user_id = ?`).run(at, id, userId);
+      return added;
     },
     getBillingPlan(userId: string, planKey: string): { product_id: string; plan_id: string } | undefined {
       return q('SELECT product_id, plan_id FROM billing_plans WHERE user_id = ? AND plan_key = ?').get(userId, planKey) as { product_id: string; plan_id: string } | undefined;

@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createCipher } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
 import { createPayPalProvider, PayPalError } from '../src/paypal.ts';
-import { setup } from './helpers.ts';
+import { setup, subscriptionPaidEvent, webhookHeaders } from './helpers.ts';
 
 type Sent = { method: string; path: string; body: any; requestId: string | null };
 
@@ -88,7 +88,8 @@ test('subscriptions table: client fields are encrypted per user, rows are per us
 
   db.setSubscriptionActive(a, 'I-1', 10);
   db.setSubscriptionActive(a, 'I-1', 20);
-  db.addSubscriptionPayment(a, 'I-1', 30);
+  assert.equal(db.addSubscriptionPayment(a, 'I-1', 'SALE-1', 30), true);
+  assert.equal(db.addSubscriptionPayment(a, 'I-1', 'SALE-1', 40), false);
   const row = db.getSubscription(a, 'I-1')!;
   assert.deepEqual([row.status, row.activated_at, row.last_paid_at, row.paid_count], ['ACTIVE', 10, 30, 1]);
 
@@ -186,4 +187,28 @@ test('subscribe: the same key replays the stored answer with one PayPal call; lo
   const k = { 'Idempotency-Key': 'sub-key-0003' };
   assert.equal((await s.call(token, 'POST', '/v1/actions/subscribe', ok, k)).status, 409);
   assert.equal((await s.call(token, 'POST', '/v1/actions/subscribe', confirmed, k)).status, 200);
+});
+
+test('webhook: ACTIVATED marks the repeat bill active, each new PAYMENT.SALE.COMPLETED counts once, unverified events change nothing', async () => {
+  let verified = true;
+  const s = setup({ verify: () => verified });
+  const a = s.device();
+  await s.call(a.token, 'POST', '/v1/actions/subscribe', confirmed);
+  const hook = async (event: unknown) => (await (await s.call(null, 'POST', '/webhooks/paypal', event, webhookHeaders)).json() as any).handled;
+
+  verified = false;
+  assert.equal((await s.call(null, 'POST', '/webhooks/paypal', { event_type: 'BILLING.SUBSCRIPTION.ACTIVATED', resource: { id: 'I-TEST1' } }, webhookHeaders)).status, 401);
+  assert.equal(s.db.getSubscription(a.userId, 'I-TEST1')!.status, 'APPROVAL_PENDING');
+  verified = true;
+
+  assert.equal(await hook({ event_type: 'BILLING.SUBSCRIPTION.ACTIVATED', resource: { id: 'I-TEST1' } }), true);
+  assert.equal(s.db.getSubscription(a.userId, 'I-TEST1')!.status, 'ACTIVE');
+  assert.equal(await hook(subscriptionPaidEvent('I-TEST1', 'SALE-1')), true);
+  assert.equal(await hook(subscriptionPaidEvent('I-TEST1', 'SALE-1')), true);
+  assert.equal(await hook(subscriptionPaidEvent('I-TEST1', 'SALE-2')), true);
+  const row = s.db.getSubscription(a.userId, 'I-TEST1')!;
+  assert.equal(row.paid_count, 2);
+  assert.ok(row.last_paid_at);
+  assert.equal(await hook(subscriptionPaidEvent('I-UNKNOWN', 'SALE-3')), false);
+  assert.equal(await hook({ event_type: 'BILLING.SUBSCRIPTION.ACTIVATED', resource: { id: 'I-UNKNOWN' } }), false);
 });

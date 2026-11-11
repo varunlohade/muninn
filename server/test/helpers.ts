@@ -116,6 +116,9 @@ export const webhookHeaders = {
   'paypal-auth-algo': 'SHA256withRSA', 'paypal-cert-url': 'https://api.sandbox.paypal.com/cert', 'paypal-transmission-id': 't1',
   'paypal-transmission-sig': 'sig', 'paypal-transmission-time': new Date().toISOString(),
 };
+export const subscriptionPaidEvent = (subscriptionId: string, saleId: string) => ({
+  event_type: 'PAYMENT.SALE.COMPLETED', resource: { id: saleId, billing_agreement_id: subscriptionId, state: 'completed', amount: { total: '40.00', currency: 'USD' } },
+});
 export const paidEvent = (id: string) => ({
   event_type: 'INVOICING.INVOICE.PAID', resource: { invoice: { id, payments: { transactions: [{ payment_id: 'CAPX' }] } } },
 });

@@ -1,13 +1,13 @@
 // A local stand-in Muninn server for the iOS app and UI tests: fake AI, fake PayPal, in-memory DB, no network.
 // usage: npm run fake   (PORT=0 picks a free port; the first line printed names it)
-// Debug routes: GET /_log, POST /_reset, POST /_paid/:id, POST /_next {"cls": {...}, "ext": {...}, "group": {...}, "route": {...}}
+// Debug routes: GET /_log, POST /_reset, POST /_paid/:id (invoice, order or subscription id), POST /_next {"cls": {...}, "ext": {...}, "group": {...}, "route": {...}}
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Classification, Extraction } from '../src/ai.ts';
 import { config, type AskGroup, type AskRoute } from '../src/config.ts';
 import { sha256 } from '../src/crypto.ts';
 import { DEMO_CATALOG, DEMO_PROFILE } from '../src/seed.ts';
-import { paidEvent, setup, webhookHeaders } from '../test/helpers.ts';
+import { paidEvent, setup, subscriptionPaidEvent, webhookHeaders } from '../test/helpers.ts';
 
 if (process.env.PAYPAL_ENV === 'live' || process.env.NODE_ENV === 'production') {
   console.error('fake server refuses to start with PAYPAL_ENV=live or NODE_ENV=production');
@@ -83,12 +83,18 @@ fake.post('/_next', async (c) => {
 // Plays the PayPal webhook the real server would get when the client pays.
 fake.post('/_paid/:id', async (c) => {
   const id = c.req.param('id');
-  const event = state.db.ownerOfInvoice(id) ? paidEvent(id) : { event_type: 'CHECKOUT.ORDER.APPROVED', resource: { id } };
-  const res = await state.app.request('/webhooks/paypal', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...webhookHeaders }, body: JSON.stringify(event),
-  });
-  const out = (await res.json()) as { handled?: boolean };
-  return c.json({ ok: !!out.handled, id }, out.handled ? 200 : 404);
+  // A repeat bill: the client approves it, then PayPal takes the first payment.
+  const events = state.db.ownerOfInvoice(id) ? [paidEvent(id)]
+    : state.db.ownerOfSubscription(id) ? [{ event_type: 'BILLING.SUBSCRIPTION.ACTIVATED', resource: { id } }, subscriptionPaidEvent(id, `SALE-${Date.now()}`)]
+    : [{ event_type: 'CHECKOUT.ORDER.APPROVED', resource: { id } }];
+  let handled = true;
+  for (const event of events) {
+    const res = await state.app.request('/webhooks/paypal', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...webhookHeaders }, body: JSON.stringify(event),
+    });
+    handled &&= !!((await res.json()) as { handled?: boolean }).handled;
+  }
+  return c.json({ ok: handled, id }, handled ? 200 : 404);
 });
 
 fake.all('*', async (c) => {
