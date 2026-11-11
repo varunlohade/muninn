@@ -134,6 +134,7 @@ final class Session: ObservableObject {
 
 struct RootView: View {
     @EnvironmentObject var session: Session
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
@@ -142,5 +143,7 @@ struct RootView: View {
             }
             .background(Theme.Color.bg.ignoresSafeArea())
         }
+        // Back from Settings: onboarding and Home see the new keyboard state at once.
+        .onChange(of: scenePhase) { _, phase in if phase == .active { KeyboardSetup.shared.refresh() } }
     }
 }

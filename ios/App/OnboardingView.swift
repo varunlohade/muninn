@@ -1,17 +1,17 @@
 import SwiftUI
 
-/// One short flow: the intro, turn on the keyboard, allow Calendar & Reminders, Get started, Home. There is no sign-in.
+/// One short flow: the intro, turn on the keyboard, make it the default, allow Calendar & Reminders, Get started, Home. There is no sign-in.
 /// After the intro, each step fits one screen and has one main button.
 struct OnboardingView: View {
-    enum Step: Int, CaseIterable { case intro, keyboard, calendar, start }
+    enum Step: Int, CaseIterable { case intro, keyboard, makeDefault, calendar, start }
 
     @EnvironmentObject var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var setup = KeyboardSetup.shared
     @Environment(\.colorScheme) private var colorScheme
     /// iOS ends the app when the owner turns on the keyboard in Settings. The next launch goes on after the intro, not back into it.
     private static let introSeenKey = "intro_seen"
-    @State private var step: Step = UserDefaults.standard.bool(forKey: introSeenKey) ? (keyboardAdded ? afterKeyboard : .keyboard) : .intro
+    @State private var step: Step = UserDefaults.standard.bool(forKey: introSeenKey) ? keyboardStep : .intro
     @State private var checked = false
     @State private var busy = false
     #if DEBUG
@@ -22,6 +22,7 @@ struct OnboardingView: View {
         switch step {
         case .intro: ""
         case .keyboard: "Turn on the keyboard"
+        case .makeDefault: "Make it your default"
         case .calendar: "Allow Calendar & Reminders"
         case .start: "Get paid from any chat"
         }
@@ -30,6 +31,7 @@ struct OnboardingView: View {
         switch step {
         case .intro: ""
         case .keyboard: "Three taps in Settings. Then come back."
+        case .makeDefault: "So it opens first in every chat."
         case .calendar: "The keyboard adds the events and reminders you type. They stay on this phone."
         case .start: "\(AppConfig.displayName) suggests the invoice while you type."
         }
@@ -54,8 +56,9 @@ struct OnboardingView: View {
             DevPairingSheet { showDevPairing = false; Task { await complete(.start) } }
         }
         #endif
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active, step == .keyboard, Self.keyboardAdded, !checked { Task { await complete(.keyboard) } }
+        // RootView checks the keyboard each time the app comes back from Settings.
+        .onChange(of: setup.state) { _, state in
+            if step == .keyboard, state != .notAdded, !checked { Task { await complete(.keyboard) } }
         }
     }
 
@@ -71,6 +74,7 @@ struct OnboardingView: View {
                     Text(line).font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
                         .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                     if step == .keyboard { keyboardSteps.padding(.top, Theme.Space.m) }
+                    if step == .makeDefault { Card { KeyboardDefaultGuide() }.padding(.top, Theme.Space.m) }
                 }
                 .padding(.top, Theme.Space.l)
                 .id(step)
@@ -148,8 +152,21 @@ struct OnboardingView: View {
                     if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                 }
                 .buttonStyle(PrimaryButton())
-                quietButton("Not now") { Task { await advance(from: .keyboard) } }
+                quietButton("Not now") { Task { await advance(from: .keyboard, skipped: true) } }
                     .accessibilityIdentifier("onboarding.later")
+            case .makeDefault:
+                if setup.state == .ready {
+                    Button("Next") { Task { await complete(.makeDefault) } }
+                        .buttonStyle(PrimaryButton())
+                        .accessibilityIdentifier("onboarding.default.next")
+                } else {
+                    Button("Open Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    }
+                    .buttonStyle(PrimaryButton())
+                }
+                quietButton("Not now") { Task { await advance(from: .makeDefault) } }
+                    .accessibilityIdentifier("onboarding.default.later")
             case .calendar:
                 Button("Allow Calendar & Reminders") { Task { await CalendarModel.shared.connect(); await advance(from: .calendar) } }
                     .buttonStyle(PrimaryButton())
@@ -187,20 +204,21 @@ struct OnboardingView: View {
         await advance(from: done)
     }
 
-    private func advance(from done: Step) async {
+    private func advance(from done: Step, skipped: Bool = false) async {
         withAnimation(stepMotion) {
             checked = false
             session.error = nil
             if done == .intro { UserDefaults.standard.set(true, forKey: Self.introSeenKey) }
-            if let next = next(after: done) { step = next } else { session.finishOnboarding() }
+            if let next = skipped && done == .keyboard ? Self.afterKeyboard : next(after: done) { step = next } else { session.finishOnboarding() }
         }
     }
 
-    /// Skips the keyboard step when the keyboard is already on.
+    /// Skips the add step when the keyboard is already added. "Not now" on the add step also skips the default step.
     private func next(after done: Step) -> Step? {
         switch done {
-        case .intro: Self.keyboardAdded ? Self.afterKeyboard : .keyboard
-        case .keyboard: Self.afterKeyboard
+        case .intro: Self.keyboardStep
+        case .keyboard: .makeDefault
+        case .makeDefault: Self.afterKeyboard
         case .calendar: .start
         case .start: nil
         }
@@ -209,12 +227,8 @@ struct OnboardingView: View {
     /// The calendar step shows only while Calendar or Reminders has never been asked.
     @MainActor static var afterKeyboard: Step { CalendarModel.shared.neverAsked ? .calendar : .start }
 
-    /// iOS lists the enabled keyboards in the AppleKeyboards preference. The heartbeat also proves Full Access.
-    static var keyboardAdded: Bool {
-        let ids = UserDefaults.standard.stringArray(forKey: "AppleKeyboards") ?? []
-        let ours = (Bundle.main.bundleIdentifier ?? "") + ".keyboard"
-        return ids.contains(ours) || SharedStore.keyboardLastSeen != nil
-    }
+    /// The default step always shows once the keyboard is added: iOS cannot tell the app the keyboard's place in the list.
+    @MainActor static var keyboardStep: Step { KeyboardSetup.shared.state == .notAdded ? .keyboard : .makeDefault }
 }
 
 /// One dot per step. The current one is a longer pill.
@@ -290,18 +304,18 @@ struct DevPairingSheet: View {
 #endif
 
 struct EnableKeyboardSteps: View {
+    @ObservedObject private var setup = KeyboardSetup.shared
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
-            StepCard(number: 2, title: "Turn on the keyboard") {
-                ForEach(Array([
-                    "Open Settings › General › Keyboard › Keyboards.",
-                    "Tap Add New Keyboard and pick \(AppConfig.keyboardName).",
-                    "Tap \(AppConfig.keyboardName) and turn on Allow Full Access. The keyboard needs it to reach the network.",
-                    "In any chat, tap the globe key to switch to \(AppConfig.keyboardName).",
-                ].enumerated()), id: \.offset) { _, step in
-                    Text(step).font(Theme.Font.body).foregroundStyle(Theme.Color.text2).fixedSize(horizontal: false, vertical: true)
+            // No step number here: the guide numbers its own steps.
+            Card {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    Text(setup.state == .ready ? "Make it your default" : setup.state.homeTitle)
+                        .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                    KeyboardDefaultGuide()
+                    OpenSettingsButton()
                 }
-                OpenSettingsButton()
             }
             StepCard(number: 3, title: "Optional: skip the paste prompt") {
                 Text("To use a client's copied message, iOS asks each time. To stop the prompt, open Settings › \(AppConfig.displayName) › Paste from Other Apps and pick Allow.")

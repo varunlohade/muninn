@@ -11,14 +11,6 @@ final class HomeModel: ObservableObject {
     @Published var paymentTimes: [Date] = []
     @Published var error: String?
     @Published var raven: Payment?
-    @Published var keyboardOn = false
-
-    /// The keyboard writes a heartbeat to the App Group each time it appears (only possible with Full Access).
-    /// Seen within the last 14 days means it is installed and on.
-    static let heartbeatWindow: TimeInterval = 14 * 86_400
-    func checkKeyboard() {
-        keyboardOn = SharedStore.keyboardLastSeen.map { Date().timeIntervalSince($0) < Self.heartbeatWindow } ?? false
-    }
 
     private let briefKey = "brief_cache"
     private let paidKey = "known_paid_ids"
@@ -26,7 +18,6 @@ final class HomeModel: ObservableObject {
     static let briefTTL: TimeInterval = 600
 
     func load() async {
-        checkKeyboard()
         let api = APIClient.shared()
         async let s = api.summary()
         async let c = api.clients()
@@ -105,6 +96,7 @@ struct HomeView: View {
     @StateObject private var model = HomeModel()
     @StateObject private var ask = AskModel()
     @ObservedObject private var calendar = CalendarModel.shared
+    @ObservedObject private var keyboard = KeyboardSetup.shared
     @Namespace private var folders
 
     var body: some View {
@@ -143,7 +135,7 @@ struct HomeView: View {
         .refreshable { await model.load() }
         // Loads again when the account changes: "Welcome back" brings the earlier account's data.
         .task(id: session.account) { await model.load() }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in model.checkKeyboard(); calendar.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in calendar.refresh() }
         .overlay {
             if let p = model.raven {
                 RavenReturns(payment: p) { model.raven = nil }
@@ -258,9 +250,11 @@ struct HomeView: View {
                 HStack(spacing: Theme.Space.s) {
                     IconCircle(systemImage: "keyboard")
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                        Text(model.keyboardOn ? "Keyboard is on" : "Turn on the keyboard")
+                        Text(keyboard.state.homeTitle)
                             .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
-                        if let b = model.broughtBack {
+                        if keyboard.state != .ready {
+                            Text("Make it your default keyboard").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                        } else if let b = model.broughtBack {
                             (Text("Brought back ") + Text(b.money).foregroundStyle(Theme.Color.paidInk).font(Theme.Font.urbanist(13, 600))
                                 + Text(" from \(b.chats) chat\(b.chats == 1 ? "" : "s")"))
                                 .font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
@@ -275,6 +269,7 @@ struct HomeView: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, Theme.Metric.cardInset)
+        .accessibilityIdentifier("home.keyboard")
     }
 
     /// Optional, and never a blocking step. It goes away once the owner answers the system prompt.
