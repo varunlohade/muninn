@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { payoutAsk } from '../src/quick.ts';
 import { PayPalError } from '../src/paypal.ts';
-import { paidEvent, setup, webhookHeaders } from './helpers.ts';
+import { paidEvent, setup, sleep, webhookHeaders } from './helpers.ts';
 
 const suggest = async (s: ReturnType<typeof setup>, token: string, text: string, context?: string) =>
   (await (await s.call(token, 'POST', '/v1/suggest', { text, ...(context ? { context } : {}) })).json()) as { chips: any[]; intent: string };
@@ -253,6 +253,29 @@ test('invoices: record a refund only on a payment made outside PayPal, never mor
   assert.equal(s.db.getInvoice(userId, cash)!.status, 'MARKED_AS_REFUNDED');
   assert.equal(s.calls.filter((c) => c.fn === 'record_refund').length, 2);
   assert.equal(s.calls.filter((c) => c.fn === 'refund').length, 0, 'no PayPal money moved');
+});
+
+test('invoices: two record-refund taps at once cannot record more than was paid; a failed call frees its hold', async () => {
+  const s = setup();
+  const { token, userId } = s.device();
+  const id = await invoiceFor(s, token, 'Ana', 45);
+  const [mark] = (await suggest(s, token, 'ana paid cash')).chips;
+  await send(s, token, '/v1/actions/invoice/mark-paid', confirmed(mark));
+  const body = (amount: string) => ({ invoice_id: id, amount, method: 'CASH', confirm_client: 'Ana', confirm_amount: amount, confirm_currency: 'USD' });
+  const real = s.mockPayPal.recordRefund;
+  s.mockPayPal.recordRefund = async (...a) => { await sleep(20); return real(...a); };
+  const both = await Promise.all([
+    send(s, token, '/v1/actions/invoice/record-refund', body('30.00'), 'refund-race-0001'),
+    send(s, token, '/v1/actions/invoice/record-refund', body('30.00'), 'refund-race-0002'),
+  ]);
+  assert.deepEqual(both.map((r) => r.status).sort(), [200, 400]);
+  assert.equal(s.calls.filter((c) => c.fn === 'record_refund').length, 1);
+
+  s.mockPayPal.recordRefund = async () => { throw new PayPalError('PayPal down', 502, 503); };
+  assert.equal((await send(s, token, '/v1/actions/invoice/record-refund', body('15.00'), 'refund-fail-0001')).status, 502);
+  s.mockPayPal.recordRefund = real;
+  assert.equal((await send(s, token, '/v1/actions/invoice/record-refund', body('15.00'), 'refund-ok-0001')).status, 200, 'the failed hold was freed');
+  assert.equal(s.db.getInvoice(userId, id)!.status, 'MARKED_AS_REFUNDED');
 });
 
 // ---- step 3: balance

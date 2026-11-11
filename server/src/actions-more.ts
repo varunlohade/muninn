@@ -287,9 +287,17 @@ export function createMore(d: MoreDeps) {
     if (!recordedPaid(r)) throw d.fail(409, r.paid_at ? 'paid by PayPal: send a refund instead' : 'invoice is not paid');
     const left = r.amount_cents - refundedOutside(userId, r.id);
     if (b.amount > left) throw d.fail(400, `refund is larger than what is left (${centsToValue(left)})`);
-    const out = await d.paypal.forAccount(userId, r.pp_account).recordRefund(r.id, { date: today(), value: centsToValue(b.amount), currency: r.currency, method: b.method }, idemKey(c));
-    sql('INSERT OR IGNORE INTO recorded_refunds (refund_id, user_id, invoice_id, amount_cents, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(out.refundId || idemKey(c), userId, r.id, b.amount, d.now());
+    // The row holds the amount before PayPal is called, so two taps at once cannot both record more than is left.
+    const hold = `hold-${randomUUID()}`;
+    sql('INSERT INTO recorded_refunds (refund_id, user_id, invoice_id, amount_cents, created_at) VALUES (?, ?, ?, ?, ?)').run(hold, userId, r.id, b.amount, d.now());
+    let out: { refundId: string };
+    try {
+      out = await d.paypal.forAccount(userId, r.pp_account).recordRefund(r.id, { date: today(), value: centsToValue(b.amount), currency: r.currency, method: b.method }, idemKey(c));
+    } catch (e) {
+      sql('DELETE FROM recorded_refunds WHERE refund_id = ?').run(hold);
+      throw e;
+    }
+    if (out.refundId) sql('UPDATE OR IGNORE recorded_refunds SET refund_id = ? WHERE refund_id = ?').run(out.refundId, hold);
     const status = b.amount === left ? 'MARKED_AS_REFUNDED' : 'PARTIALLY_REFUNDED';
     db.setInvoiceStatus(userId, r.id, status, null, null);
     log('invoice_refund_recorded', { user_id: userId, invoice_id: r.id, status });
