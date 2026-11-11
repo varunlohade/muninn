@@ -63,12 +63,15 @@ export function createIntegrations(db: Db, cipher: Cipher, now: () => number) {
 
   function list(userId: string): IntegrationView[] {
     ensureDefaults(userId);
+    // Google reviews is the review link on the profile; the others have their own row.
+    const reviewLink = !!db.getProfile(userId)?.review_url;
+    const connected = (id: string, r: { status: string } | undefined) => (id === 'google_reviews' ? reviewLink : r?.status === 'connected');
     const rows = new Map(db.listIntegrations(userId).map((r) => [r.provider, r]));
     return PROVIDERS.map((p) => {
       const r = rows.get(p.id);
       return {
         id: p.id, name: p.name, description: p.description, capabilities: p.capabilities,
-        status: !p.available ? 'coming_soon' : p.where === 'device' ? 'on_device' : r?.status === 'connected' ? 'connected' : 'not_connected',
+        status: !p.available ? 'coming_soon' : p.where === 'device' ? 'on_device' : connected(p.id, r) ? 'connected' : 'not_connected',
         connected_at: p.available && r?.connected_at ? new Date(r.connected_at).toISOString() : null,
       };
     });

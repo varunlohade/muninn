@@ -63,6 +63,7 @@ const ROUTE_CRITERIA: Record<AskRoute, string> = {
   refine: 'Rewrite the text in another style: nicer, friendlier, more professional, shorter or firmer.',
   tone: 'Check or judge how a message sounds: rude, blunt, angry or fine.',
   reply: 'Write a reply to a message a client sent, for example a question about prices.',
+  review_ask: 'Ask a client to leave a review, or share the review link.',
   who_paid: 'Who paid, who has not paid, what is still owed or late.',
   brief: 'A short summary of how the business did today or this week: money earned, what needs attention.',
   clients: 'A list of the clients, or facts about a client.',

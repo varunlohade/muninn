@@ -52,6 +52,7 @@ const TABLE: Row[] = [
   { text: 'is this rude: pay me now', group: 'writing', route: 'tone', blunt: true, want: 'tone', paid: 4, calls: ['askGroup', 'askRoute', 'toneCheck'] },
   { text: 'reply to: how much is a haircut?', group: 'writing', route: 'reply', want: 'reply', paid: 3, calls: ['askGroup', 'askRoute', 'reply'] },
   { text: 'make this nicer', group: 'writing', route: 'refine', want: 'none', paid: 2, calls: ['askGroup', 'askRoute'] },
+  { text: 'ask Ana for a review', group: 'writing', route: 'review_ask', want: 'none', paid: 2, calls: ['askGroup', 'askRoute'] },
   { text: 'add a note: buy shampoo', route: 'add_note', want: 'add_note', paid: 1, calls: ['askRoute'] },
   { text: 'add a note: refund Maya $20 on friday', route: 'add_note', want: 'add_note', paid: 1, calls: ['askRoute'] },
   { text: "what's on today", group: 'device', route: 'today_calendar', want: 'today_calendar', paid: 2, calls: ['askGroup', 'askRoute'] },
@@ -178,6 +179,36 @@ test('ask: a repeat bill chip names the amount, interval and only a client the o
   const out = await two.ask('bill Sam $40 weekly or monthly');
   assert.equal(out.route, 'none');
   assert.match(out.result.line, /how often/);
+});
+
+test('ask: review_ask inserts a thank-you with the review link, never an incentive; profile checks the link', async () => {
+  const w = await world({ group: { group: 'writing' }, route: { route: 'review_ask' } });
+  const put = (review_url: unknown) => w.s.call(w.token, 'PUT', '/v1/profile', { business_name: 'Rae', tone: 'warm', review_url });
+  for (const bad of ['http://g.page/r/abc', 'https://evil.test/review', 'https://google.com.evil.test/x', 'https://user:pw@g.page/r/x',
+    'https://g.page:8443/r/x', 'javascript:alert(1)', 'g.page/r/abc', 'https://' + 'a'.repeat(500) + '.google.com']) {
+    assert.equal((await put(bad)).status, 400, bad);
+  }
+  const before = await w.ask('ask Ana for a review');
+  assert.deepEqual([before.route, before.result.line], ['none', 'Add your Google review link in Integrations first.']);
+
+  const link = 'https://g.page/r/CabcXYZ/review';
+  assert.equal((await put(link)).status, 200);
+  const out = await w.ask('ask Ana for a review');
+  assert.equal(out.route, 'review_ask');
+  assert.equal(out.result.text, `Thanks for coming in! If you have a minute, a review would mean a lot: ${link}`);
+  assert.doesNotMatch(out.result.text, /discount|free|off|coupon|reward|gift|\$|%/i);
+  assert.deepEqual(w.s.aiCalls.map((c) => c.fn), ['askGroup', 'askRoute', 'askGroup', 'askRoute']);
+
+  for (const ok of ['https://search.google.com/local/writereview?placeid=X', 'https://maps.app.goo.gl/abc', 'https://www.google.com/maps/place/x']) {
+    assert.equal((await put(ok)).status, 200, ok);
+  }
+  const integ = async () => Object.fromEntries((await (await w.s.call(w.token, 'GET', '/v1/integrations')).json() as any).integrations.map((i: any) => [i.id, i.status]));
+  assert.equal((await integ()).google_reviews, 'connected');
+  // A profile save that leaves the link out keeps it; null clears it.
+  assert.equal((await w.s.call(w.token, 'PUT', '/v1/profile', { business_name: 'Rae', tone: 'warm' })).status, 200);
+  assert.equal(((await (await w.s.call(w.token, 'GET', '/v1/profile')).json()) as any).profile.review_url, 'https://www.google.com/maps/place/x');
+  assert.equal((await put(null)).status, 200);
+  assert.equal((await integ()).google_reviews, 'not_connected');
 });
 
 test('ask: writing, info and device results', async () => {

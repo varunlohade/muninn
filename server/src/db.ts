@@ -11,7 +11,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_apple ON users(apple_sub_hash) WHERE app
 CREATE TABLE IF NOT EXISTS devices (
   token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), label TEXT, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS profiles (
-  user_id TEXT PRIMARY KEY REFERENCES users(id), business_name TEXT NOT NULL, tone TEXT NOT NULL, currency TEXT NOT NULL);
+  user_id TEXT PRIMARY KEY REFERENCES users(id), business_name TEXT NOT NULL, tone TEXT NOT NULL, currency TEXT NOT NULL, review_url TEXT);
 CREATE TABLE IF NOT EXISTS catalog_items (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
   price_cents INTEGER NOT NULL, currency TEXT NOT NULL, created_at INTEGER NOT NULL);
@@ -54,7 +54,8 @@ CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id, created_at);
 CREATE INDEX IF NOT EXISTS catalog_user ON catalog_items(user_id);
 `;
 
-export type Profile = { business_name: string; tone: string; currency: string };
+// review_url: left out keeps the stored link, null clears it.
+export type Profile = { business_name: string; tone: string; currency: string; review_url?: string | null };
 export type CatalogItem = { id: string; name: string; price_cents: number; currency: string };
 export type InvoiceRow = {
   id: string; user_id: string; status: string; amount_cents: number; currency: string; item: string;
@@ -94,6 +95,8 @@ export function openDb(path: string) {
   }
   const userCols = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
   if (userCols.length && !userCols.some((c) => c.name === 'apple_sub_hash')) db.exec('ALTER TABLE users ADD COLUMN apple_sub_hash TEXT');
+  const profileCols = db.prepare('PRAGMA table_info(profiles)').all() as { name: string }[];
+  if (profileCols.length && !profileCols.some((c) => c.name === 'review_url')) db.exec('ALTER TABLE profiles ADD COLUMN review_url TEXT');
   db.exec(SCHEMA);
   const now = () => Date.now();
   const q = (sql: string) => db.prepare(sql);
@@ -128,12 +131,14 @@ export function openDb(path: string) {
     },
 
     getProfile(userId: string): Profile | undefined {
-      return q('SELECT business_name, tone, currency FROM profiles WHERE user_id = ?').get(userId) as Profile | undefined;
+      const p = q('SELECT business_name, tone, currency, review_url FROM profiles WHERE user_id = ?').get(userId) as Profile | undefined;
+      return p && { ...p };
     },
     putProfile(userId: string, p: Profile) {
-      q(`INSERT INTO profiles (user_id, business_name, tone, currency) VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id) DO UPDATE SET business_name = excluded.business_name, tone = excluded.tone, currency = excluded.currency`)
-        .run(userId, p.business_name, p.tone, p.currency);
+      q(`INSERT INTO profiles (user_id, business_name, tone, currency, review_url) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET business_name = excluded.business_name, tone = excluded.tone, currency = excluded.currency,
+           review_url = CASE WHEN ? THEN excluded.review_url ELSE profiles.review_url END`)
+        .run(userId, p.business_name, p.tone, p.currency, p.review_url ?? null, p.review_url === undefined ? 0 : 1);
     },
 
     allItems(): (CatalogItem & { user_id: string })[] {

@@ -121,8 +121,20 @@ const RefundBody = z.union([
   z.object({ confirm_token: z.string().min(10).max(100) }).strict(),
   z.object({ id: z.string().min(1).max(64), amount: Amount.optional() }).strict(),
 ]);
+// A Google review link only: https, a Google host, no login or port. Left out keeps the stored one; null clears it.
+const REVIEW_HOSTS = ['google.com', 'g.page', 'maps.app.goo.gl'];
+const ReviewUrl = z.string().trim().max(500).refine((v) => {
+  try {
+    const u = new URL(v);
+    const host = u.hostname.toLowerCase();
+    return u.protocol === 'https:' && !u.username && !u.password && !u.port
+      && (REVIEW_HOSTS.includes(host) || host.endsWith('.google.com'));
+  } catch {
+    return false;
+  }
+}, { message: 'must be an https Google review link (google.com, g.page or maps.app.goo.gl)' });
 const ProfileBody = z.object({
-  business_name: CleanText(80), tone: CleanText(200), currency: Currency.default('USD'),
+  business_name: CleanText(80), tone: CleanText(200), currency: Currency.default('USD'), review_url: ReviewUrl.nullable().optional(),
 }).strict();
 const ItemBody = z.object({ name: Item, price: Amount, currency: Currency.default('USD') }).strict();
 const DisputeId = z.string().regex(/^PP-[A-Z0-9-]{3,40}$/);
@@ -830,6 +842,12 @@ export function createApp(deps: Deps) {
       return done(route, confidence, { chips: (await moneyChips(userId, intent, filled, null, extract)) ?? [] });
     }
 
+    if (route === 'review_ask') {
+      const url = db.getProfile(userId)?.review_url;
+      if (!url) return none(confidence, 'Add your Google review link in Integrations first.');
+      return done(route, confidence, { text: `Thanks for coming in! If you have a minute, a review would mean a lot: ${url}` });
+    }
+
     if (group === 'writing') {
       // The text to work on comes after the first colon: "make this nicer: ya ok will send".
       const colon = text.indexOf(':');
@@ -874,7 +892,7 @@ export function createApp(deps: Deps) {
   app.put('/v1/profile', async (c) => {
     const p = await body(c, ProfileBody);
     db.putProfile(c.get('userId'), p);
-    return c.json({ profile: p });
+    return c.json({ profile: db.getProfile(c.get('userId')) });
   });
   const itemOut = (i: CatalogItem) => ({ id: i.id, name: i.name, price: centsToValue(i.price_cents), currency: i.currency });
   app.get('/v1/catalog', (c) => c.json({ items: db.listItems(c.get('userId')).map(itemOut) }));
