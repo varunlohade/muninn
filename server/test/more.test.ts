@@ -122,6 +122,28 @@ test('plans: pause asks first, checks client, amount and currency, runs once per
   assert.equal(s.db.getSubscription(userId, id)!.status, 'ACTIVE');
 });
 
+test('plans: the restart Undo after a pause works for 10 minutes, then expires', async () => {
+  let t = Date.now();
+  const s = setup({ now: () => t });
+  const { token, userId } = s.device();
+  const run = async () => {
+    const id = await plan(s, token, 'Ana', 'ana@x.com');
+    s.db.setSubscriptionActive(userId, id, t);
+    const [ch] = (await suggest(s, token, "pause ana's plan")).chips;
+    return (await send(s, token, '/v1/actions/plan/pause', confirmed(ch))).json.undo.payload.body;
+  };
+  const fresh = await run();
+  t += 9 * 60_000;
+  assert.equal((await send(s, token, '/v1/actions/plan/resume', fresh)).status, 200);
+  s.db.raw.prepare("UPDATE subscriptions SET status = 'CANCELLED' WHERE user_id = ?").run(userId);
+  const stale = await run();
+  t += 11 * 60_000;
+  const late = await send(s, token, '/v1/actions/plan/resume', stale);
+  assert.equal(late.status, 409);
+  assert.match(late.json.error, /expired/);
+  assert.equal(s.calls.filter((c) => c.fn === 'change_subscription' && c.args[1] === 'activate').length, 1);
+});
+
 test('plans: another user cannot pause, resume or read a plan; PayPal state wins over a stale row', async () => {
   const s = setup();
   const A = s.device();

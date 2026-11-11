@@ -40,7 +40,10 @@ const ConfirmName = z.string().trim().min(1).max(100);
 const PlanBody = z.object({
   subscription_id: z.string().regex(/^I-[A-Z0-9]{4,40}$/),
   confirm_client: ConfirmName.optional(), confirm_amount: Amount.optional(), confirm_currency: Currency.optional(),
+  // Set only on an Undo chip's body: after this time (ms) the Undo no longer works.
+  undo_by: z.number().int().positive().optional(),
 }).strict();
+const UNDO_TTL_MS = 10 * 60 * 1000;
 
 const InvoiceId = z.string().regex(/^INV2-[A-Z0-9-]{4,60}$/);
 const Method = z.enum(['CASH', 'CHECK', 'BANK_TRANSFER', 'WIRE_TRANSFER', 'CREDIT_CARD', 'DEBIT_CARD', 'OTHER']);
@@ -173,6 +176,7 @@ export function createMore(d: MoreDeps) {
     if (!sameName(b.confirm_client, [shown, d.dec(userId, r.client_name_enc)]) || b.confirm_amount !== r.amount_cents || b.confirm_currency !== r.currency) {
       return needsConfirm(c, shown ?? 'the client');
     }
+    if (b.undo_by !== undefined && d.now() > b.undo_by) throw d.fail(409, 'This Undo has expired. Type "restart" and the plan name to restart it');
     const m = PLAN_MOVE[move];
     const pp = d.paypal.forAccount(userId, r.pp_account);
     // PayPal is the truth: a webhook may not have come in yet.
@@ -182,7 +186,7 @@ export function createMore(d: MoreDeps) {
     await pp.changeSubscription(r.id, move, m.reason, idemKey(c));
     syncPlan(userId, r.id, m.to);
     log('plan_changed', { user_id: userId, subscription_id: r.id, move });
-    const undo = move === 'suspend' ? undoChip('plan_resume', { subscription_id: r.id, ...planConfirm(r, b.confirm_client!) }) : null;
+    const undo = move === 'suspend' ? undoChip('plan_resume', { subscription_id: r.id, ...planConfirm(r, b.confirm_client!), undo_by: d.now() + UNDO_TTL_MS }) : null;
     return c.json({ ok: true, subscription_id: r.id, status: m.to, line: m.line, undo });
   }
 
