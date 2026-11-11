@@ -58,6 +58,24 @@ final class SuggestPolicyTests: XCTestCase {
         }
     }
 
+    func testShortcutPrefixNeverAsks() {
+        for text in [";pay 45 usd", ";invoice Sam $45 haircut", ";late"] {
+            XCTAssertEqual(SuggestPolicy.ask(text, lastAsked: ""), .skip, text)
+        }
+    }
+
+    func testPlainChatAsksNothing() {
+        for text in ["i can do teh job", "see you tomorrow at noon", "running 5 min behind"] {
+            XCTAssertEqual(SuggestPolicy.ask(text, lastAsked: ""), .skip, text)
+        }
+    }
+
+    func testServerMoneyWordsAndPriceShapesAsk() {
+        for text in ["how much for a trim", "what are your rates", "can you do 45 for the cut", "hola, cuánto cuesta?"] {
+            XCTAssertEqual(SuggestPolicy.ask(text, lastAsked: ""), .ask(text, after: AppConfig.suggestDebounce), text)
+        }
+    }
+
     func testSameTextKeepsTheBar() {
         XCTAssertEqual(SuggestPolicy.ask("$45 for haircut", lastAsked: "$45 for haircut"), .keep)
     }

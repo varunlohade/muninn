@@ -113,6 +113,24 @@ final class KeyboardModelTests: XCTestCase {
         XCTAssertEqual(clock.sleeps, [])
     }
 
+    func testPlainChatSendsNoSuggest() async {
+        type("i can do teh job")
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertEqual(api.calls, [])
+        XCTAssertEqual(clock.sleeps, [])
+    }
+
+    func testNoCapitalAfterTheShortcutPrefix() {
+        func tap(_ id: String) {
+            let keys = KeyboardGeometry.keys(layout: model.layout, width: 390, globe: false, currency: "$")
+            guard let key = keys.first(where: { $0.id == id || $0.kind == .char(id) }) else { return XCTFail("no key \(id) in \(model.layout)") }
+            clock.advance(1)
+            model.activate(key)
+        }
+        tap("mode"); tap(";"); tap("mode"); tap("p"); tap("a"); tap("y")
+        XCTAssertEqual(host.text, ";pay")
+    }
+
     func testCardNumberSendsNothing() async {
         type("my card 4242 4242 4242 4242")
         for _ in 0..<50 { await Task.yield() }

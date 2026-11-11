@@ -305,7 +305,7 @@ final class KeyboardModel: ObservableObject {
         case .words: on = raw.isEmpty || raw.last?.isWhitespace == true
         default: on = raw.trimmingCharacters(in: .whitespaces).isEmpty || [". ", "! ", "? ", "\n"].contains { raw.hasSuffix($0) }
         }
-        if layout == .letters { shift = on ? .once : .off }
+        shift = on ? .once : .off
     }
 
     // MARK: lifecycle

@@ -5,10 +5,10 @@ import Foundation
 /// Pure: the caller hands in the text. The only state is the chips the owner turned away,
 /// each kept with the text it was turned away on.
 struct SuggestPolicy {
-    /// Fewer words than this is still typing, not a message. Nothing leaves the phone.
-    static let minWords = 3
     /// With an amount or a money word, two words are already a request: "$45 haircut".
     static let minMoneyWords = 2
+    /// Shortcuts start with this. They run on the phone and never go to the server.
+    static let shortcutPrefix = ";"
     static let debounce = AppConfig.suggestDebounce
 
     enum Ask: Equatable {
@@ -28,18 +28,22 @@ struct SuggestPolicy {
     /// `typed` is the trimmed text before the cursor. `prefix` is "Invoice Sam sam@…" after an "Invoice Sam" tap.
     static func ask(_ typed: String, lastAsked: String, prefix: String? = nil) -> Ask {
         guard typed != lastAsked else { return .keep }
-        guard !typed.isEmpty, SecretScan.scan(typed) == .clean else { return .skip }
+        guard !typed.isEmpty, !typed.hasPrefix(shortcutPrefix), SecretScan.scan(typed) == .clean else { return .skip }
         let text = prefix.map { $0 + " " + typed } ?? typed
         let words = text.split(whereSeparator: \.isWhitespace).count
-        guard words >= (hasMoneySignal(text) ? minMoneyWords : minWords) else { return .skip }
+        guard hasMoneySignal(text), words >= minMoneyWords else { return .skip }
         return .ask(text, after: debounce)
     }
 
-    /// "$45", "45 usd", "€45.50", or a word such as invoice, pay, owe, refund, remind, paid.
+    /// The server's gate (server/src/quick.ts): an amount, a price shape, a money word, or another script.
+    /// Without one the server answers no chips, so plain chat never leaves the phone.
     static func hasMoneySignal(_ text: String) -> Bool {
-        let amount = #"[$€£]\s?\d|\d(?:[.,]\d{1,2})?\s?(?:usd|eur|gbp|cad|aud|dollars?|bucks|euros?|pounds?)\b"#
-        let word = #"\b(?:invoice|pay|paid|owe|owes|owed|refund|remind)\b"#
-        return text.range(of: amount + "|" + word, options: [.regularExpression, .caseInsensitive]) != nil
+        let amount = #"[$€£]\s?\d|\d\s?[$€£]|\d(?:[.,]\d{1,2})?\s?(?:usd|eur|gbp|cad|aud|dollars?|bucks|euros?|pounds?)\b"#
+        let priceShape = #"\b\d+(?:[.,]\d+)*\s+for\b|\b(?:do|for)\s+\d"#
+        let word = #"\b(?:invoic\w*|bill\w*|pay\w*|paid|owe[sd]?|owing|refund\w*|remind\w*|link|price[sd]?|pricing|cost\w*|charge[sd]?|how much|rates?|quote|fees?|total|due|overdue|late|money|cash|deposit|balance|receipt|venmo|paypal|transfer|tip|reimburse\w*|available|availability|services?|products?|menu|catalog\w*|in stock|sell|buy)\b"#
+        let otherScript = #"[^\P{L}A-Za-z]"#
+        return text.range(of: [amount, priceShape, word, otherScript].joined(separator: "|"),
+                          options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     /// The reply's chips to show, or nil when the text moved on since the ask (a stale reply).
