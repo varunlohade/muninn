@@ -1,3 +1,4 @@
+import NaturalLanguage
 import UIKit
 
 /// What the Fix chip offers for the text before the cursor, and the text after the fix, made on the phone.
@@ -10,7 +11,7 @@ struct FixPlan: Equatable {
 
 /// Finds typos, capitals and spacing on the phone, before any tap. Names, links, emails and amounts are never touched.
 enum FixCheck {
-    enum Spell: Equatable { case ok, wrong(guess: String?) }
+    enum Spell: Equatable { case ok, wrong(guesses: [String]) }
     typealias Speller = (String) -> Spell
 
     static let maxChars = 600
@@ -31,6 +32,22 @@ enum FixCheck {
         "can", "could", "will", "would", "do", "does", "did", "is", "are", "was", "were", "when", "what", "where", "who",
         "how", "why", "which", "should", "shall", "may",
     ]
+    /// Everyday English words, most used first. A guess from this list marks a typo, not another language.
+    static let commonWords: [String] = [
+        "the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not", "on", "with", "he", "as",
+        "you", "do", "at", "this", "but", "his", "by", "from", "they", "we", "say", "her", "she", "or", "an", "will",
+        "my", "one", "all", "would", "there", "their", "what", "so", "up", "out", "if", "about", "who", "get", "which",
+        "go", "me", "when", "make", "can", "like", "time", "no", "just", "him", "know", "take", "people", "into",
+        "year", "your", "good", "some", "could", "them", "see", "other", "than", "then", "now", "look", "only", "come",
+        "its", "over", "think", "also", "back", "after", "use", "two", "how", "our", "work", "first", "well", "way",
+        "even", "new", "want", "because", "any", "these", "give", "day", "most", "us", "is", "are", "was", "were",
+        "been", "has", "had", "did", "does", "should", "here", "where", "why", "very", "much", "more", "really",
+        "right", "next", "last", "still", "again", "before", "soon", "later", "today", "tomorrow", "tonight",
+        "morning", "week", "thanks", "thank", "please", "sorry", "yes", "sure", "send", "sent", "invoice", "pay",
+        "paid", "money", "bill", "price", "call", "tell", "ask", "need", "let", "meet", "help", "done", "ready",
+        "free", "busy", "great", "nice", "hope", "wait", "check", "available", "appointment", "booking", "receipt",
+    ]
+    private static let commonRank = Dictionary(commonWords.enumerated().map { ($1, $0) }, uniquingKeysWith: min)
 
     /// `names`: client names, never flagged. `skipLast`: the last word is still being typed, so leave it alone.
     static func plan(_ text: String, names: [String] = [], skipLast: Bool = false, spell: Speller = system) -> FixPlan? {
@@ -38,7 +55,7 @@ enum FixCheck {
         let known = Set(names.flatMap { $0.lowercased().split(separator: " ").map(String.init) })
         var chunks = split(text)
         let lastWord = chunks.lastIndex { !$0.space }
-        var typos: [(String, String)] = [], capitals = 0, spacing = 0, checked = 0, misspelled = 0
+        var typos: [(String, String)] = [], capitals = 0, spacing = 0, checked = 0, unknown = 0, commonGuess = false
         var atStart = true
         for i in chunks.indices {
             if chunks[i].space {
@@ -60,9 +77,13 @@ enum FixCheck {
             } else if lower.count >= 3, !known.contains(lower), !chatWords.contains(lower),
                       !word.dropFirst().contains(where: \.isUppercase), atStart || !word.first!.isUppercase {
                 checked += 1
-                if case .wrong(let guess) = spell(word) {
-                    misspelled += 1
-                    if let guess, !guess.contains(" "), distance(lower, guess.lowercased()) <= 2 {
+                if case .wrong(let guesses) = spell(word) {
+                    unknown += 1
+                    let near = guesses.filter { !$0.contains(" ") && distance(lower, $0.lowercased()) <= 2 }
+                    let common = near.filter { commonRank[$0.lowercased()] != nil }
+                        .min { commonRank[$0.lowercased()]! < commonRank[$1.lowercased()]! }
+                    if common != nil { commonGuess = true }
+                    if let guess = common ?? near.first {
                         let out = word.first!.isUppercase ? guess.prefix(1).uppercased() + guess.dropFirst() : guess
                         typos.append((word, out))
                         word = out
@@ -75,8 +96,10 @@ enum FixCheck {
             }
             chunks[i].text = parts.lead + word + parts.trail
         }
-        // Mostly "wrong" words: another language, not typos.
-        if checked >= 3, misspelled * 2 >= checked { return nil }
+        // Another language, not typos: mostly unknown words with no everyday English word close by,
+        // or text the recognizer is sure is not English (Spanish words are mostly in the English dictionary).
+        if checked >= 3, unknown * 10 >= checked * 7, !commonGuess { return nil }
+        if checked >= 3, otherLanguage(text) { return nil }
         guard !typos.isEmpty || capitals > 0 || spacing > 0 else { return nil }
         var fixed = chunks.map(\.text).joined()
         if let last = fixed.last, last.isLetter, let l = lastWord, isWord(pieces(chunks[l].text).core) {
@@ -95,13 +118,20 @@ enum FixCheck {
         return FixPlan(title: "Fix spacing", done: "Fixed spacing \u{2713}", fixed: fixed)
     }
 
-    /// The system spell checker, in English. A word it has no guess for comes back `.wrong(guess: nil)`.
+    /// The system spell checker, in English. A word it has no guess for comes back `.wrong(guesses: [])`.
     static func system(_ word: String) -> Spell {
         let checker = UITextChecker()
         let range = NSRange(location: 0, length: (word as NSString).length)
         let bad = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: "en_US")
         guard bad.location != NSNotFound else { return .ok }
-        return .wrong(guess: checker.guesses(forWordRange: bad, in: word, language: "en_US")?.first)
+        return .wrong(guesses: checker.guesses(forWordRange: bad, in: word, language: "en_US") ?? [])
+    }
+
+    static func otherLanguage(_ text: String) -> Bool {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        guard let (language, p) = recognizer.languageHypotheses(withMaximum: 1).first else { return false }
+        return language != .english && p >= 0.9
     }
 
     private struct Chunk { var text: String; let space: Bool }

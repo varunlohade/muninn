@@ -75,6 +75,18 @@ final class FixCheckTests: XCTestCase {
         XCTAssertNil(plan("hola que tal estoy bien gracias"))
     }
 
+    /// Half the words are wrong, but each has an everyday English word close by: typos, not another language.
+    func testEnglishFullOfTyposStillGetsFixed() {
+        let p = plan("I wil send teh invoice tomorow")
+        XCTAssertEqual(p?.title, "Fix 3 typos")
+        XCTAssertEqual(p?.fixed, "I will send the invoice tomorrow.")
+    }
+
+    func testHindiAndSpanishInLatinLettersGetNoChip() {
+        XCTAssertNil(plan("kal milte hain bhai"))
+        XCTAssertNil(plan("nos vemos mañana amigo"))
+    }
+
     func testSpellerIsOnlyAskedAboutRealWords() {
         var asked: [String] = []
         _ = FixCheck.plan("Send Sam $45 at sam@x.com or pp.me/abc, ok?", spell: { asked.append($0); return .ok })
