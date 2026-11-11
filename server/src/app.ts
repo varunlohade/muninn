@@ -15,6 +15,7 @@ import { clean } from './text.ts';
 import { askQuick, intervalOf, mentions, noteText, onlyKnownWords, quick, typedEmails, withoutInterval, type Quick } from './quick.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
+import { createSlack, SlackWebhookUrl } from './slack.ts';
 import { RANGES, createBusiness } from './business.ts';
 import { createAppleVerifier, type AppleVerifier } from './apple.ts';
 
@@ -139,6 +140,7 @@ const ProfileBody = z.object({
 const ItemBody = z.object({ name: Item, price: Amount, currency: Currency.default('USD') }).strict();
 const DisputeId = z.string().regex(/^PP-[A-Z0-9-]{3,40}$/);
 const AppleAuthBody = z.object({ identity_token: z.string().min(20).max(4096), nonce: z.string().min(16).max(128) }).strict();
+const SlackBody = z.object({ webhook_url: SlackWebhookUrl.nullable() }).strict();
 const DisputeMessageBody = z.object({ message: CleanText(2000) }).strict();
 
 export function createApp(deps: Deps) {
@@ -179,6 +181,7 @@ export function createApp(deps: Deps) {
   const catalogText = (items: CatalogItem[]) => items.map((i) => `${i.name} ${formatMoney(i.price_cents, i.currency)}`).join('; ');
   const requestIdFor = (userId: string, key: string) => sha256(`${userId}:${key}`).slice(0, 36);
   const integrations = createIntegrations(db, cipher, now);
+  const slack = createSlack(db, cipher, now);
   const biz = createBusiness({ db, ai, paypal, integrations, dec, now });
 
   app.use('*', secureHeaders());
@@ -708,6 +711,14 @@ export function createApp(deps: Deps) {
 
   // ---- integrations and the business view, all through the user's own PayPal connection
   app.get('/v1/integrations', (c) => c.json({ integrations: integrations.list(c.get('userId')) }));
+  // The webhook URL is a secret: stored encrypted and never sent back. null disconnects.
+  app.put('/v1/integrations/slack', async (c) => {
+    const userId = c.get('userId');
+    const { webhook_url } = await body(c, SlackBody);
+    slack.put(userId, webhook_url);
+    log('slack_connected', { user_id: userId, connected: !!webhook_url });
+    return c.json({ integration: integrations.list(userId).find((i) => i.id === 'slack') });
+  });
 
   app.get('/v1/transactions', async (c) => {
     const range = z.enum(RANGES).default('week').parse(c.req.query('range') ?? undefined);
@@ -946,18 +957,25 @@ export function createApp(deps: Deps) {
     const type = String(event?.event_type ?? '');
     const res = event?.resource ?? {};
     let handled = false;
+    // Slack hears about a payment once: only when this event is the one that marks it paid.
+    const paidNow = (owner: string, r: { paid_at: number | null; client_name_enc: string | null; amount_cents: number; currency: string; item: string } | undefined) =>
+      r && !r.paid_at ? () => slack.notifyPaid(owner, { clientName: dec(owner, r.client_name_enc), cents: r.amount_cents, currency: r.currency, item: r.item }) : null;
+    let notify: (() => Promise<void>) | null = null;
     if (type === 'INVOICING.INVOICE.PAID') {
       const id = res.invoice?.id ?? res.id;
       const owner = id && db.ownerOfInvoice(id);
       if (owner) {
+        notify = paidNow(owner, db.getInvoice(owner, id));
         db.setInvoiceStatus(owner, id, 'PAID', now(), res.invoice?.payments?.transactions?.[0]?.payment_id ?? null);
         handled = true;
       }
     } else if (type === 'CHECKOUT.ORDER.APPROVED') {
       const owner = res.id && db.ownerOfOrder(res.id);
       if (owner) {
+        const before = db.getOrder(owner, res.id);
         const cap = await paypal.forUser(owner).captureOrder(res.id, `capture-${res.id}`);
         db.setOrderStatus(owner, res.id, cap.status, cap.status === 'COMPLETED' ? now() : null, cap.captureId);
+        if (cap.status === 'COMPLETED') notify = paidNow(owner, before);
         handled = true;
       }
     } else if (type === 'BILLING.SUBSCRIPTION.ACTIVATED') {
@@ -972,17 +990,20 @@ export function createApp(deps: Deps) {
       const owner = subId && res.id && db.ownerOfSubscription(subId);
       if (owner) {
         db.setSubscriptionActive(owner, subId, now());
-        db.addSubscriptionPayment(owner, subId, String(res.id), now());
+        const sub = db.getSubscription(owner, subId);
+        if (db.addSubscriptionPayment(owner, subId, String(res.id), now()) && sub) notify = paidNow(owner, { ...sub, paid_at: null });
         handled = true;
       }
     } else if (type === 'PAYMENT.CAPTURE.COMPLETED') {
       const orderId = res.supplementary_data?.related_ids?.order_id;
       const owner = orderId && db.ownerOfOrder(orderId);
       if (owner) {
+        notify = paidNow(owner, db.getOrder(owner, orderId));
         db.setOrderStatus(owner, orderId, 'COMPLETED', now(), res.id ?? null);
         handled = true;
       }
     }
+    if (notify) await notify();
     log('webhook', { event_type: type, handled });
     return c.json({ ok: true, handled });
   });
