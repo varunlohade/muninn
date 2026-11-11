@@ -75,6 +75,8 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       for (const it of payoutItems.values()) if (it.itemId === args[0]) it.status = 'RETURNED';
       return { status: 'RETURNED' };
     },
+    async acceptClaim() {},
+    async makeOffer() {},
     async getBalances() {
       calls.push({ fn: 'balances', args: [] });
       if (balance.reply instanceof Error) throw balance.reply;
@@ -96,6 +98,8 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       async listDisputes() { calls.push({ fn: 'disputes', args: [userId] }); return list(); },
       async getDispute(id) { return d.disputes?.find((x) => x.id === id) ?? null; },
       async sendDisputeMessage(...args) { calls.push({ fn: 'dispute_message', args: [userId, ...args] }); },
+      async acceptClaim(...args) { calls.push({ fn: 'accept_claim', args: [userId, ...args] }); },
+      async makeOffer(...args) { calls.push({ fn: 'make_offer', args: [userId, ...args] }); },
     };
   };
   const rewrite = (text: string) => {

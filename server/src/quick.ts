@@ -238,6 +238,22 @@ export function planVerb(text: string): PlanVerb | null {
   return null;
 }
 
+// Disputes. A reply quotes the owner's own words after the name: "tell sam in the dispute: I shipped it Monday".
+const DISPUTE_REPLY = /^(?:reply to|tell|message|answer)\s+(?<name>\p{L}[\p{L}'’-]*)(?:'s)?(?:\s+in\s+(?:the|a|our|his|her|their)\s+(?:paypal\s+)?(?:dispute|claim|case))?\s*[:,-]?\s+(?<message>\S.*)$/iu;
+
+export type DisputeVerb = { verb: 'list' | 'accept' | 'offer' } | { verb: 'reply'; name: string; message: string };
+
+/** "disputes", "accept sam's claim", "offer sam $20 back", "tell sam I shipped it". Who it is about is matched against open disputes. */
+export function disputeVerb(text: string): DisputeVerb | null {
+  const s = lastSentence(text);
+  if (/^(?:(?:show|list|see|check|any|my|open|what are)\s+)*(?:my\s+|open\s+|paypal\s+)*disputes\??$/i.test(s)) return { verb: 'list' };
+  if (/\baccept\b.*\b(?:claim|dispute|case)\b/i.test(s)) return { verb: 'accept' };
+  if (/\boffer\b/i.test(s) && /\d/.test(s)) return { verb: 'offer' };
+  // A reply keeps every sentence of its last line.
+  const m = (text.trim().split('\n').pop() ?? '').trim().match(DISPUTE_REPLY);
+  return m?.groups ? { verb: 'reply', name: m.groups.name, message: m.groups.message.trim() } : null;
+}
+
 // "how much do I have", "my balance", "what's my PayPal balance". The whole sentence, so "your balance is $45" to a client is not one.
 const BALANCE = /^(?:(?:what'?s|what is|check|show(?: me)?)\s+)?(?:my\s+|the\s+)?(?:paypal\s+)?balance\??$|^how much (?:money )?(?:do i have|have i got|is in (?:my )?paypal)\b/i;
 export const balanceAsk = (text: string) => BALANCE.test(lastSentence(text));

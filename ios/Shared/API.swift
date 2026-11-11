@@ -388,6 +388,8 @@ struct APIClient {
         try await send(request("GET", "/v1/transactions?range=\(range)"), as: TransactionsResponse.self)
     }
     func disputes() async throws -> [Dispute] { try await send(request("GET", "/v1/disputes"), as: DisputesResponse.self).disputes }
+    /// Open disputes with the buyer's name and a "reply by" line, for the Disputes page.
+    func openDisputes() async throws -> [OpenDispute] { try await send(request("GET", "/v1/disputes-open"), as: OpenDisputesResponse.self).disputes }
     func integrations() async throws -> [Integration] {
         try await send(request("GET", "/v1/integrations"), as: IntegrationsResponse.self).integrations
     }

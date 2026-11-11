@@ -307,7 +307,10 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
     return { lines: fallback, source: 'template' as const, data_source: sum.source };
   }
 
-  return { namer, transactions, summary, disputes, dispute, sendDisputeMessage, clients, brief };
+  /** After an answer to a dispute, the next list reads PayPal again. */
+  const forgetDisputes = (userId: string) => { disputeCache.delete(userId); };
+
+  return { namer, transactions, summary, disputes, dispute, sendDisputeMessage, forgetDisputes, clients, brief };
 }
 
 type Summary = Awaited<ReturnType<ReturnType<typeof createBusiness>['summary']>>;

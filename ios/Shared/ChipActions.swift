@@ -53,6 +53,7 @@ enum ChipActions {
         "invoice_mark_paid": "invoice/mark-paid", "invoice_unmark": "invoice/unmark-paid", "invoice_cancel": "invoice/cancel",
         "invoice_refund": "invoice/record-refund",
         "payout": "payout", "payout_cancel": "payout/cancel",
+        "dispute_reply": "dispute/reply", "dispute_accept": "dispute/accept", "dispute_offer": "dispute/offer",
     ]
     /// What the bar says while each of them runs.
     static let working = [
@@ -60,6 +61,7 @@ enum ChipActions {
         "invoice_mark_paid": "Marking paid\u{2026}", "invoice_unmark": "Taking it back\u{2026}", "invoice_cancel": "Cancelling invoice\u{2026}",
         "invoice_refund": "Recording refund\u{2026}",
         "payout": "Sending\u{2026}", "payout_cancel": "Cancelling\u{2026}",
+        "dispute_reply": "Sending message\u{2026}", "dispute_accept": "Accepting claim\u{2026}", "dispute_offer": "Sending offer\u{2026}",
     ]
     /// Chips whose call moves money or messages a client. Only these keep a key and a pending call.
     static let sendsMoney = Set(["invoice", "paylink", "subscribe", "remind", "refund"]).union(moreActions.keys)

@@ -374,3 +374,74 @@ test('payouts: Undo after the recipient claimed it says it cannot be undone', as
   assert.equal(undo.json.error, "Joe already has it, so it can't be undone");
   assert.equal(s.calls.filter((c) => c.fn === 'payout_cancel').length, 0);
 });
+
+// ---- step 5: disputes
+
+function withDispute(s: ReturnType<typeof setup>, userId: string) {
+  const due = new Date(Date.now() + 2 * 86_400_000).toISOString();
+  s.ppData.set(userId, { disputes: [{
+    id: 'PP-D-12345', status: 'WAITING_FOR_SELLER_RESPONSE', reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', amount: { value: '45.00', currency: 'USD' },
+    due_date: due, created_at: new Date().toISOString(), stage: 'INQUIRY', buyer_name: 'Sam Lee', transaction_id: null, messages: [],
+  }] });
+  return new Date(due).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+}
+
+test('disputes: the list names the buyer, the amount and the reply-by day, in the bar and for the app', async () => {
+  const s = setup();
+  const A = s.device();
+  const day = withDispute(s, A.userId);
+  const [ch] = (await suggest(s, A.token, 'disputes')).chips;
+  assert.equal(ch.label, 'Disputes · 1 open');
+  assert.equal(ch.payload.line, `Sam Lee $45 · reply by ${day}`);
+  const open = await (await s.call(A.token, 'GET', '/v1/disputes-open')).json();
+  assert.deepEqual(open.disputes, [{ id: 'PP-D-12345', name: 'Sam Lee', amount: '45.00', currency: 'USD', line: `Sam Lee $45 · reply by ${day}` }]);
+  const B = s.device();
+  assert.equal((await suggest(s, B.token, 'my disputes')).chips[0].payload.line, 'No open disputes ✓');
+  assert.equal(s.aiCalls.length, 0);
+});
+
+test('disputes: a reply quotes the owner, asks first, and sends once per key', async () => {
+  const s = setup();
+  const { token, userId } = s.device();
+  withDispute(s, userId);
+  const [ch] = (await suggest(s, token, 'tell sam in the dispute: I shipped it Monday. Tracking 1Z999')).chips;
+  assert.equal(ch.kind, 'dispute_reply');
+  assert.equal(ch.label, 'Reply in dispute · Sam Lee');
+  assert.deepEqual(ch.payload.body, { dispute_id: 'PP-D-12345', message: 'I shipped it Monday. Tracking 1Z999' });
+  assert.equal(ch.payload.question, `Send this to Sam Lee in PayPal's dispute? "I shipped it Monday. Tracking 1Z999"`);
+  assert.equal((await send(s, token, '/v1/actions/dispute/reply', ch.payload.body)).status, 409);
+  assert.equal((await send(s, token, '/v1/actions/dispute/reply', { ...confirmed(ch), confirm_client: 'Ana' })).status, 409);
+  const done = await send(s, token, '/v1/actions/dispute/reply', confirmed(ch), 'reply-key-0001');
+  assert.equal(done.json.line, 'Message sent ✓');
+  await send(s, token, '/v1/actions/dispute/reply', confirmed(ch), 'reply-key-0001');
+  assert.deepEqual(s.calls.filter((c) => c.fn === 'dispute_message').map((c) => c.args.slice(1, 3)), [['PP-D-12345', 'I shipped it Monday. Tracking 1Z999']]);
+  assert.equal((await suggest(s, token, 'tell ana see you at 3')).chips.some((c) => c.kind === 'dispute_reply'), false, 'no dispute, no chip');
+});
+
+test('disputes: accept and offer take confirm_amount matched to the dispute; another user is refused', async () => {
+  const s = setup();
+  const A = s.device();
+  withDispute(s, A.userId);
+  const [accept] = (await suggest(s, A.token, "accept sam's claim")).chips;
+  assert.equal(accept.label, 'Accept claim $45 · Sam Lee');
+  assert.equal(accept.payload.question, "Accept Sam Lee's claim and refund $45? Can't undo.");
+  assert.equal((await send(s, A.token, '/v1/actions/dispute/accept', { ...confirmed(accept), confirm_amount: '20.00' })).status, 409);
+
+  const [offer] = (await suggest(s, A.token, 'offer sam $20 back')).chips;
+  assert.equal(offer.label, 'Offer $20 · Sam Lee');
+  assert.equal(offer.payload.question, 'Offer Sam Lee a $20 refund to close the dispute?');
+  assert.equal((await send(s, A.token, '/v1/actions/dispute/offer', { ...confirmed(offer), confirm_amount: '45.00' })).status, 409);
+  assert.equal((await send(s, A.token, '/v1/actions/dispute/offer', { ...confirmed(offer), amount: '46.00', confirm_amount: '46.00' })).status, 400);
+  assert.equal((await suggest(s, A.token, 'offer sam $60 back')).chips[0].kind, 'show', 'never more than the dispute');
+
+  const B = s.device();
+  for (const [path, ch] of [['accept', accept], ['offer', offer]] as const) {
+    assert.equal((await send(s, B.token, `/v1/actions/dispute/${path}`, confirmed(ch))).status, 404);
+  }
+  assert.equal(s.calls.some((c) => c.fn === 'accept_claim' || c.fn === 'make_offer'), false, 'nothing reached PayPal yet');
+
+  assert.equal((await send(s, A.token, '/v1/actions/dispute/offer', confirmed(offer))).json.line, 'Offer sent ✓');
+  assert.deepEqual((s.calls.find((c) => c.fn === 'make_offer')!.args[2] as any).value, '20.00');
+  assert.equal((await send(s, A.token, '/v1/actions/dispute/accept', confirmed(accept))).json.line, 'Claim accepted ✓');
+  assert.equal(s.calls.filter((c) => c.fn === 'accept_claim').length, 1);
+});

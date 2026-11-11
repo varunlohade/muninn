@@ -891,7 +891,7 @@ export function createApp(deps: Deps) {
       return c.json({ route, confidence, result });
     };
     const none = (confidence: number, line = NOT_SURE, err?: string) => done('none', confidence, { line }, err);
-    const extra = await more.suggest(userId, text);
+    const extra = await more.suggest(userId, text, 'ask');
     if (extra) return done('action' as AskRoute, 1, { chips: extra });
 
     const aq = askQuick(text);

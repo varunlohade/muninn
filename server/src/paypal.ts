@@ -37,6 +37,10 @@ export type PayPal = {
   getPayoutItem(batchId: string): Promise<{ itemId: string; status: string } | null>;
   /** Only an UNCLAIMED item can be cancelled; the money goes back to the sender. */
   cancelPayoutItem(itemId: string, requestId: string): Promise<{ status: string }>;
+  /** Gives the buyer the full disputed amount back and closes the dispute. MONEY. */
+  acceptClaim(id: string, note: string, requestId: string): Promise<void>;
+  /** Offers the buyer a refund to close the dispute. The buyer accepts or not. */
+  makeOffer(id: string, o: { note: string; value: string; currency: string }, requestId: string): Promise<void>;
 };
 export type Balance = { currency: string; available: string; primary: boolean };
 export type SubscriptionState = { status: string; nextBillingAt: string | null; lastPaidAt: string | null };
@@ -372,6 +376,16 @@ function createClient(creds: Creds): PayPal {
     async cancelPayoutItem(itemId, requestId) {
       const r = await rest('POST', `/v1/payments/payouts-item/${encodeURIComponent(itemId)}/cancel`, {}, requestId);
       return { status: String(r?.transaction_status ?? 'RETURNED') };
+    },
+
+    async acceptClaim(id, note, requestId) {
+      await rest('POST', `/v1/customer/disputes/${encodeURIComponent(id)}/accept-claim`, { note: note.slice(0, 2000), accept_claim_type: 'REFUND' }, requestId);
+    },
+
+    async makeOffer(id, o, requestId) {
+      await rest('POST', `/v1/customer/disputes/${encodeURIComponent(id)}/make-offer`, {
+        note: o.note.slice(0, 2000), offer_type: 'REFUND', offer_amount: { currency_code: o.currency, value: o.value },
+      }, requestId);
     },
 
     async sendDisputeMessage(id, message, requestId) {

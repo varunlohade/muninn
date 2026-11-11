@@ -461,8 +461,9 @@ final class AskModel: ObservableObject {
             state = clients.isEmpty ? .line("No clients yet") : .clients(clients)
         case .disputes(let disputes):
             let money = disputes.compactMap(\.amount).map { formatMoney($0.value, $0.currency_code) }
+            // The answers live on the Disputes page: Reply, Offer, Accept.
             state = .line(disputes.isEmpty ? "No disputes \u{2713}"
-                : (["\(disputes.count) dispute\(disputes.count == 1 ? "" : "s")"] + money.prefix(3)).joined(separator: " \u{00B7} "))
+                : (["\(disputes.count) open"] + money.prefix(3)).joined(separator: " \u{00B7} ") + ". Answer in Disputes on Home.")
         case .addNote(let note):
             store.notes.insert(Note(text: note), at: 0)
             text = ""

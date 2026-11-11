@@ -15,7 +15,9 @@ import { config } from './config.ts';
 import { log } from './log.ts';
 import { Amount, Currency, centsToValue, formatMoney, valueToCents } from './money.ts';
 import { PayPalError, type PayPalProvider } from './paypal.ts';
-import { balanceAsk, invoiceVerb, mentions, payoutAsk, planVerb, quick, type InvoiceVerb, type PayoutAsk, type PlanVerb } from './quick.ts';
+import {
+  balanceAsk, disputeVerb, invoiceVerb, mentions, payoutAsk, planVerb, quick, type DisputeVerb, type InvoiceVerb, type PayoutAsk, type PlanVerb,
+} from './quick.ts';
 import { clean } from './text.ts';
 
 export type MoreDeps = {
@@ -51,6 +53,12 @@ const PayoutBody = z.object({
   confirm_recipient: Email.optional(), confirm_amount: Amount.optional(), confirm_currency: Currency.optional(),
 }).strict();
 const PayoutCancelBody = z.object({ payout_id: z.string().uuid() }).strict();
+const DisputeId = z.string().regex(/^PP-[A-Z0-9-]{3,40}$/);
+const DisputeReplyBody = z.object({
+  dispute_id: DisputeId, message: z.string().transform(clean).pipe(z.string().min(1).max(2000)), confirm_client: ConfirmName.optional(),
+}).strict();
+const DisputeAcceptBody = z.object({ dispute_id: DisputeId, ...InvoiceConfirm }).strict();
+const DisputeOfferBody = z.object({ dispute_id: DisputeId, amount: Amount, currency: Currency, ...InvoiceConfirm }).strict();
 // Not sent, or sent back: these no longer count toward the day's cap.
 const PAYOUT_GONE = ['FAILED', 'RETURNED', 'REFUNDED', 'REVERSED', 'BLOCKED', 'DENIED', 'CANCELED'];
 
@@ -371,6 +379,105 @@ export function createMore(d: MoreDeps) {
     return c.json({ ok: true, payout_id: r.id, status: out.status, line: `Cancelled ✓ · ${formatMoney(r.amount_cents, r.currency)} back in your PayPal`, undo: null });
   }
 
+  // ---- disputes: reply, offer a refund, accept the claim. The buyer and amount always come from PayPal's own dispute.
+  type OpenDispute = { id: string; name: string; cents: number | null; currency: string | null; due: string | null; status: string };
+  const buyer = (n: string | null | undefined) => clean(n ?? '') || 'The buyer';
+  const disputeMoney = (o: { cents: number | null; currency: string | null }) => (o.cents !== null && o.currency ? formatMoney(o.cents, o.currency) : '');
+  const dueWord = (iso: string) => {
+    const t = Date.parse(iso);
+    const at = d.now();
+    if (iso.slice(0, 10) === new Date(at).toISOString().slice(0, 10)) return 'today';
+    const opts: Intl.DateTimeFormatOptions = t - at < 6 * 86_400_000 ? { weekday: 'short', timeZone: 'UTC' } : { month: 'short', day: 'numeric', timeZone: 'UTC' };
+    return new Date(t).toLocaleDateString('en-US', opts);
+  };
+  /** "Sam $45 · reply by Thu" */
+  const disputeLine = (o: OpenDispute) =>
+    [`${o.name} ${disputeMoney(o)}`.trim(), o.due ? `reply by ${dueWord(o.due)}` : o.status.replace(/_/g, ' ').toLowerCase()].join(' · ');
+
+  async function openDisputes(userId: string): Promise<OpenDispute[]> {
+    const list = (await d.biz.disputes(userId)).filter((x) => x.status !== 'RESOLVED').slice(0, 5);
+    const details = await Promise.all(list.map((x) => d.biz.dispute(userId, x.id).catch(() => null)));
+    return list.map((x, i) => ({
+      id: x.id, name: buyer(details[i]?.buyer_name), cents: x.amount ? valueToCents(x.amount.value) : null, currency: x.amount?.currency ?? null,
+      due: x.due_date, status: x.status,
+    }));
+  }
+
+  const short = (t: string) => (t.length > 60 ? `${t.slice(0, 57)}…` : t);
+  const disputeConfirm = (o: { name: string; cents: number | null; currency: string | null }, cents = o.cents) =>
+    ({ confirm_client: o.name, confirm_amount: centsToValue(cents ?? 0), confirm_currency: o.currency });
+
+  async function disputeChips(userId: string, text: string, v: DisputeVerb): Promise<Chip[] | null> {
+    const open = await openDisputes(userId);
+    if (v.verb === 'list') {
+      if (!open.length) return [lineChip('Disputes · none open', 'No open disputes ✓')];
+      const lines = open.map(disputeLine);
+      return [lineChip(`Disputes · ${open.length} open`, lines.slice(0, 2).join(', ') + (lines.length > 2 ? ` +${lines.length - 2}` : ''))];
+    }
+    const hits = v.verb === 'reply'
+      ? open.filter((o) => [o.name, o.name.split(/\s+/)[0]].some((n) => n.toLowerCase() === v.name.toLowerCase()))
+      : namedIn(text, open, (o) => o.name);
+    if (hits.length !== 1) return hits.length ? [lineChip(`${hits[0].name} has ${hits.length} disputes`, `${hits[0].name} has ${hits.length} open disputes. Open Disputes in Muninn to pick one.`)] : null;
+    const o = hits[0];
+    if (v.verb === 'reply') {
+      return [actionChip('dispute_reply', `Reply in dispute · ${o.name}`, { dispute_id: o.id, message: v.message }, { confirm_client: o.name },
+        `Send this to ${o.name} in PayPal's dispute? "${short(v.message)}"`)];
+    }
+    if (o.cents === null || !o.currency) return [lineChip(`Open ${o.name}'s dispute in PayPal`, `PayPal shows no amount for ${o.name}'s dispute. Answer it in PayPal.`)];
+    const money = disputeMoney(o);
+    if (v.verb === 'accept') {
+      return [actionChip('dispute_accept', `Accept claim ${money} · ${o.name}`, { dispute_id: o.id }, disputeConfirm(o),
+        `Accept ${o.name}'s claim and refund ${money}? Can't undo.`)];
+    }
+    const typed = quick(text).amount;
+    if (typed === null) return [lineChip(`Type the offer for ${o.name}`, `Type how much to offer, like "offer ${o.name.split(' ')[0].toLowerCase()} $20 back".`)];
+    const cents = Math.round(typed * 100);
+    if (cents > o.cents) return [lineChip(`More than the ${money} in dispute`, `${o.name}'s dispute is for ${money}. Offer that or less, or accept the claim.`)];
+    const offer = formatMoney(cents, o.currency);
+    return [actionChip('dispute_offer', `Offer ${offer} · ${o.name}`, { dispute_id: o.id, amount: centsToValue(cents), currency: o.currency }, disputeConfirm(o, cents),
+      `Offer ${o.name} a ${offer} refund to close the dispute?`)];
+  }
+
+  /** The open dispute as PayPal has it now, for this user only. */
+  async function disputeFor(c: Context<Env>, id: string) {
+    const userId = userOf(c);
+    const det = await d.biz.dispute(userId, id);
+    if (!det) throw d.fail(404, 'dispute not found');
+    if (det.status === 'RESOLVED') throw d.fail(409, 'this dispute is closed');
+    return { userId, det, name: buyer(det.buyer_name), cents: det.amount ? valueToCents(det.amount.value) : null, currency: det.amount?.currency ?? null };
+  }
+
+  async function disputeReply(c: Context<Env>) {
+    const b = await d.body(c, DisputeReplyBody);
+    const { userId, name } = await disputeFor(c, b.dispute_id);
+    if (!sameName(b.confirm_client, [name])) return needsConfirm(c, name);
+    await d.biz.sendDisputeMessage(userId, b.dispute_id, b.message, idemKey(c));
+    log('dispute_message_sent', { user_id: userId, dispute_id: b.dispute_id });
+    return c.json({ ok: true, dispute_id: b.dispute_id, line: 'Message sent ✓', undo: null });
+  }
+
+  async function disputeAccept(c: Context<Env>) {
+    const b = await d.body(c, DisputeAcceptBody);
+    const { userId, name, cents, currency } = await disputeFor(c, b.dispute_id);
+    if (cents === null || !sameName(b.confirm_client, [name]) || b.confirm_amount !== cents || b.confirm_currency !== currency) return needsConfirm(c, name);
+    await d.paypal.forUser(userId).acceptClaim(b.dispute_id, 'Claim accepted. A full refund is on its way.', idemKey(c));
+    d.biz.forgetDisputes(userId);
+    log('dispute_accepted', { user_id: userId, dispute_id: b.dispute_id });
+    return c.json({ ok: true, dispute_id: b.dispute_id, line: 'Claim accepted ✓', undo: null });
+  }
+
+  async function disputeOffer(c: Context<Env>) {
+    const b = await d.body(c, DisputeOfferBody);
+    const { userId, name, cents, currency } = await disputeFor(c, b.dispute_id);
+    if (cents === null || b.currency !== currency) throw d.fail(400, 'the offer must be in the dispute currency');
+    if (b.amount > cents) throw d.fail(400, `the offer is more than the dispute (${centsToValue(cents)})`);
+    if (!sameName(b.confirm_client, [name]) || b.confirm_amount !== b.amount || b.confirm_currency !== b.currency) return needsConfirm(c, name);
+    await d.paypal.forUser(userId).makeOffer(b.dispute_id, { note: `Offering ${formatMoney(b.amount, b.currency)} back to settle this.`, value: centsToValue(b.amount), currency: b.currency }, idemKey(c));
+    d.biz.forgetDisputes(userId);
+    log('dispute_offer_sent', { user_id: userId, dispute_id: b.dispute_id });
+    return c.json({ ok: true, dispute_id: b.dispute_id, line: 'Offer sent ✓', undo: null });
+  }
+
   // ---- balance: read-only, for the bar. Never typed into the chat.
   /** "$1,240.50": the bar shows a balance with thousands marks. */
   const big = (cents: number, currency: string) => formatMoney(cents, currency).replace(/\d+(?=\.|$)/, (n) => Number(n).toLocaleString('en-US'));
@@ -392,8 +499,11 @@ export function createMore(d: MoreDeps) {
     return money ? `PayPal didn't share the balance. Net this week ${money}` : "PayPal didn't share the balance. Nothing came in this week.";
   }
 
-  /** The chips for a more-verb, or null when the text is not one. No paid call. */
-  async function suggest(userId: string, text: string): Promise<Chip[] | null> {
+  /**
+   * The chips for a more-verb, or null when the text is not one. No model call.
+   * `from: 'ask'`: the Ask bar already answers a disputes list itself (its disputes route), so that one is left to it.
+   */
+  async function suggest(userId: string, text: string, from: 'suggest' | 'ask' = 'suggest'): Promise<Chip[] | null> {
     // "pay joe $200" is a payout, never a pay link.
     const pay = payoutAsk(text);
     if (pay) return payoutChips(userId, pay);
@@ -401,6 +511,11 @@ export function createMore(d: MoreDeps) {
     const plan = planVerb(text);
     if (plan) {
       const out = planChips(userId, text, plan);
+      if (out) return out;
+    }
+    const dispute = disputeVerb(text);
+    if (dispute && !(from === 'ask' && dispute.verb === 'list')) {
+      const out = await disputeChips(userId, text, dispute);
       if (out) return out;
     }
     const inv = invoiceVerb(text);
@@ -421,6 +536,14 @@ export function createMore(d: MoreDeps) {
     app.post('/v1/actions/invoice/record-refund', recordRefund);
     app.post('/v1/actions/payout', payout);
     app.post('/v1/actions/payout/cancel', cancelPayout);
+    app.post('/v1/actions/dispute/reply', disputeReply);
+    app.post('/v1/actions/dispute/accept', disputeAccept);
+    app.post('/v1/actions/dispute/offer', disputeOffer);
+    // Read-only: open disputes with the buyer's name, for the app's Disputes page.
+    app.get('/v1/disputes-open', async (c) => {
+      const open = await openDisputes(userOf(c));
+      return c.json({ disputes: open.map((o) => ({ id: o.id, name: o.name, amount: o.cents === null ? null : centsToValue(o.cents), currency: o.currency, line: disputeLine(o) })) });
+    });
     app.get('/v1/balance', async (c) => c.json({ line: await balanceLine(userOf(c)) }));
     // Read-only: one repeat bill as PayPal sees it now.
     app.get('/v1/plans/:id', async (c) => {
