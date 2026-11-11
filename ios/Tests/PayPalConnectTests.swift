@@ -18,6 +18,10 @@ final class PayPalConnectTests: XCTestCase {
         XCTAssertNil(PayPalConnector.code(of: URL(string: "muninn://paypal-connected?code=")!))
     }
 
+    func testDisconnectSaysToRevokeInPayPal() {
+        XCTAssertTrue(PayPalConnector.disconnectNote.hasSuffix("To fully remove access, also revoke Muninn in your PayPal settings."))
+    }
+
     func testResultLines() {
         XCTAssertNil(PayPalConnector.line(for: "connected"))
         XCTAssertEqual(PayPalConnector.line(for: "taken"), "That PayPal account is already connected to another Muninn account.")

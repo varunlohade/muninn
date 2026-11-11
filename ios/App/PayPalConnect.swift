@@ -111,6 +111,9 @@ final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPres
         }
     }
 
+    /// Disconnect only forgets the account here. The grant lives on in PayPal until the owner revokes it there.
+    nonisolated static let disconnectNote = "New invoices go to the demo account until you connect again. To fully remove access, also revoke Muninn in your PayPal settings."
+
     /// The Integrations and Home line for this status.
     nonisolated static func summary(_ s: PayPalStatus?) -> String {
         guard let s, s.connected else { return "Demo PayPal (sandbox)" }
@@ -188,7 +191,7 @@ struct PayPalIntegrationRow: View {
         .confirmationDialog("Disconnect PayPal?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
             Button("Disconnect", role: .destructive) { Task { await paypal.disconnect() } }
         } message: {
-            Text("New invoices go to the demo account until you connect again.")
+            Text(PayPalConnector.disconnectNote)
         }
         .task { await paypal.refresh() }
     }
