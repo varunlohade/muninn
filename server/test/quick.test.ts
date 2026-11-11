@@ -2,8 +2,22 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAi } from '../src/ai.ts';
 import type { Intent } from '../src/config.ts';
-import { mentions, onlyKnownWords, quick } from '../src/quick.ts';
+import { intervalOf, mentions, onlyKnownWords, quick } from '../src/quick.ts';
 import { paidEvent, setup, webhookHeaders } from './helpers.ts';
+
+test('intervalOf: plain repeat words give an interval; bi-weekly, twice, every other and a fixed count give none', () => {
+  const ok: [string, string][] = [
+    ['bill Sam $40 monthly', 'month'], ['bill Sam $40 every month', 'month'], ['bill Sam $40 weekly', 'week'],
+    ['bill Sam $40 every week', 'week'], ['bill Sam $40 yearly', 'year'],
+  ];
+  for (const [t, want] of ok) assert.equal(intervalOf(t), want, t);
+  for (const t of [
+    'bill Sam $40 bi-weekly', 'bill Sam $40 biweekly', 'bill Sam $40 semi-monthly', 'bill Sam $40 twice monthly', 'bill Sam $40 twice a month',
+    'bill Sam $40 every other week', 'bill Sam $40 every other month', 'bill Sam $40 semi-annually',
+    'bill Sam $40 monthly for 3 months', 'bill Sam $40 every week for 6 weeks', 'bill Sam $40 yearly for 2 years', 'bill Sam $40 monthly 3 times',
+    'bill Sam $40 monthly for three months',
+  ]) assert.equal(intervalOf(t), null, t);
+});
 
 test('quick: amounts, currencies, emails', () => {
   const cases: [string, number | null, string | null][] = [
