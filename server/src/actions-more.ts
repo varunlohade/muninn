@@ -377,8 +377,16 @@ export function createMore(d: MoreDeps) {
     try {
       sent = await pp.createPayout({ email: b.recipient_email, value: centsToValue(b.amount), currency: b.currency, note: `Payment from ${db.getProfile(userId)?.business_name ?? 'your client'}` }, idemKey(c));
     } catch (e) {
-      sql('DELETE FROM payouts WHERE id = ? AND user_id = ?').run(id, userId);
-      throw e;
+      // Only a clear PayPal refusal (4xx) means no money left. A timeout or a 5xx may have sent it: the row stays
+      // UNKNOWN and keeps counting toward the cap.
+      const refused = e instanceof PayPalError && e.upstream !== null && e.upstream >= 400 && e.upstream < 500;
+      if (refused) {
+        sql('DELETE FROM payouts WHERE id = ? AND user_id = ?').run(id, userId);
+        throw e;
+      }
+      sql("UPDATE payouts SET status = 'UNKNOWN' WHERE id = ? AND user_id = ?").run(id, userId);
+      log('payout_unknown', { user_id: userId, payout_id: id, err: (e as Error).message });
+      throw d.fail(409, "PayPal didn't confirm this payout. Check your PayPal activity before you send it again");
     }
     // PayPal makes the item a moment later; without it yet, Undo looks again when tapped.
     const item = await pp.getPayoutItem(sent.batchId).catch(() => null);
@@ -394,7 +402,8 @@ export function createMore(d: MoreDeps) {
     const userId = userOf(c);
     const { payout_id } = await d.body(c, PayoutCancelBody);
     const r = sql('SELECT * FROM payouts WHERE id = ? AND user_id = ?').get(payout_id, userId) as PayoutRow | undefined;
-    if (!r?.batch_id) throw d.fail(404, 'payout not found');
+    if (!r) throw d.fail(404, 'payout not found');
+    if (!r.batch_id) throw d.fail(409, "PayPal didn't confirm this payout. Check your PayPal activity");
     const name = d.dec(userId, r.name_enc) ?? 'They';
     const pp = d.paypal.forAccount(userId, r.pp_account);
     const item = await pp.getPayoutItem(r.batch_id);

@@ -413,6 +413,37 @@ test('payouts: without a connected PayPal, $50 a day per user and $200 a day acr
   assert.equal((await pay(C.token, '500.00', 'conn-key-0001')).status, 200);
 });
 
+test('payouts: a timeout or 5xx keeps the row as UNKNOWN on the cap; only a clear PayPal 4xx frees it', async () => {
+  const s = setup();
+  const { token, userId } = s.device();
+  connectSeller(s, userId);
+  const pay = (amount: string, key: string) => send(s, token, '/v1/actions/payout', {
+    recipient_name: 'Eve', recipient_email: 'eve@x.com', amount, currency: 'USD', confirm_recipient: 'eve@x.com', confirm_amount: amount, confirm_currency: 'USD',
+  }, key);
+  const real = s.mockPayPal.createPayout;
+  // PayPal sent the money, then the answer was lost.
+  s.mockPayPal.createPayout = async (...a) => { await real(...a); throw new PayPalError('PayPal POST /v1/payments/payouts failed (503)', 502, 503); };
+  const lost = await pay('1000.00', 'payout-lost-0001');
+  assert.equal(lost.status, 409);
+  assert.match(lost.json.error, /didn't confirm/);
+  assert.deepEqual(s.db.raw.prepare('SELECT status FROM payouts WHERE user_id = ?').all(userId).map((r: any) => r.status), ['UNKNOWN']);
+  s.mockPayPal.createPayout = real;
+  const again = await pay('1000.00', 'payout-again-0001');
+  assert.equal(again.status, 409, 'the unknown payout still holds the cap');
+  assert.match(again.json.error, /payout limit/);
+  assert.equal(s.calls.filter((c) => c.fn === 'payout').length, 1);
+
+  const t = setup();
+  const T = t.device();
+  connectSeller(t, T.userId);
+  t.mockPayPal.createPayout = async () => { throw new PayPalError('PayPal POST /v1/payments/payouts failed (422): RECEIVER_UNREGISTERED', 502, 422); };
+  const refused = await send(t, T.token, '/v1/actions/payout', {
+    recipient_name: 'Eve', recipient_email: 'eve@x.com', amount: '1000.00', currency: 'USD', confirm_recipient: 'eve@x.com', confirm_amount: '1000.00', confirm_currency: 'USD',
+  }, 'payout-refused-0001');
+  assert.equal(refused.status, 502);
+  assert.equal((t.db.raw.prepare('SELECT COUNT(*) AS n FROM payouts').get() as { n: number }).n, 0, 'a clear refusal frees the cap');
+});
+
 // ---- step 5: disputes
 
 function withDispute(s: ReturnType<typeof setup>, userId: string) {
