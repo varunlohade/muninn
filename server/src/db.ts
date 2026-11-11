@@ -116,6 +116,21 @@ export function openDb(path: string) {
       if (created) return { userId: id, created };
       return { userId: (q('SELECT id FROM users WHERE apple_sub_hash = ?').get(subHash) as { id: string }).id, created };
     },
+    /**
+     * Attaches an Apple account to a user who started with a device account. `owner` is the user that holds this Apple
+     * account afterwards: this user, or the earlier user it already belonged to. Null when this user is saved under another Apple account.
+     */
+    linkAppleSub(userId: string, subHash: string): { owner: string } | null {
+      const find = () => q('SELECT id FROM users WHERE apple_sub_hash = ?').get(subHash) as { id: string } | undefined;
+      const held = find();
+      if (held) return { owner: held.id };
+      try {
+        // The unique index settles two links at once: one wins, the other reads the winner.
+        if (q('UPDATE users SET apple_sub_hash = ? WHERE id = ? AND apple_sub_hash IS NULL').run(subHash, userId).changes > 0) return { owner: userId };
+      } catch {}
+      const winner = find();
+      return winner ? { owner: winner.id } : null;
+    },
     addDevice(userId: string, tokenHash: string, label: string | null) {
       q('INSERT INTO devices (token_hash, user_id, label, created_at) VALUES (?, ?, ?, ?)').run(tokenHash, userId, label, now());
     },

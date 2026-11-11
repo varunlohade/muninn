@@ -79,6 +79,8 @@ export const config = {
     write: { limit: 30, windowMs: 60_000 },
     other: { limit: 120, windowMs: 60_000 },
     auth: { limit: 10, windowMs: 60_000 },
+    // A device account needs no proof of who asks, so one address gets few of them.
+    deviceAuth: { limit: 5, windowMs: 3_600_000 },
     webhook: { limit: 120, windowMs: 60_000 },
     webhookVerified: { limit: 600, windowMs: 60_000 },
   },

@@ -138,6 +138,7 @@ const ProfileBody = z.object({
 const ItemBody = z.object({ name: Item, price: Amount, currency: Currency.default('USD') }).strict();
 const DisputeId = z.string().regex(/^PP-[A-Z0-9-]{3,40}$/);
 const AppleAuthBody = z.object({ identity_token: z.string().min(20).max(4096), nonce: z.string().min(16).max(128) }).strict();
+const DeviceAuthBody = z.object({ device_id: z.string().uuid() }).strict();
 const SlackBody = z.object({ webhook_url: SlackWebhookUrl.nullable() }).strict();
 const DisputeMessageBody = z.object({ message: CleanText(2000) }).strict();
 
@@ -220,6 +221,18 @@ export function createApp(deps: Deps) {
     return c.json({ device_token: token });
   });
 
+  // ---- device account: the app's "Get started". No sign-in; it sits before the token check on purpose.
+  // Every call makes a new user. device_id is never looked up, so nobody gets another user's token by sending their id.
+  app.post('/v1/auth/device', rateLimiter('deviceAuth', clientIp), async (c) => {
+    if (!DeviceAuthBody.safeParse(await c.req.json().catch(() => null)).success) return c.json({ error: 'device_id must be a UUID' }, 400);
+    const userId = db.createUser();
+    const token = randomToken('pkd');
+    db.addDevice(userId, sha256(token), 'device');
+    deps.onNewUser?.(userId);
+    log('device_auth', { user_id: userId });
+    return c.json({ device_token: token });
+  });
+
   // ---- auth: every other /v1 route resolves the user from the device token, never from the body
   app.use('/v1/*', async (c, next) => {
     const m = /^Bearer (pkd_[A-Za-z0-9_-]{20,100})$/.exec(c.req.header('authorization') ?? '');
@@ -236,6 +249,30 @@ export function createApp(deps: Deps) {
   app.use('/v1/write/*', rateLimiter('write', byUser));
   app.use('/v1/disputes/:id/message', rateLimiter('actions', byUser));
   app.use('/v1/*', rateLimiter('other', byUser));
+
+  // ---- "Save your details": attaches an Apple account to the signed-in device account. The Apple token is checked exactly as in /v1/auth/apple.
+  // If that Apple account already has a user (an earlier install), the caller gets a token for that user, so a re-install gets its data back.
+  app.post('/v1/auth/apple/link', rateLimiter('auth', byUser), async (c) => {
+    const userId = c.get('userId');
+    let sub: string;
+    try {
+      const b = AppleAuthBody.parse(await c.req.json());
+      sub = (await verifyApple(b.identity_token, b.nonce)).sub;
+    } catch (e) {
+      log('apple_link_rejected', { user_id: userId, reason: e instanceof z.ZodError ? 'bad body' : (e as Error).message });
+      return c.json({ error: 'unauthorized' }, 401);
+    }
+    const linked = db.linkAppleSub(userId, cipher.lookupHash('apple-sub', sub));
+    if (!linked) return c.json({ error: 'this account is already saved with another Apple account' }, 409);
+    if (linked.owner === userId) {
+      log('apple_link', { user_id: userId, recovered: false });
+      return c.json({ linked: true, recovered: false });
+    }
+    const token = randomToken('pkd');
+    db.addDevice(linked.owner, sha256(token), 'apple');
+    log('apple_link', { user_id: linked.owner, recovered: true, from_user_id: userId });
+    return c.json({ linked: true, recovered: true, device_token: token });
+  });
 
   // ---- actions are default-deny: an explicit tap header plus an idempotency key
   const tapGate: MiddlewareHandler<Env> = async (c, next) => {

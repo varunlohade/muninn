@@ -156,3 +156,66 @@ test('POST /v1/auth/apple: with the demo seed hook, a new user starts with the d
   await s.call(null, 'POST', '/v1/auth/apple', { identity_token: token(), nonce: NONCE });
   assert.equal(seeds.length, 1);
 });
+
+const DEVICE = '3f0e6c1a-8a55-4a57-9d59-0c4d2f6f7b11';
+const tap = (key: string) => ({ 'X-User-Action': 'tap', 'Idempotency-Key': key });
+
+test('POST /v1/auth/apple/link: attaches the Apple account to the device account, and keeps its data and token', async () => {
+  const s = setup({ apple: verifier().verify });
+  const device = (await (await s.call(null, 'POST', '/v1/auth/device', { device_id: DEVICE })).json()).device_token as string;
+  assert.equal((await s.call(device, 'POST', '/v1/actions/paylink', { amount: '45.00', item: 'Haircut' }, tap('link-test-key-0001'))).status, 200);
+  const r = await s.call(device, 'POST', '/v1/auth/apple/link', { identity_token: token(), nonce: NONCE });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { linked: true, recovered: false });
+  const users = s.db.raw.prepare('SELECT id, apple_sub_hash FROM users').all() as { id: string; apple_sub_hash: string | null }[];
+  assert.equal(users.length, 1);
+  assert.ok(users[0].apple_sub_hash);
+  assert.ok(!JSON.stringify(users).includes('001234.abcdef.5678'), 'only a hash of the Apple id is stored');
+  assert.equal((await (await s.call(device, 'GET', '/v1/payments')).json()).payments.length, 1);
+  // Again from the same account: still linked, nothing new.
+  assert.deepEqual(await (await s.call(device, 'POST', '/v1/auth/apple/link', { identity_token: token(), nonce: NONCE })).json(), { linked: true, recovered: false });
+});
+
+test('POST /v1/auth/apple/link: a re-install gets the earlier account and its data back', async () => {
+  const s = setup({ apple: verifier().verify });
+  const first = (await (await s.call(null, 'POST', '/v1/auth/device', { device_id: DEVICE })).json()).device_token as string;
+  await s.call(first, 'POST', '/v1/actions/paylink', { amount: '45.00', item: 'Haircut' }, tap('link-test-key-0002'));
+  await s.call(first, 'POST', '/v1/auth/apple/link', { identity_token: token(), nonce: NONCE });
+
+  const fresh = (await (await s.call(null, 'POST', '/v1/auth/device', { device_id: DEVICE })).json()).device_token as string;
+  assert.equal((await (await s.call(fresh, 'GET', '/v1/payments')).json()).payments.length, 0, 'a new install starts empty');
+  const r = await s.call(fresh, 'POST', '/v1/auth/apple/link', { identity_token: token(), nonce: NONCE });
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.recovered, true);
+  assert.match(body.device_token, /^pkd_/);
+  assert.notEqual(body.device_token, first);
+  assert.equal(s.db.userForTokenHash(sha256(body.device_token)), s.db.userForTokenHash(sha256(first)));
+  assert.equal((await (await s.call(body.device_token, 'GET', '/v1/payments')).json()).payments.length, 1, 'the earlier data is back');
+  // Another person's Apple account never reaches this user.
+  const other = (await (await s.call(null, 'POST', '/v1/auth/device', { device_id: DEVICE })).json()).device_token as string;
+  assert.deepEqual(await (await s.call(other, 'POST', '/v1/auth/apple/link', { identity_token: token({ sub: 'second-person' }), nonce: NONCE })).json(), { linked: true, recovered: false });
+  assert.equal((await (await s.call(other, 'GET', '/v1/payments')).json()).payments.length, 0);
+});
+
+test('POST /v1/auth/apple/link: a bad Apple token, a missing device token or a second Apple account is refused', async () => {
+  const s = setup({ apple: verifier().verify });
+  const device = (await (await s.call(null, 'POST', '/v1/auth/device', { device_id: DEVICE })).json()).device_token as string;
+  const bad: unknown[] = [
+    {}, { identity_token: token() }, { identity_token: token(), nonce: 'another-raw-nonce-000000' },
+    { identity_token: token({ aud: 'com.evil.app' }), nonce: NONCE }, { identity_token: token({ exp: Math.floor(Date.now() / 1000) - 1 }), nonce: NONCE },
+    { identity_token: token().slice(0, -6) + 'AAAAAA', nonce: NONCE },
+  ];
+  for (const b of bad) {
+    const r = await s.call(device, 'POST', '/v1/auth/apple/link', b);
+    assert.equal(r.status, 401);
+    assert.deepEqual(await r.json(), { error: 'unauthorized' });
+  }
+  assert.equal((s.db.raw.prepare('SELECT COUNT(*) AS n FROM users WHERE apple_sub_hash IS NOT NULL').get() as { n: number }).n, 0);
+  assert.equal((await s.call(null, 'POST', '/v1/auth/apple/link', { identity_token: token(), nonce: NONCE })).status, 401, 'no device token, no link');
+
+  assert.equal((await s.call(device, 'POST', '/v1/auth/apple/link', { identity_token: token(), nonce: NONCE })).status, 200);
+  const second = await s.call(device, 'POST', '/v1/auth/apple/link', { identity_token: token({ sub: 'second-person' }), nonce: NONCE });
+  assert.equal(second.status, 409);
+  assert.equal((s.db.raw.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n, 1);
+});

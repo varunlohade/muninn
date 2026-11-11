@@ -97,6 +97,9 @@ fake.post('/_paid/:id', async (c) => {
   return c.json({ ok: handled, id }, handled ? 200 : 404);
 });
 
+// "Get started" in the app: the fake signs every device in as the one seeded user, so Home shows the demo data.
+fake.post('/v1/auth/device', (c) => c.json({ device_token: INNER_TOKEN }));
+
 fake.all('*', async (c) => {
   const req = c.req.raw;
   const headers = new Headers(req.headers);
