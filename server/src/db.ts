@@ -36,6 +36,15 @@ CREATE TABLE IF NOT EXISTS idempotency (
 CREATE TABLE IF NOT EXISTS integrations (
   user_id TEXT NOT NULL REFERENCES users(id), provider TEXT NOT NULL, status TEXT NOT NULL,
   connected_at INTEGER, config_enc TEXT, PRIMARY KEY (user_id, provider));
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), status TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, interval TEXT NOT NULL, item TEXT NOT NULL,
+  client_name_enc TEXT, client_email_enc TEXT, approve_link TEXT, plan_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+  activated_at INTEGER, last_paid_at INTEGER, paid_count INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS billing_plans (
+  user_id TEXT NOT NULL REFERENCES users(id), plan_key TEXT NOT NULL, product_id TEXT NOT NULL, plan_id TEXT NOT NULL,
+  PRIMARY KEY (user_id, plan_key));
+CREATE INDEX IF NOT EXISTS subscriptions_user ON subscriptions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS refunds_target ON refunds(user_id, target_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS invoices_seed ON invoices(user_id, seed_key) WHERE seed_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS invoices_user ON invoices(user_id, created_at);
@@ -58,6 +67,12 @@ export type OrderRow = {
 export type RefundRow = {
   id: string; user_id: string; target_kind: 'invoice' | 'order'; target_id: string; amount_cents: number; currency: string;
   capture_id: string; token_hash: string; expires_at: number; status: string; paypal_refund_id: string | null;
+};
+
+export type SubscriptionRow = {
+  id: string; user_id: string; status: string; amount_cents: number; currency: string; interval: string; item: string;
+  client_name_enc: string | null; client_email_enc: string | null; approve_link: string | null; plan_id: string; created_at: number;
+  activated_at: number | null; last_paid_at: number | null; paid_count: number;
 };
 
 export type IntegrationRow = { provider: string; status: string; connected_at: number | null; config_enc: string | null };
@@ -183,6 +198,36 @@ export function openDb(path: string) {
     },
     ownerOfOrder(id: string): string | undefined {
       return (q('SELECT user_id FROM orders WHERE id = ?').get(id) as { user_id: string } | undefined)?.user_id;
+    },
+
+    insertSubscription(r: Omit<SubscriptionRow, 'activated_at' | 'last_paid_at' | 'paid_count'>) {
+      q(`INSERT OR IGNORE INTO subscriptions (id, user_id, status, amount_cents, currency, interval, item, client_name_enc, client_email_enc, approve_link, plan_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(r.id, r.user_id, r.status, r.amount_cents, r.currency, r.interval, r.item, r.client_name_enc, r.client_email_enc, r.approve_link, r.plan_id, r.created_at);
+    },
+    getSubscription(userId: string, id: string): SubscriptionRow | undefined {
+      return q('SELECT * FROM subscriptions WHERE id = ? AND user_id = ?').get(id, userId) as SubscriptionRow | undefined;
+    },
+    listSubscriptions(userId: string, limit = 50): SubscriptionRow[] {
+      return q('SELECT * FROM subscriptions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?').all(userId, limit) as SubscriptionRow[];
+    },
+    ownerOfSubscription(id: string): string | undefined {
+      return (q('SELECT user_id FROM subscriptions WHERE id = ?').get(id) as { user_id: string } | undefined)?.user_id;
+    },
+    setSubscriptionActive(userId: string, id: string, at: number) {
+      q(`UPDATE subscriptions SET status = 'ACTIVE', activated_at = COALESCE(activated_at, ?) WHERE id = ? AND user_id = ?`).run(at, id, userId);
+    },
+    addSubscriptionPayment(userId: string, id: string, at: number) {
+      q(`UPDATE subscriptions SET last_paid_at = ?, paid_count = paid_count + 1 WHERE id = ? AND user_id = ?`).run(at, id, userId);
+    },
+    getBillingPlan(userId: string, planKey: string): { product_id: string; plan_id: string } | undefined {
+      return q('SELECT product_id, plan_id FROM billing_plans WHERE user_id = ? AND plan_key = ?').get(userId, planKey) as { product_id: string; plan_id: string } | undefined;
+    },
+    anyBillingProduct(userId: string): string | null {
+      return (q('SELECT product_id FROM billing_plans WHERE user_id = ? LIMIT 1').get(userId) as { product_id: string } | undefined)?.product_id ?? null;
+    },
+    putBillingPlan(userId: string, planKey: string, productId: string, planId: string) {
+      q('INSERT OR IGNORE INTO billing_plans (user_id, plan_key, product_id, plan_id) VALUES (?, ?, ?, ?)').run(userId, planKey, productId, planId);
     },
 
     addReminder(userId: string, invoiceId: string) {

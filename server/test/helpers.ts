@@ -26,6 +26,13 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       calls.push({ fn: 'order', args });
       return { id: `ORDER${++n}`, status: 'CREATED', approveLink: `https://paypal.test/approve/${n}` };
     },
+    async createSubscription(...args) {
+      calls.push({ fn: 'subscribe', args });
+      const [i] = args;
+      await sleep(opts.paypalDelayMs);
+      const k = ++n;
+      return { id: `I-TEST${k}`, status: 'APPROVAL_PENDING', approveLink: `https://paypal.test/sub/${k}`, productId: i.productId ?? `PROD-TEST-${k}`, planId: i.planId ?? `P-TEST-${k}` };
+    },
     async getInvoice() { return { status: 'SENT', captureId: null }; },
     async remind(...args) { calls.push({ fn: 'remind', args }); },
     async captureOrder() { return { status: 'COMPLETED', captureId: 'CAP1' }; },

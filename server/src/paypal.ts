@@ -7,6 +7,7 @@ export type InvoiceInput = {
 export type PayPal = {
   createAndSendInvoice(i: InvoiceInput, requestId: string): Promise<{ id: string; status: string; payLink: string | null }>;
   createOrder(i: { value: string; currency: string; item: string }, requestId: string): Promise<{ id: string; status: string; approveLink: string | null }>;
+  createSubscription(i: SubscriptionInput, requestId: string): Promise<SubscriptionCreated>;
   getInvoice(id: string): Promise<{ status: string; captureId: string | null }>;
   remind(id: string, requestId: string): Promise<void>;
   captureOrder(id: string, requestId: string): Promise<{ status: string; captureId: string | null }>;
@@ -24,6 +25,13 @@ export type PayPal = {
 // invoiceNumber is unique per merchant, so a re-run finds the invoice a crashed run left behind instead of making a second one.
 export type DatedInvoiceInput = InvoiceInput & { invoiceDate: string; dueDate: string; reference: string; invoiceNumber: string };
 export type Money = { value: string; currency: string };
+export type Interval = 'week' | 'month' | 'year';
+// productId / planId: the ones made before for this user and this amount, interval and currency, or null to make new ones.
+export type SubscriptionInput = {
+  value: string; currency: string; interval: Interval; clientEmail: string | null;
+  productId: string | null; planId: string | null; productRequestId: string; planRequestId: string;
+};
+export type SubscriptionCreated = { id: string; status: string; approveLink: string; productId: string; planId: string };
 export type PayPalTxn = {
   id: string; event_code: string; date: string; status: string; amount: Money; fee: Money | null;
   payer_name: string | null; payer_email: string | null; invoice_id: string | null; subject: string | null;
@@ -167,6 +175,24 @@ function createClient(creds: Creds): PayPal {
         }],
       }, requestId);
       return { id: o.id, status: o.status, approveLink: link(o.links, 'approve') ?? link(o.links, 'payer-action') };
+    },
+
+    async createSubscription(i, requestId) {
+      const productId: string = i.productId ?? (await rest('POST', '/v1/catalogs/products', { name: 'Muninn services', type: 'SERVICE' }, i.productRequestId)).id;
+      const planId: string = i.planId ?? (await rest('POST', '/v1/billing/plans', {
+        product_id: productId, name: `${i.currency} ${i.value} every ${i.interval}`, status: 'ACTIVE',
+        billing_cycles: [{
+          frequency: { interval_unit: i.interval.toUpperCase(), interval_count: 1 }, tenure_type: 'REGULAR', sequence: 1, total_cycles: 0,
+          pricing_scheme: { fixed_price: { value: i.value, currency_code: i.currency } },
+        }],
+        payment_preferences: { auto_bill_outstanding: true, payment_failure_threshold: 1 },
+      }, i.planRequestId)).id;
+      const sub = await rest('POST', '/v1/billing/subscriptions', {
+        plan_id: planId, ...(i.clientEmail ? { subscriber: { email_address: i.clientEmail } } : {}),
+      }, requestId);
+      const approveLink = link(sub.links, 'approve');
+      if (!/^I-[A-Z0-9]+$/.test(sub?.id ?? '') || !approveLink) throw new PayPalError('PayPal returned no subscription approve link', 502);
+      return { id: sub.id, status: String(sub.status ?? 'APPROVAL_PENDING'), approveLink, productId, planId };
     },
 
     async getInvoice(id) {
