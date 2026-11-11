@@ -11,6 +11,7 @@
     "device": "node --env-file=../.env scripts/create-device.ts",
     "e2e": "node --env-file=../.env scripts/e2e.ts",
     "seed:demo": "node --env-file=../.env scripts/seed-demo.ts",
+    "fake": "node scripts/fake-server.ts",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "pree2e": "node scripts/ensure-key.ts"
