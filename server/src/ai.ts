@@ -13,6 +13,8 @@ export type Ai = {
   askGroup(text: string): Promise<{ group: AskGroup; confidence: number }>;
   /** Ask router step 2: which function inside the group. */
   askRoute(text: string, group: Exclude<AskGroup, 'none'>): Promise<{ route: AskRoute; confidence: number }>;
+  /** A sentence with no money signal: which on-phone action fits it, if any. One jev question. */
+  deviceAction(text: string): Promise<{ kind: DeviceAction; confidence: number }>;
   extract(text: string, catalog: string): Promise<Extraction>;
   reply(text: string, profile: { business_name: string; tone: string }, catalog: string): Promise<string>;
   brief(facts: string): Promise<string>;
@@ -23,6 +25,15 @@ export type Ai = {
   toneCheck(draft: string, client: string): Promise<ToneCheck>;
 };
 export type ToneCheck = { tone: 'upset' | 'blunt' | 'ok'; calm: string | null };
+export const DEVICE_ACTIONS = ['event', 'reminder', 'note', 'followup', 'none'] as const;
+export type DeviceAction = (typeof DEVICE_ACTIONS)[number];
+const DEVICE_CRITERIA: Record<DeviceAction, string> = {
+  event: 'The owner sets up or agrees to a meeting, appointment or visit at a time, so it belongs on the calendar.',
+  reminder: 'The owner has a task to do later: call, send, buy, pick up or check something.',
+  note: 'The owner states a fact to keep: a code, an address, a price or a detail to remember.',
+  followup: 'The owner should get back to a client later: follow up, check in, or answer a question they cannot answer now.',
+  none: 'Ordinary chat with nothing to add to a calendar, a reminder or a note.',
+};
 
 const REFINE: Record<Tone, string> = {
   professional: 'more professional and polite',
@@ -256,6 +267,12 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
       const { index, confidence } = await choose(text.slice(0, config.maxTextChars),
         'A small business owner asks an assistant for this. Which one action fits it best?', routes.map((r) => ROUTE_CRITERIA[r]));
       return { route: routes[index] ?? 'none', confidence };
+    },
+
+    async deviceAction(text) {
+      const { index, confidence } = await choose(text.slice(0, config.maxTextChars),
+        'A small business owner is typing this chat message. Which thing should their phone offer to do?', DEVICE_ACTIONS.map((k) => DEVICE_CRITERIA[k]));
+      return { kind: DEVICE_ACTIONS[index] ?? 'none', confidence };
     },
 
     async extract(text, catalog) {

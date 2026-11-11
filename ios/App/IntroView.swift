@@ -51,6 +51,7 @@ final class DemoStore: KeyboardStore {
     var keyboardLastSeen: Date?
     var lastPasteboardChange = 0
     var appointments: [Appointment] = []
+    var unpaidCount: Int?
     var notes: [Note] = Note.demo
     let actionShortcuts = ActionShortcut.defaults
     var pendingAction: PendingAction?

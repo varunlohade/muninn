@@ -7,12 +7,15 @@ import { z } from 'zod';
 import { config, INTERVALS, TONES, type AskGroup, type Interval, type AskRoute, type Intent, type Tone } from './config.ts';
 import { randomToken, sha256, type Cipher } from './crypto.ts';
 import type { CatalogItem, Db, InvoiceRow, OrderRow } from './db.ts';
-import type { Ai, Extraction } from './ai.ts';
+import type { Ai, DeviceAction, Extraction } from './ai.ts';
 import { PayPalError, type PayPalProvider } from './paypal.ts';
 import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './money.ts';
 import { log } from './log.ts';
 import { clean } from './text.ts';
-import { askQuick, intervalOf, mentions, noteText, onlyKnownWords, quick, repeatEnds, typedEmails, withoutInterval, type Quick } from './quick.ts';
+import {
+  askQuick, deviceSignal, deviceTitle, deviceTrigger, intervalOf, lastSentence, mentions, moneyTrigger, nameIn, noteText, onlyKnownWords, quick, repeatEnds,
+  typedEmails, withoutInterval, type Quick,
+} from './quick.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { createSlack, SlackWebhookUrl } from './slack.ts';
@@ -26,7 +29,7 @@ export type Deps = {
   onNewUser?: (userId: string) => void;
 };
 type Env = { Variables: { userId: string; idemSkip?: boolean } };
-type Chip = { kind: string; label: string; payload: Record<string, unknown>; needs_confirm: boolean };
+type Chip = { kind: string; label: string; payload: Record<string, unknown>; needs_confirm: boolean; trigger?: string };
 
 const DAY = 86_400_000;
 const DEFAULT_PROFILE = { business_name: 'my shop', tone: 'friendly and short', currency: 'USD' };
@@ -322,12 +325,27 @@ export function createApp(deps: Deps) {
     let parallel = false;
     const done = (chips: Chip[], intent: string, confidence: number) => {
       timings.total_ms = Math.round(performance.now() - t0);
-      log('suggest', { user_id: userId, path, paid_calls: path === 'regex_none' ? 0 : path === 'jev_only' ? 1 : 2, parallel, intent, confidence, chips: chips.length, ...timings });
+      const paid_calls = path === 'regex_none' ? 0 : path === 'jev_only' || path === 'jev_device' ? 1 : 2;
+      log('suggest', { user_id: userId, path, paid_calls, parallel, intent, confidence, chips: chips.length, ...timings });
       return c.json({ chips, intent, confidence, timings });
     };
 
     const q = quick(text, context ?? '');
-    if (q.none) return done([], 'none', 1);
+    if (q.none) {
+      // No money signal. Plain chat stops here with no call; an action-ish sentence gets one jev question.
+      if (context || !deviceSignal(text)) return done([], 'none', 1);
+      path = 'jev_device';
+      const sentence = lastSentence(text);
+      let picked;
+      try {
+        picked = await ai.deviceAction(sentence);
+      } catch (e) {
+        log('device_failed', { err: (e as Error).message });
+        return done([], 'error', 0);
+      }
+      if (picked.kind === 'none' || picked.confidence < config.jev.minConfidence) return done([], 'none', picked.confidence);
+      return done(deviceChips(picked.kind, sentence), picked.kind, picked.confidence);
+    }
 
     const items = db.listItems(userId);
     const profile = profileOf(userId);
@@ -359,6 +377,23 @@ export function createApp(deps: Deps) {
     const chips = await moneyChips(userId, cls.intent, { text, context: context ?? '', q, known, items, currency: profile.currency }, extracting, extract);
     return done(chips ?? [], cls.intent, cls.confidence);
   });
+
+  /**
+   * A device chip runs on the phone (calendar, reminders, notes), never here. The server gives the kind and a title;
+   * the phone fills the time from its own reading of the sentence, or tomorrow 9 AM for a follow-up.
+   */
+  function deviceChips(kind: Exclude<DeviceAction, 'none'>, sentence: string): Chip[] {
+    const title = deviceTitle(sentence);
+    if (!title) return [];
+    const name = nameIn(sentence);
+    const base = { needs_confirm: false, trigger: deviceTrigger(sentence) };
+    switch (kind) {
+      case 'event': return [{ kind, label: 'Add to calendar', payload: { title }, ...base }];
+      case 'reminder': return [{ kind, label: 'Remind me', payload: { title }, ...base }];
+      case 'note': return [{ kind, label: 'Save note', payload: { text: sentence }, ...base }];
+      case 'followup': return [{ kind, label: 'Follow up', payload: { title: name ? `Follow up with ${name}` : `Follow up: ${title}` }, ...base }];
+    }
+  }
 
   type Filled = { text: string; context: string; q: Quick; known: ReturnType<typeof regexFields>; items: CatalogItem[]; currency: string };
   /**
@@ -393,7 +428,9 @@ export function createApp(deps: Deps) {
         };
       }
     }
-    return buildChips(userId, intent, ext, f.text, f.context, f.items, f.currency, unsure);
+    // Each chip names the typed words it came from ("$45 for the haircut"), so the keyboard can quote them.
+    const trigger = f.context ? null : moneyTrigger(f.text);
+    return buildChips(userId, intent, ext, f.text, f.context, f.items, f.currency, unsure).map((ch) => (trigger ? { ...ch, trigger } : ch));
   }
 
   const catalogMatch = (items: CatalogItem[], seen: string, extItem?: string | null) =>

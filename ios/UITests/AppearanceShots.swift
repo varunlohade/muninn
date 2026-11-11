@@ -58,6 +58,7 @@ final class AppearanceShots: XCTestCase {
             shot("03-onboarding-keyboard")
             id(app, "onboarding.later").tap()
         }
+        if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
         let mark = id(app, "onboarding.mark")
         XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 8), app.debugDescription)
         shot("01-onboarding-get-started")
@@ -154,6 +155,7 @@ final class AppearanceShots: XCTestCase {
         XCTAssertTrue(id(app, "onboarding.skip").waitForExistence(timeout: 10))
         id(app, "onboarding.skip").tap()
         if id(app, "onboarding.later").waitForExistence(timeout: 4) { id(app, "onboarding.later").tap() }
+        if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
         let mark = id(app, "onboarding.mark")
         XCTAssertTrue(mark.waitForExistence(timeout: 10))
         shot("01-onboarding-get-started")

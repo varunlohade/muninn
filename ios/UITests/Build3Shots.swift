@@ -54,6 +54,10 @@ final class Build3Shots: XCTestCase {
             shot("intro-09-turn-on-keyboard")
             id(app, "onboarding.later").tap()
         }
+        if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) {
+            shot("intro-09b-allow-calendar")
+            id(app, "onboarding.calendar.later").tap()
+        }
         let start = id(app, "onboarding.start")
         XCTAssertTrue(start.waitForExistence(timeout: 8), app.debugDescription)
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Apple")).firstMatch.exists, "there is no sign-in")
@@ -73,7 +77,7 @@ final class Build3Shots: XCTestCase {
         app.launch()
         try XCTSkipUnless(id(app, "onboarding.skip").waitForExistence(timeout: 8), "already signed in; reset the simulator keychain first")
         let start = Date()
-        while !(id(app, "onboarding.start").exists || id(app, "onboarding.later").exists), Date().timeIntervalSince(start) < 60 { Thread.sleep(forTimeInterval: 0.2) }
+        while !(id(app, "onboarding.start").exists || id(app, "onboarding.later").exists || id(app, "onboarding.calendar.later").exists), Date().timeIntervalSince(start) < 60 { Thread.sleep(forTimeInterval: 0.2) }
         let took = Date().timeIntervalSince(start)
         XCTAssertLessThan(took, 45, "the intro did not end by itself")
         print("INTRO_SECONDS", took)
@@ -85,6 +89,7 @@ final class Build3Shots: XCTestCase {
         XCTAssertTrue(id(app, "onboarding.skip").waitForExistence(timeout: 8))
         id(app, "onboarding.skip").tap()
         if id(app, "onboarding.later").waitForExistence(timeout: 3) { id(app, "onboarding.later").tap() }
+        if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
         XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 5), "Skip did not end the intro")
         id(app, "onboarding.start").tap()
         let error = id(app, "onboarding.error")
@@ -97,7 +102,7 @@ final class Build3Shots: XCTestCase {
         app.terminate()
         app.launchArguments = []
         app.launch()
-        XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 8) || id(app, "onboarding.later").exists, "the intro played again after a relaunch")
+        XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 8) || id(app, "onboarding.later").exists || id(app, "onboarding.calendar.later").exists, "the intro played again after a relaunch")
         XCTAssertFalse(id(app, "onboarding.skip").exists)
     }
 

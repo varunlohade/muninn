@@ -35,16 +35,19 @@ struct Chip: Codable, Hashable, Identifiable {
     /// The Idempotency-Key of this one chip. A chip decoded from a server reply or built on the phone gets a new
     /// key; every tap of the same chip, and its pending call, sends it, so the server replays instead of sending twice.
     let key: String
+    /// The typed words that caused the chip, such as "$45 for the haircut". Older servers send none.
+    var trigger: String?
     var id: String { kind + label }
 
-    private enum CodingKeys: String, CodingKey { case kind, label, payload, needs_confirm, key }
+    private enum CodingKeys: String, CodingKey { case kind, label, payload, needs_confirm, key, trigger }
 
-    init(kind: String, label: String, payload: [String: JSONValue], needs_confirm: Bool, key: String = UUID().uuidString) {
+    init(kind: String, label: String, payload: [String: JSONValue], needs_confirm: Bool, key: String = UUID().uuidString, trigger: String? = nil) {
         self.kind = kind
         self.label = label
         self.payload = payload
         self.needs_confirm = needs_confirm
         self.key = key
+        self.trigger = trigger
     }
 
     init(from decoder: Decoder) throws {
@@ -55,6 +58,7 @@ struct Chip: Codable, Hashable, Identifiable {
         needs_confirm = try c.decode(Bool.self, forKey: .needs_confirm)
         // A server reply has no key: each reply gives new chips. A saved pending call keeps its own.
         key = try c.decodeIfPresent(String.self, forKey: .key) ?? UUID().uuidString
+        trigger = try c.decodeIfPresent(String.self, forKey: .trigger)
     }
 }
 

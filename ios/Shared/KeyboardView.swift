@@ -127,7 +127,7 @@ struct SuggestionBar: View {
                     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                         if i > 0 { Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight) }
                         Slot(item: item, palette: palette, action: item.action.map { a in { model.perform(a) } },
-                             width: confirming && item.id == "cancel" ? 80 : nil)
+                             width: (confirming && item.id == "cancel") || item.id == "undo" ? 80 : nil)
                             .accessibilityIdentifier("chip.\(item.id)")
                             .transition(.opacity)
                     }
@@ -198,10 +198,17 @@ struct SuggestionBar: View {
         var body: some View {
             Button { action?() } label: {
                 VStack(spacing: 0) {
-                    Text(item.title).font(item.detail == nil ? M.prediction : M.prediction.weight(.medium))
-                        .foregroundStyle(tint)
-                        .lineLimit(item.id == "confirm" ? 2 : 1).minimumScaleFactor(item.id == "confirm" ? 0.8 : 0.6)
-                        .multilineTextAlignment(.center)
+                    if let t = item.trigger {
+                        // The words that caused the chip, quoted, on one line. The trigger shortens first, then goes,
+                        // so the action stays whole.
+                        ViewThatFits(in: .horizontal) {
+                            quoted(t, item.title).fixedSize()
+                            ForEach(Self.shortened(t), id: \.self) { s in quoted(s, item.short ?? item.title).fixedSize() }
+                            titleText
+                        }
+                    } else {
+                        titleText
+                    }
                     if let d = item.detail {
                         Text(d).font(M.predictionSmall).foregroundStyle(palette.secondaryLabel).lineLimit(1).minimumScaleFactor(0.7)
                     }
@@ -212,6 +219,25 @@ struct SuggestionBar: View {
             }
             .buttonStyle(.plain)
             .disabled(action == nil)
+        }
+
+        private var titleText: some View {
+            Text(item.title).font(item.detail == nil ? M.prediction : M.prediction.weight(.medium))
+                .foregroundStyle(tint)
+                .lineLimit(item.id == "confirm" ? 2 : 1).minimumScaleFactor(item.id == "confirm" ? 0.8 : 0.6)
+                .multilineTextAlignment(.center)
+        }
+
+        private func quoted(_ trigger: String, _ title: String) -> Text {
+            Text("\u{201C}\(trigger)\u{201D} ").font(M.prediction).foregroundColor(palette.accent)
+                + Text(title).font(item.detail == nil ? M.prediction : M.prediction.weight(.medium)).foregroundColor(tint)
+        }
+
+        /// The trigger whole, then cut shorter, for ViewThatFits to try in turn.
+        static func shortened(_ t: String) -> [String] {
+            var out = [t]
+            for n in [16, 10, 6] where t.count > n + 1 { out.append(String(t.prefix(n)).trimmingCharacters(in: .whitespaces) + "\u{2026}") }
+            return out
         }
 
         private var tint: Color {

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// One short flow: the intro, turn on the keyboard, Get started, Home. There is no sign-in.
+/// One short flow: the intro, turn on the keyboard, allow Calendar & Reminders, Get started, Home. There is no sign-in.
 /// After the intro, each step fits one screen and has one main button.
 struct OnboardingView: View {
-    enum Step: Int, CaseIterable { case intro, keyboard, start }
+    enum Step: Int, CaseIterable { case intro, keyboard, calendar, start }
 
     @EnvironmentObject var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -11,7 +11,7 @@ struct OnboardingView: View {
     @Environment(\.colorScheme) private var colorScheme
     /// iOS ends the app when the owner turns on the keyboard in Settings. The next launch goes on after the intro, not back into it.
     private static let introSeenKey = "intro_seen"
-    @State private var step: Step = UserDefaults.standard.bool(forKey: introSeenKey) ? (keyboardAdded ? .start : .keyboard) : .intro
+    @State private var step: Step = UserDefaults.standard.bool(forKey: introSeenKey) ? (keyboardAdded ? afterKeyboard : .keyboard) : .intro
     @State private var checked = false
     @State private var busy = false
     #if DEBUG
@@ -22,6 +22,7 @@ struct OnboardingView: View {
         switch step {
         case .intro: ""
         case .keyboard: "Turn on the keyboard"
+        case .calendar: "Allow Calendar & Reminders"
         case .start: "Get paid from any chat"
         }
     }
@@ -29,6 +30,7 @@ struct OnboardingView: View {
         switch step {
         case .intro: ""
         case .keyboard: "Three taps in Settings. Then come back."
+        case .calendar: "The keyboard adds the events and reminders you type. They stay on this phone."
         case .start: "\(AppConfig.displayName) suggests the invoice while you type."
         }
     }
@@ -148,6 +150,12 @@ struct OnboardingView: View {
                 .buttonStyle(PrimaryButton())
                 quietButton("Not now") { Task { await advance(from: .keyboard) } }
                     .accessibilityIdentifier("onboarding.later")
+            case .calendar:
+                Button("Allow Calendar & Reminders") { Task { await CalendarModel.shared.connect(); await advance(from: .calendar) } }
+                    .buttonStyle(PrimaryButton())
+                    .accessibilityIdentifier("onboarding.calendar")
+                quietButton("Not now") { Task { await advance(from: .calendar) } }
+                    .accessibilityIdentifier("onboarding.calendar.later")
             case .intro:
                 EmptyView()
             }
@@ -191,11 +199,15 @@ struct OnboardingView: View {
     /// Skips the keyboard step when the keyboard is already on.
     private func next(after done: Step) -> Step? {
         switch done {
-        case .intro: Self.keyboardAdded ? .start : .keyboard
-        case .keyboard: .start
+        case .intro: Self.keyboardAdded ? Self.afterKeyboard : .keyboard
+        case .keyboard: Self.afterKeyboard
+        case .calendar: .start
         case .start: nil
         }
     }
+
+    /// The calendar step shows only while Calendar or Reminders has never been asked.
+    @MainActor static var afterKeyboard: Step { CalendarModel.shared.neverAsked ? .calendar : .start }
 
     /// iOS lists the enabled keyboards in the AppleKeyboards preference. The heartbeat also proves Full Access.
     static var keyboardAdded: Bool {

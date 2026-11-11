@@ -42,7 +42,9 @@ targets:
         AppGroupID: $(APP_GROUP_ID)
         AppIdentifierPrefix: $(AppIdentifierPrefix)
         UILaunchScreen: {}
-        NSCalendarsFullAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) reads today's appointments to suggest who to bill. They stay on this phone.
+        NSCalendarsFullAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) reads today's appointments to suggest who to bill, and adds the events you type. They stay on this phone.
+        NSCalendarsWriteOnlyAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) adds the events you type, such as "meeting with Ana tomorrow 3pm".
+        NSRemindersFullAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) adds the reminders you type, such as "call supplier at 5". They stay on this phone.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSContactsUsageDescription: $(PRODUCT_DISPLAY_NAME) uses the one email you pick from Contacts to send that client's invoice. Nothing else is read.
         NSAppTransportSecurity:
@@ -92,6 +94,9 @@ targets:
         KeyboardName: $(KEYBOARD_DISPLAY_NAME)
         AppGroupID: $(APP_GROUP_ID)
         AppIdentifierPrefix: $(AppIdentifierPrefix)
+        NSCalendarsFullAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) reads today's appointments to suggest who to bill, and adds the events you type. They stay on this phone.
+        NSCalendarsWriteOnlyAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) adds the events you type, such as "meeting with Ana tomorrow 3pm".
+        NSRemindersFullAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) adds the reminders you type, such as "call supplier at 5". They stay on this phone.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSExtension:

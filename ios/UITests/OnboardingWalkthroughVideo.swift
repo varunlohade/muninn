@@ -101,6 +101,7 @@ final class OnboardingWalkthroughVideo: XCTestCase {
         // 3. Get started: one tap, no sign-in. Then Home.
         // The app moves on by itself when it sees the keyboard. If iOS has not told it yet, "Not now" goes on.
         if !start.waitForExistence(timeout: 6), id(app, "onboarding.later").exists { id(app, "onboarding.later").tap() }
+        if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
         XCTAssertTrue(start.waitForExistence(timeout: 10), app.debugDescription)
         pause(2)
         start.tap()

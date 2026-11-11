@@ -38,7 +38,11 @@
 		<true/>
 	</dict>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>$(PRODUCT_DISPLAY_NAME) reads today's appointments to suggest who to bill. They stay on this phone.</string>
+	<string>$(PRODUCT_DISPLAY_NAME) reads today's appointments to suggest who to bill, and adds the events you type. They stay on this phone.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>$(PRODUCT_DISPLAY_NAME) adds the events you type, such as "meeting with Ana tomorrow 3pm".</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>$(PRODUCT_DISPLAY_NAME) adds the reminders you type, such as "call supplier at 5". They stay on this phone.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>$(PRODUCT_DISPLAY_NAME) uses the one email you pick from Contacts to send that client's invoice. Nothing else is read.</string>
 	<key>UIAppFonts</key>

@@ -118,6 +118,7 @@ final class WalkthroughTests: XCTestCase {
         app.launch()
         if id(app, "onboarding.skip").waitForExistence(timeout: 6) { id(app, "onboarding.skip").tap() }
         if id(app, "onboarding.later").waitForExistence(timeout: 3) { id(app, "onboarding.later").tap() }
+        if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
         let start = id(app, "onboarding.start")
         if start.waitForExistence(timeout: 3) {
             shot("00-get-started")

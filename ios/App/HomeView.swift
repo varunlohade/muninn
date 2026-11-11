@@ -123,7 +123,7 @@ struct HomeView: View {
                         .accessibilityIdentifier("home.saved")
                 }
                 keyboardCard
-                if calendar.status == .notDetermined { calendarCard }
+                if calendar.neverAsked { calendarCard }
                 if let n = model.summary?.open_disputes, n > 0 { disputesRow(n) }
                 if let error = model.error {
                     Text(error).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Metric.margin)
@@ -284,7 +284,7 @@ struct HomeView: View {
                 IconCircle(systemImage: "calendar")
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text("Connect Calendar").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
-                    Text("See who to bill today").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                    Text("Who to bill, and events from the keyboard").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
                 }
                 Spacer()
                 AskChip(title: "Connect", detail: nil) { Task { await calendar.connect() } }
