@@ -96,6 +96,16 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.orseliyas.muninn.keyboard
         APPLICATION_EXTENSION_API_ONLY: YES
+  MuninnTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.orseliyas.muninn.tests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Muninn
   MuninnUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -116,4 +126,4 @@ schemes:
       config: Debug
     test:
       config: Debug
-      targets: [MuninnUITests]
+      targets: [MuninnTests, MuninnUITests]
