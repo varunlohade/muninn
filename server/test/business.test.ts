@@ -125,6 +125,8 @@ async function seededA() {
     txns: [txn('TX1', T0 - 3600_000, '1284.00', '-45.10'), txn('TX2', T0 - 2 * DAY, '100.00', '-3.49', { payer_name: 'Lee Park', payer_email: 'lee@example.com' })],
     disputes: [dispute('PP-D-1001'), dispute('PP-D-1002', 'RESOLVED')],
   });
+  // A runs on the shared demo merchant; the disputes are on TX1, a payment A's own repeat bill took.
+  s.db.raw.prepare('INSERT INTO subscription_payments (sale_id, user_id, subscription_id, paid_at) VALUES (?, ?, ?, ?)').run('TX1', s.A.userId, 'I-SUB1', T0);
   return s;
 }
 
@@ -158,6 +160,19 @@ test('disputes: list and detail; B gets 404 for A dispute; bad id is 404', async
   assert.equal((await get(s, s.B.token, '/v1/disputes/PP-D-1001')).status, 404);
   assert.deepEqual((await get(s, s.B.token, '/v1/disputes')).json.disputes, []);
   assert.equal((await get(s, s.A.token, '/v1/disputes/..%2F..%2Finvoices')).status, 404);
+});
+
+test('disputes: on the shared demo merchant a user sees and answers only disputes on their own payments', async () => {
+  const s = await seededA();
+  // B shares the demo merchant, so PayPal returns A's disputes to B's calls too.
+  s.ppData.set(s.B.userId, s.ppData.get(s.A.userId)!);
+  assert.deepEqual((await get(s, s.B.token, '/v1/disputes')).json.disputes, []);
+  assert.equal((await get(s, s.B.token, '/v1/disputes/PP-D-1001')).status, 404);
+  assert.equal((await get(s, s.B.token, '/v1/summary')).json.open_disputes, 0);
+  const h = { 'X-User-Action': 'tap', 'Idempotency-Key': 'dispute-msg-shared' };
+  assert.equal((await s.call(s.B.token, 'POST', '/v1/disputes/PP-D-1001/message', { message: 'hi there' }, h)).status, 404);
+  assert.equal(s.calls.filter((c) => c.fn === 'dispute_message').length, 0);
+  assert.equal((await get(s, s.A.token, '/v1/disputes')).json.disputes.length, 2);
 });
 
 test('disputes: message needs a tap and an idempotency key; B cannot message A dispute', async () => {

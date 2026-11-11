@@ -188,7 +188,7 @@ export function createApp(deps: Deps) {
   const connect = createPayPalConnect({ db, cipher, paypal, now });
   const integrations = createIntegrations(db, cipher, now, connect.label);
   const slack = createSlack(db, cipher, now);
-  const biz = createBusiness({ db, ai, paypal, integrations, dec, now });
+  const biz = createBusiness({ db, ai, paypal, integrations, dec, now, isConnected: (userId) => !connect.isDemo(userId) });
   const search = createSearch({ db, dec, namer: biz.namer });
   const more = createMore({ db, paypal, biz, now, dec, enc, body, requestIdFor, accountOf: connect.account,
     fail: (status, message) => new HttpError(status, message) });

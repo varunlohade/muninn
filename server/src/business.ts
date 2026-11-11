@@ -1,6 +1,6 @@
 import type { Ai } from './ai.ts';
 import type { Db, InvoiceRow, OrderRow } from './db.ts';
-import type { PayPalDispute, PayPalProvider, PayPalTxn } from './paypal.ts';
+import type { PayPalDispute, PayPalDisputeDetail, PayPalProvider, PayPalTxn } from './paypal.ts';
 import type { createIntegrations } from './integrations.ts';
 import { valueToCents, centsToValue, formatMoney } from './money.ts';
 import { clean } from './text.ts';
@@ -39,9 +39,11 @@ const money = (t: Totals) => Object.entries(t).map(([c, v]) => formatMoney(Math.
 type Deps = {
   db: Db; ai: Ai; paypal: PayPalProvider; integrations: ReturnType<typeof createIntegrations>;
   dec: (userId: string, v: string | null) => string | null; now: () => number;
+  /** True when the user has their own PayPal connected. Without it, the user shares the demo merchant with everyone else. */
+  isConnected: (userId: string) => boolean;
 };
 
-export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps) {
+export function createBusiness({ db, ai, paypal, integrations, dec, now, isConnected }: Deps) {
   const txnCache = new Map<string, { at: number; set: TxnSet }>();
   const disputeCache = new Map<string, { at: number; list: PayPalDispute[] }>();
   const cached = <T>(m: Map<string, { at: number } & T>, userId: string) => {
@@ -117,23 +119,37 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now }: Deps)
     return { ...set, txns: set.txns.filter((t) => Date.parse(t.date) >= since) };
   }
 
+  // The demo merchant holds every demo user's disputes. A demo user sees only those on a payment this user's own
+  // invoice, pay link or repeat bill took. A connected account's disputes are all the owner's.
+  const ownCaptures = (userId: string) => new Set((db.raw.prepare(`SELECT capture_id AS id FROM invoices WHERE user_id = ? AND capture_id IS NOT NULL
+      UNION SELECT capture_id FROM orders WHERE user_id = ? AND capture_id IS NOT NULL
+      UNION SELECT sale_id FROM subscription_payments WHERE user_id = ?`).all(userId, userId, userId) as { id: string }[]).map((r) => r.id));
+  const owns = (userId: string, det: PayPalDisputeDetail | null) =>
+    !!det && (isConnected(userId) || (!!det.transaction_id && ownCaptures(userId).has(det.transaction_id)));
+
   async function disputes(userId: string): Promise<PayPalDispute[]> {
     const hit = cached(disputeCache, userId);
     if (hit) return hit.list;
     const pp = paypalFor(userId);
-    const list = pp ? await pp.listDisputes() : [];
+    let list = pp ? await pp.listDisputes() : [];
+    if (pp && !isConnected(userId)) {
+      const mine = ownCaptures(userId);
+      const details = mine.size ? await Promise.all(list.map((x) => pp.getDispute(x.id).catch(() => null))) : [];
+      list = list.filter((_, i) => !!details[i]?.transaction_id && mine.has(details[i]!.transaction_id!));
+    }
     disputeCache.set(userId, { at: now(), list });
     return list;
   }
 
   async function dispute(userId: string, id: string) {
     const pp = paypalFor(userId);
-    return pp ? pp.getDispute(id) : null;
+    const det = pp ? await pp.getDispute(id) : null;
+    return owns(userId, det) ? det : null;
   }
 
   async function sendDisputeMessage(userId: string, id: string, message: string, requestId: string): Promise<boolean> {
     const pp = paypalFor(userId);
-    if (!pp || !(await pp.getDispute(id))) return false;
+    if (!pp || !(await dispute(userId, id))) return false;
     await pp.sendDisputeMessage(id, message, requestId);
     disputeCache.delete(userId);
     return true;

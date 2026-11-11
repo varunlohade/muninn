@@ -419,8 +419,10 @@ function withDispute(s: ReturnType<typeof setup>, userId: string) {
   const due = new Date(Date.now() + 2 * 86_400_000).toISOString();
   s.ppData.set(userId, { disputes: [{
     id: 'PP-D-12345', status: 'WAITING_FOR_SELLER_RESPONSE', reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', amount: { value: '45.00', currency: 'USD' },
-    due_date: due, created_at: new Date().toISOString(), stage: 'INQUIRY', buyer_name: 'Sam Lee', transaction_id: null, messages: [],
+    due_date: due, created_at: new Date().toISOString(), stage: 'INQUIRY', buyer_name: 'Sam Lee', transaction_id: 'TX-D1', messages: [],
   }] });
+  // The disputed payment is one this user's own repeat bill took on the demo merchant.
+  s.db.raw.prepare('INSERT INTO subscription_payments (sale_id, user_id, subscription_id, paid_at) VALUES (?, ?, ?, ?)').run('TX-D1', userId, 'I-SUB1', Date.now());
   return new Date(due).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
 }
 

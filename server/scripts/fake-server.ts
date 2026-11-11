@@ -114,6 +114,8 @@ fake.post('/_paypal-extras', (c) => {
     due_date: new Date(t + 2 * DAY).toISOString(), created_at: new Date(t - DAY).toISOString(), stage: 'INQUIRY', buyer_name: 'Maya Lopez',
     transaction_id: 'CAP-FAKE-1', messages: [],
   }] });
+  // The disputed payment is one Ana's repeat bill took, so the demo user owns the dispute.
+  db.raw.prepare('INSERT OR IGNORE INTO subscription_payments (sale_id, user_id, subscription_id, paid_at) VALUES (?, ?, ?, ?)').run('CAP-FAKE-1', userId, 'I-FAKEANA1', t - DAY);
   return c.json({ ok: true });
 });
 
