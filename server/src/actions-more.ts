@@ -55,6 +55,7 @@ const Email = z.string().trim().toLowerCase().email().max(254);
 // The strongest confirm: who, how much and which currency, each checked against the body.
 const PayoutBody = z.object({
   recipient_name: ConfirmName, recipient_email: Email, amount: Amount, currency: Currency,
+  note: z.string().transform(clean).pipe(z.string().min(1).max(100)).optional(),
   confirm_recipient: Email.optional(), confirm_amount: Amount.optional(), confirm_currency: Currency.optional(),
 }).strict();
 const PayoutCancelBody = z.object({ payout_id: z.string().uuid() }).strict();
@@ -366,10 +367,12 @@ export function createMore(d: MoreDeps) {
         ? `${demoLimit(currency)}. ${formatMoney(Math.max(0, left), currency)} left today. Connect your PayPal to send more.`
         : `Payouts stop at ${formatMoney(cap, currency)} a day. ${formatMoney(Math.max(0, left), currency)} left today.`)];
     }
+    const note = ask.note ? clean(ask.note).slice(0, 100) : '';
+    const what = note ? `${money} for ${note}` : money;
     return [actionChip('payout', `Send ${money} · ${name}`,
-      { recipient_name: name, recipient_email: email, amount: centsToValue(cents), currency },
+      { recipient_name: name, recipient_email: email, amount: centsToValue(cents), currency, ...(note ? { note } : {}) },
       { confirm_recipient: email, confirm_amount: centsToValue(cents), confirm_currency: currency },
-      demo ? `Send ${name} (${email}) ${money} from the demo PayPal? ${demoLimit(currency)}.` : `Send ${name} (${email}) ${money} from your PayPal?`)];
+      demo ? `Send ${name} (${email}) ${what} from the demo PayPal? ${demoLimit(currency)}.` : `Send ${name} (${email}) ${what} from your PayPal?`)];
   }
 
   async function payout(c: Context<Env>) {
@@ -388,7 +391,7 @@ export function createMore(d: MoreDeps) {
     const pp = d.paypal.forAccount(userId, account);
     let sent: { batchId: string; status: string };
     try {
-      sent = await pp.createPayout({ email: b.recipient_email, value: centsToValue(b.amount), currency: b.currency, note: `Payment from ${db.getProfile(userId)?.business_name ?? 'your client'}` }, idemKey(c));
+      sent = await pp.createPayout({ email: b.recipient_email, value: centsToValue(b.amount), currency: b.currency, note: b.note ?? `Payment from ${db.getProfile(userId)?.business_name ?? 'your client'}` }, idemKey(c));
     } catch (e) {
       // Only a clear PayPal refusal (4xx) means no money left. A timeout or a 5xx may have sent it: the row stays
       // UNKNOWN and keeps counting toward the cap.

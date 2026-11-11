@@ -178,7 +178,7 @@ final class MoreActionTests: XCTestCase {
         for text in ["I can offer 2 slots", "that's my claim to fame"] {
             XCTAssertFalse(SuggestPolicy.hasMoneySignal(text), text)
         }
-        for text in ["offer sam $20 back", "accept sam's claim in the dispute"] {
+        for text in ["offer sam $20 back", "accept sam's claim in the dispute", "accept sam's claim", "accept the claim from sam"] {
             XCTAssertTrue(SuggestPolicy.hasMoneySignal(text), text)
         }
     }

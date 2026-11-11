@@ -383,30 +383,40 @@ export function detectLookup(text: string, now: number): Lookup | null {
 const NOT_A_NAME = new Set([
   'me', 'you', 'a', 'an', 'the', 'them', 'it', 'him', 'her', 'us', 'back', 'over', 'out', 'to', 'my', 'your', 'this', 'that', 'money', 'now', 'later', 'for',
 ]);
+// A time or date word in a payout sentence makes it chat or a plan, never a payout to send now.
+const TIME_WORD = /\b(?:today|tonight|tomorrow|yesterday|now|later|soon|next|last|this|every|daily|weekly|monthly|yearly|morning|afternoon|evening|night|noon|midnight|week|weekend|month|year|am|pm|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|\d\s?(?:am|pm)\b|\d:\d/i;
 const PAY_ROLE = String.raw`(?:my\s+(?:supplier|vendor|contractor|freelancer|assistant|cleaner|landlord|staff|guy)\s+)?`;
-const PAY_NAME = String.raw`(?<name>\p{L}[\p{L}'’-]*)`;
+// One or two name words: "joe", "joe smith".
+const PAY_NAME = String.raw`(?<name>\p{L}[\p{L}'’-]*(?:\s+\p{L}[\p{L}'’-]*)?)`;
 // One money token: "$200", "200 usd", "usd 200", "€45.50". quick() then checks it is one real amount with a currency.
 const PAY_MONEY = String.raw`(?:(?:usd|eur|gbp|cad|aud)\s?)?\S*\d\S*(?:\s(?:usd|eur|gbp|cad|aud|dollars?|bucks|euros?))?`;
 const PAY_EMAIL = String.raw`(?:\s+\S+@\S+)?`;
+// "... for tiles": the reason becomes the payout note. An email may sit before or after it.
+const PAY_TAIL = String.raw`${PAY_EMAIL}(?:\s+for\s+(?<reason>[^@]+?))?${PAY_EMAIL}[.!]?$`;
 // The whole sentence is the payout and nothing else, so a time, a date or an address word never reads as one.
 const PAYOUT_SHAPES = [
-  new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_ROLE}${PAY_NAME}\s+${PAY_MONEY}${PAY_EMAIL}[.!]?$`, 'iu'),
-  new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_MONEY}\s+to\s+${PAY_ROLE}${PAY_NAME}${PAY_EMAIL}[.!]?$`, 'iu'),
+  new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_ROLE}${PAY_NAME}\s+${PAY_MONEY}${PAY_TAIL}`, 'iu'),
+  new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_MONEY}\s+to\s+${PAY_ROLE}${PAY_NAME}${PAY_TAIL}`, 'iu'),
 ];
 // A request for the client to pay, not a payment to someone.
 const NOT_PAYOUT = /\b(?:invoice|bill|link|reminder|receipt|quote|request)\b/i;
 
-export type PayoutAsk = { name: string; amount: number; currency: string | null; email: string | null };
+export type PayoutAsk = { name: string; amount: number; currency: string | null; email: string | null; note: string | null };
 
-/** "pay joe $200", "send my supplier joe $200 joe@x.com", "send $200 to joe". Null when the sentence is not exactly a payout with one amount. */
+/**
+ * "pay joe $200", "pay joe smith $200 for tiles", "send my supplier joe $200 joe@x.com", "send $200 to joe for tiles".
+ * Null when the sentence is not exactly a payout with one amount, or has a time or date word.
+ */
 export function payoutAsk(text: string): PayoutAsk | null {
   const s = lastSentence(text);
-  if (NOT_PAYOUT.test(s) || amountsIn(s).length === 0) return null;
-  const raw = PAYOUT_SHAPES.map((re) => s.match(re)?.groups?.name).find(Boolean);
-  if (!raw || NOT_A_NAME.has(raw.toLowerCase())) return null;
+  if (NOT_PAYOUT.test(s) || TIME_WORD.test(s.replace(EMAIL, ' ')) || amountsIn(s).length === 0) return null;
+  const g = PAYOUT_SHAPES.map((re) => s.match(re)?.groups).find((x) => x?.name);
+  const words = g?.name.split(/\s+/) ?? [];
+  if (!words.length || words.some((w) => NOT_A_NAME.has(w.toLowerCase()))) return null;
   const q = quick(s);
   if (q.amount === null) return null;
-  return { name: raw[0].toUpperCase() + raw.slice(1).toLowerCase(), amount: q.amount, currency: q.currency, email: q.email };
+  const name = words.map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+  return { name, amount: q.amount, currency: q.currency, email: q.email, note: g?.reason?.trim() || null };
 }
 
 // Repeat bills (PayPal subscriptions). Pause and resume are clear verbs alone; stop, end and cancel need a plan word,

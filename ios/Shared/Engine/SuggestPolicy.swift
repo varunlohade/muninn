@@ -86,8 +86,10 @@ struct SuggestPolicy {
         let priceShape = #"\b\d+(?:[.,]\d+)*\s+for\b|\b(?:do|for)\s+\d"#
         let word = #"\b(?:invoic\w*|bill\w*|pay\w*|paid|owe[sd]?|owing|refund\w*|remind\w*|link|price[sd]?|pricing|cost\w*|charge[sd]?|how much|rates?|quote|fees?|total|due|overdue|late|money|cash|deposit|balance|receipt|venmo|paypal|transfer|tip|reimburse\w*|available|availability|services?|products?|menu|catalog\w*|in stock|sell|buy|plans?|subscriptions?|pause\w*|resume|restart|suspend\w*|disputes?)\b"#
         // "offer" and "claim" alone are chat ("I can offer 2 slots"); with an amount or "dispute" the lines above already match.
+        // "accept sam's claim" names no amount, so accept with claim is its own signal. The server still checks the client.
+        let acceptClaim = #"\baccept\b.*\bclaim\b"#
         let otherScript = #"[^\P{L}A-Za-z]"#
-        return text.range(of: [amount, priceShape, word, otherScript].joined(separator: "|"),
+        return text.range(of: [amount, priceShape, word, acceptClaim, otherScript].joined(separator: "|"),
                           options: [.regularExpression, .caseInsensitive]) != nil
     }
 

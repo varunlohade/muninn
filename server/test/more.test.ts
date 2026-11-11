@@ -23,10 +23,17 @@ test('copy: "pay joe $200" is a payout phrase, never a pay link, and costs no mo
 });
 
 test('copy: payoutAsk reads name, amount and typed email; requests to be paid are not payouts', () => {
-  assert.deepEqual(payoutAsk('pay my supplier joe $200 joe@x.com'), { name: 'Joe', amount: 200, currency: null, email: 'joe@x.com' });
-  assert.deepEqual(payoutAsk('send $200 to joe'), { name: 'Joe', amount: 200, currency: null, email: null });
+  assert.deepEqual(payoutAsk('pay my supplier joe $200 joe@x.com'), { name: 'Joe', amount: 200, currency: null, email: 'joe@x.com', note: null });
+  assert.deepEqual(payoutAsk('send $200 to joe'), { name: 'Joe', amount: 200, currency: null, email: null, note: null });
   for (const t of ['pay me $45', 'send sam a $45 invoice', 'send you the $45 link', 'pay joe', 'can you pay $45 by friday']) assert.equal(payoutAsk(t), null, t);
-  assert.deepEqual(payoutAsk('pay my staff ana 60 usd'), { name: 'Ana', amount: 60, currency: 'USD', email: null });
+  assert.deepEqual(payoutAsk('pay my staff ana 60 usd'), { name: 'Ana', amount: 60, currency: 'USD', email: null, note: null });
+  assert.deepEqual(payoutAsk('pay joe smith $200'), { name: 'Joe Smith', amount: 200, currency: null, email: null, note: null });
+  assert.deepEqual(payoutAsk('send $200 to joe for tiles'), { name: 'Joe', amount: 200, currency: null, email: null, note: 'tiles' });
+  assert.deepEqual(payoutAsk('pay joe $200 for tiles joe@x.com'), { name: 'Joe', amount: 200, currency: null, email: 'joe@x.com', note: 'tiles' });
+  assert.deepEqual(payoutAsk('send $200 to joe smith joe@x.com for the grout'), { name: 'Joe Smith', amount: 200, currency: null, email: 'joe@x.com', note: 'the grout' });
+  for (const t of ['pay joe $200 for tiles tomorrow', 'pay joe $200 for friday', 'send $200 to joe for 3 tiles', 'pay joe $200 at 5pm', 'pay joe smith $200 on monday']) {
+    assert.equal(payoutAsk(t), null, t);
+  }
 });
 
 test('payouts: ordinary chat is never a payout and never ends suggest', async () => {
@@ -404,6 +411,17 @@ test('payouts: the email never comes from copied client text; records give it on
   assert.equal(two.label, 'Joe has 2 emails on file');
 });
 
+test('payouts: a two-word name and "for <reason>": the reason is in the confirm and becomes the PayPal note', async () => {
+  const s = setup();
+  const { token } = s.device();
+  const [ch] = (await suggest(s, token, 'send $40 to joe smith joe@x.com for tiles')).chips;
+  assert.equal(ch.label, 'Send $40 · Joe Smith');
+  assert.equal(ch.payload.body.note, 'tiles');
+  assert.match(ch.payload.question, /^Send Joe Smith \(joe@x\.com\) \$40 for tiles from the demo PayPal\?/);
+  assert.equal((await send(s, token, '/v1/actions/payout', confirmed(ch), 'payout-note-0001')).status, 200);
+  assert.equal((s.calls.find((c) => c.fn === 'payout')!.args[0] as any).note, 'tiles');
+});
+
 test('payouts: a per-day cap, held before PayPal is called; Undo cancels an unclaimed payout and frees the cap', async () => {
   const s = setup();
   const A = s.device();
@@ -607,6 +625,7 @@ test('disputes: chat with "offer" or a name never reads PayPal; an own client re
   const once = reads();
   assert.ok(once > 0);
   assert.equal((await suggest(s, A.token, "accept sam's claim")).chips[0].kind, 'dispute_accept');
+  assert.equal((await suggest(s, A.token, 'accept the claim from sam')).chips[0].kind, 'dispute_accept');
   assert.equal(reads(), once, 'the open disputes are kept for a minute');
 
   const B = s.device();
