@@ -179,13 +179,23 @@ test('ask: a repeat bill chip names the amount, interval and only a client the o
   const out = await two.ask('bill Sam $40 weekly or monthly');
   assert.equal(out.route, 'none');
   assert.match(out.result.line, /how often/);
+  // A changed interval or a fixed count gives no chip, never a wrong plan.
+  for (const t of ['bill Sam $40 bi-weekly', 'bill Sam $40 twice a month', 'bill Sam $40 monthly for 3 months']) {
+    const r = await two.ask(t);
+    assert.equal(r.route, 'none', t);
+    assert.equal(r.result.chips, undefined, t);
+  }
 });
 
 test('ask: review_ask inserts a thank-you with the review link, never an incentive; profile checks the link', async () => {
   const w = await world({ group: { group: 'writing' }, route: { route: 'review_ask' } });
   const put = (review_url: unknown) => w.s.call(w.token, 'PUT', '/v1/profile', { business_name: 'Rae', tone: 'warm', review_url });
   for (const bad of ['http://g.page/r/abc', 'https://evil.test/review', 'https://google.com.evil.test/x', 'https://user:pw@g.page/r/x',
-    'https://g.page:8443/r/x', 'javascript:alert(1)', 'g.page/r/abc', 'https://' + 'a'.repeat(500) + '.google.com']) {
+    'https://g.page:8443/r/x', 'javascript:alert(1)', 'g.page/r/abc', 'https://' + 'a'.repeat(500) + '.google.com',
+    'https://www.google.com/url?q=https://evil.test', 'https://sites.google.com/view/evil', 'https://docs.google.com/forms/d/x',
+    'https://www.google.com/maps/place/x', 'https://g.page/r/abc/review?next=https://evil.test', 'https://g.page/r/abc', 'https://g.page/a/b/review',
+    'https://maps.app.goo.gl/abc/def', 'https://search.google.com/local/writereview?placeid=X&next=https://evil.test',
+    'https://search.google.com/local/other?placeid=X']) {
     assert.equal((await put(bad)).status, 400, bad);
   }
   const before = await w.ask('ask Ana for a review');
@@ -199,14 +209,14 @@ test('ask: review_ask inserts a thank-you with the review link, never an incenti
   assert.doesNotMatch(out.result.text, /discount|free|off|coupon|reward|gift|\$|%/i);
   assert.deepEqual(w.s.aiCalls.map((c) => c.fn), ['askGroup', 'askRoute', 'askGroup', 'askRoute']);
 
-  for (const ok of ['https://search.google.com/local/writereview?placeid=X', 'https://maps.app.goo.gl/abc', 'https://www.google.com/maps/place/x']) {
+  for (const ok of ['https://search.google.com/local/writereview?placeid=X', 'https://maps.app.goo.gl/abc', 'https://g.page/rae-salon/review']) {
     assert.equal((await put(ok)).status, 200, ok);
   }
   const integ = async () => Object.fromEntries((await (await w.s.call(w.token, 'GET', '/v1/integrations')).json() as any).integrations.map((i: any) => [i.id, i.status]));
   assert.equal((await integ()).google_reviews, 'connected');
   // A profile save that leaves the link out keeps it; null clears it.
   assert.equal((await w.s.call(w.token, 'PUT', '/v1/profile', { business_name: 'Rae', tone: 'warm' })).status, 200);
-  assert.equal(((await (await w.s.call(w.token, 'GET', '/v1/profile')).json()) as any).profile.review_url, 'https://www.google.com/maps/place/x');
+  assert.equal(((await (await w.s.call(w.token, 'GET', '/v1/profile')).json()) as any).profile.review_url, 'https://g.page/rae-salon/review');
   assert.equal((await put(null)).status, 200);
   assert.equal((await integ()).google_reviews, 'not_connected');
 });
