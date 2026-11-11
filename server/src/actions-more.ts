@@ -11,9 +11,9 @@ import type { Chip, Env } from './app.ts';
 import type { createBusiness } from './business.ts';
 import type { Db, InvoiceRow, SubscriptionRow } from './db.ts';
 import { log } from './log.ts';
-import { Amount, Currency, centsToValue, formatMoney } from './money.ts';
-import type { PayPalProvider } from './paypal.ts';
-import { invoiceVerb, mentions, payoutAsk, planVerb, quick, type InvoiceVerb, type PlanVerb } from './quick.ts';
+import { Amount, Currency, centsToValue, formatMoney, valueToCents } from './money.ts';
+import { PayPalError, type PayPalProvider } from './paypal.ts';
+import { balanceAsk, invoiceVerb, mentions, payoutAsk, planVerb, quick, type InvoiceVerb, type PlanVerb } from './quick.ts';
 import { clean } from './text.ts';
 
 export type MoreDeps = {
@@ -266,10 +266,32 @@ export function createMore(d: MoreDeps) {
     return c.json({ ok: true, invoice_id: r.id, status, line: 'Refund recorded ✓', undo: null });
   }
 
+  // ---- balance: read-only, for the bar. Never typed into the chat.
+  /** "$1,240.50": the bar shows a balance with thousands marks. */
+  const big = (cents: number, currency: string) => formatMoney(cents, currency).replace(/\d+(?=\.|$)/, (n) => Number(n).toLocaleString('en-US'));
+
+  async function balanceLine(userId: string): Promise<string> {
+    try {
+      const all = await d.paypal.forUser(userId).getBalances();
+      const shown = [...all].sort((a, b) => Number(b.primary) - Number(a.primary))
+        .map((b) => ({ cents: valueToCents(b.available), currency: b.currency }))
+        .filter((b): b is { cents: number; currency: string } => b.cents !== null && (b.cents !== 0 || all.length === 1));
+      if (shown.length) return `PayPal balance ${shown.slice(0, 3).map((b) => big(b.cents, b.currency)).join(' · ')}`;
+    } catch (e) {
+      // The balance read needs a permission some accounts (and the sandbox) may not grant. Fall back to this week's net.
+      if (!(e instanceof PayPalError)) throw e;
+      log('balance_failed', { user_id: userId, err: e.message });
+    }
+    const net = Object.entries((await d.biz.summary(userId)).net_this_week);
+    const money = net.map(([c, v]) => big(valueToCents(v) ?? 0, c)).join(' · ');
+    return money ? `PayPal didn't share the balance. Net this week ${money}` : "PayPal didn't share the balance. Nothing came in this week.";
+  }
+
   /** The chips for a more-verb, or null when the text is not one. No paid call. */
   async function suggest(userId: string, text: string): Promise<Chip[] | null> {
     // "pay joe $200" is a payout, never a pay link. Until payouts ship it gets no chip.
     if (payoutAsk(text)) return [];
+    if (balanceAsk(text)) return [chip('balance', 'Balance', {}, false)];
     const plan = planVerb(text);
     if (plan) {
       const out = planChips(userId, text, plan);
@@ -291,6 +313,7 @@ export function createMore(d: MoreDeps) {
     app.post('/v1/actions/invoice/unmark-paid', unmarkPaid);
     app.post('/v1/actions/invoice/cancel', cancelInvoice);
     app.post('/v1/actions/invoice/record-refund', recordRefund);
+    app.get('/v1/balance', async (c) => c.json({ line: await balanceLine(userOf(c)) }));
     // Read-only: one repeat bill as PayPal sees it now.
     app.get('/v1/plans/:id', async (c) => {
       const userId = userOf(c);

@@ -238,6 +238,10 @@ export function planVerb(text: string): PlanVerb | null {
   return null;
 }
 
+// "how much do I have", "my balance", "what's my PayPal balance". The whole sentence, so "your balance is $45" to a client is not one.
+const BALANCE = /^(?:(?:what'?s|what is|check|show(?: me)?)\s+)?(?:my\s+|the\s+)?(?:paypal\s+)?balance\??$|^how much (?:money )?(?:do i have|have i got|is in (?:my )?paypal)\b/i;
+export const balanceAsk = (text: string) => BALANCE.test(lastSentence(text));
+
 // Money that moved outside PayPal, and invoices the owner calls off. PayPal's payment method names.
 const METHOD: [RegExp, string, string][] = [
   [/\bcash\b/i, 'CASH', 'cash'], [/\b(?:check|cheque)\b/i, 'CHECK', 'check'], [/\bwire\b/i, 'WIRE_TRANSFER', 'wire'],

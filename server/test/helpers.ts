@@ -6,7 +6,7 @@ import type { Ai, Classification, DeviceAction, Extraction, ToneCheck } from '..
 import type { AskGroup, AskRoute } from '../src/config.ts';
 import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
-import type { PayPal, PayPalDispute, PayPalDisputeDetail, PayPalTxn } from '../src/paypal.ts';
+import type { Balance, PayPal, PayPalDispute, PayPalDisputeDetail, PayPalTxn } from '../src/paypal.ts';
 
 export const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
@@ -18,6 +18,8 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
   let n = 0;
   // What PayPal says each subscription is now. Unset means ACTIVE.
   const subStatus = new Map<string, string>();
+  // What the balance read answers: the balances, or an error such as a sandbox that refuses it.
+  const balance: { reply: Balance[] | Error } = { reply: [{ currency: 'USD', available: '1240.50', primary: true }] };
   const pp: PayPal = {
     async createAndSendInvoice(...args) {
       calls.push({ fn: 'invoice', args });
@@ -58,6 +60,11 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     async deleteRecordedPayment(...args) { calls.push({ fn: 'delete_payment', args }); },
     async cancelInvoice(...args) { calls.push({ fn: 'cancel_invoice', args }); },
     async recordRefund(...args) { calls.push({ fn: 'record_refund', args }); return { refundId: `RFX-${++n}` }; },
+    async getBalances() {
+      calls.push({ fn: 'balances', args: [] });
+      if (balance.reply instanceof Error) throw balance.reply;
+      return balance.reply;
+    },
   };
   // PayPal data per user, standing in for each user's own connected merchant account.
   const ppData = new Map<string, { txns?: PayPalTxn[] | Error; disputes?: PayPalDisputeDetail[] }>();
@@ -124,7 +131,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  return { db, cipher, app, calls, aiCalls, device, call, ppData, mockPayPal: pp, subStatus };
+  return { db, cipher, app, calls, aiCalls, device, call, ppData, mockPayPal: pp, subStatus, balance };
 }
 
 export const webhookHeaders = {

@@ -134,6 +134,18 @@ final class MoreActionTests: XCTestCase {
         XCTAssertEqual(model.bar, .done("Ana $40/mo \u{00B7} active"))
     }
 
+    func testBalanceReadsOnTapAndStaysInTheBar() async {
+        host.text = "how much do I have"
+        api.readReply = MoreResponse(line: "PayPal balance $1,240.50", undo: nil)
+        model.tapChip(Chip(kind: "balance", label: "Balance", payload: [:], needs_confirm: false))
+        XCTAssertEqual(titles(), ["Checking balance\u{2026}"])
+        await settled()
+        XCTAssertEqual(api.calls, ["read:balance"])
+        XCTAssertEqual(model.bar, .done("PayPal balance $1,240.50"))
+        XCTAssertEqual(host.text, "how much do I have", "a balance never goes into the chat")
+        XCTAssertNil(store.pendingAction, "a read keeps no pending call")
+    }
+
     func testPlanWordsReachTheServer() {
         for text in ["pause ana's plan", "what plans do I have", "restart ana"] {
             XCTAssertTrue(SuggestPolicy.hasMoneySignal(text), text)

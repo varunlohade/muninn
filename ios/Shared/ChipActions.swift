@@ -55,7 +55,7 @@ enum ChipActions {
     ]
     /// What the bar says while each of them runs.
     static let working = [
-        "plan_pause": "Pausing\u{2026}", "plan_resume": "Restarting\u{2026}", "plan_cancel": "Ending\u{2026}", "plan_status": "Checking\u{2026}",
+        "plan_pause": "Pausing\u{2026}", "plan_resume": "Restarting\u{2026}", "plan_cancel": "Ending\u{2026}", "plan_status": "Checking\u{2026}", "balance": "Checking balance\u{2026}",
         "invoice_mark_paid": "Marking paid\u{2026}", "invoice_unmark": "Taking it back\u{2026}", "invoice_cancel": "Cancelling invoice\u{2026}",
         "invoice_refund": "Recording refund\u{2026}",
     ]
@@ -169,6 +169,8 @@ enum ChipActions {
             return res.undo.map { .undoable(res.line, undo: $0) } ?? .line(res.line)
         case "show":
             return .line(string(chip, "line") ?? chip.label)
+        case "balance":
+            return .line(try await call { try await api.moreRead("balance") }.line)
         case "plan_status":
             guard let id = string(chip, "id") else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
             return .line(try await call { try await api.moreRead("plans/" + id) }.line)

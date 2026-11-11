@@ -29,7 +29,10 @@ export type PayPal = {
   cancelInvoice(id: string, notify: boolean, requestId: string): Promise<void>;
   /** Notes a refund that happened outside PayPal. No money moves. */
   recordRefund(id: string, r: { date: string; value: string; currency: string; method: string }, requestId: string): Promise<{ refundId: string }>;
+  /** Every currency the account holds. Read-only. */
+  getBalances(): Promise<Balance[]>;
 };
+export type Balance = { currency: string; available: string; primary: boolean };
 export type SubscriptionState = { status: string; nextBillingAt: string | null; lastPaidAt: string | null };
 // Explicit dates and a reference tag; sent without emailing the recipient. Used by the demo seed.
 // invoiceNumber is unique per merchant, so a re-run finds the invoice a crashed run left behind instead of making a second one.
@@ -335,6 +338,13 @@ function createClient(creds: Creds): PayPal {
         method: r.method, refund_date: r.date, amount: { currency_code: r.currency, value: r.value },
       }, requestId);
       return { refundId: String(out?.refund_id ?? '') };
+    },
+
+    async getBalances() {
+      const r = await rest('GET', '/v1/reporting/balances');
+      return (r?.balances ?? []).filter((b: any) => b?.currency && b?.available_balance?.value != null).map((b: any) => ({
+        currency: String(b.currency), available: String(b.available_balance.value), primary: !!b.primary,
+      }));
     },
 
     async sendDisputeMessage(id, message, requestId) {

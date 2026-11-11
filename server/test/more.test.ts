@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { payoutAsk } from '../src/quick.ts';
+import { PayPalError } from '../src/paypal.ts';
 import { paidEvent, setup, webhookHeaders } from './helpers.ts';
 
 const suggest = async (s: ReturnType<typeof setup>, token: string, text: string, context?: string) =>
@@ -247,4 +248,39 @@ test('invoices: record a refund only on a payment made outside PayPal, never mor
   assert.equal(s.db.getInvoice(userId, cash)!.status, 'MARKED_AS_REFUNDED');
   assert.equal(s.calls.filter((c) => c.fn === 'record_refund').length, 2);
   assert.equal(s.calls.filter((c) => c.fn === 'refund').length, 0, 'no PayPal money moved');
+});
+
+// ---- step 3: balance
+
+test('balance: one chip for the owner asking, none for a client message; the read never touches the chat', async () => {
+  const s = setup({ cls: { intent: 'none' } });
+  const { token } = s.device();
+  for (const text of ['how much do I have', "what's my PayPal balance?", 'balance']) {
+    const [ch] = (await suggest(s, token, text)).chips;
+    assert.equal(ch.kind, 'balance', text);
+    assert.equal(ch.label, 'Balance');
+  }
+  assert.equal(s.calls.some((c) => c.fn === 'balances'), false, 'suggest only offers it; the tap reads it');
+  assert.equal(s.aiCalls.length, 0, 'no model call');
+  assert.equal((await suggest(s, token, 'your balance is $45')).chips.some((c) => c.kind === 'balance'), false);
+
+  const read = await (await s.call(token, 'GET', '/v1/balance')).json();
+  assert.equal(read.line, 'PayPal balance $1,240.50');
+  s.balance.reply = [{ currency: 'EUR', available: '0.00', primary: false }, { currency: 'USD', available: '12.00', primary: true }];
+  assert.equal((await (await s.call(token, 'GET', '/v1/balance')).json()).line, 'PayPal balance $12', 'empty currencies are left out');
+});
+
+test('balance: a sandbox that refuses the read falls back to net this week', async () => {
+  const s = setup();
+  const A = s.device();
+  s.balance.reply = new PayPalError('PayPal GET /v1/reporting failed (403): NOT_AUTHORIZED', 502, 403);
+  s.ppData.set(A.userId, { txns: [{
+    id: 'T1', event_code: 'T0006', date: new Date().toISOString(), status: 'S', amount: { value: '1245.00', currency: 'USD' },
+    fee: { value: '-1.60', currency: 'USD' }, payer_name: 'Sam', payer_email: null, invoice_id: null, subject: null,
+  }] });
+  const read = await s.call(A.token, 'GET', '/v1/balance');
+  assert.equal(read.status, 200);
+  assert.equal((await read.json()).line, "PayPal didn't share the balance. Net this week $1,243.40");
+  const B = s.device();
+  assert.equal((await (await s.call(B.token, 'GET', '/v1/balance')).json()).line, "PayPal didn't share the balance. Nothing came in this week.");
 });
