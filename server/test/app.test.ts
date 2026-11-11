@@ -55,8 +55,8 @@ test('suggest: invoice chip from text, no auto-run, low confidence gives no chip
   const r = await (await s.call(token, 'POST', '/v1/suggest', { text: "thanks! that'll be $45 for the haircut, sam@example.com" })).json();
   assert.equal(r.chips[0].kind, 'invoice');
   assert.equal(r.chips[0].label, 'Invoice $45 · Haircut → sam@example.com');
-  assert.equal(r.chips[0].needs_confirm, false);
-  assert.deepEqual(r.chips[0].payload, { amount: '45.00', currency: 'USD', item: 'Haircut', client_name: 'Sam', client_email: 'sam@example.com', confirm_recipient: 'sam@example.com' });
+  assert.equal(r.chips[0].needs_confirm, true);
+  assert.deepEqual(r.chips[0].payload, { amount: '45.00', currency: 'USD', item: 'Haircut', client_name: 'Sam', client_email: 'sam@example.com' });
   assert.ok(typeof r.timings.total_ms === 'number');
   assert.equal(s.calls.length, 0);
 
@@ -87,7 +87,7 @@ test('extraction parsing: fences, "null" strings, string numbers', () => {
 test('storage: client name and email are ciphertext in SQLite', async () => {
   const { call, db, device } = setup();
   const { token } = device();
-  await call(token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', client_name: 'Sam Lee', client_email: 'sam@example.com', confirm_recipient: 'sam@example.com' });
+  await call(token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', client_name: 'Sam Lee', client_email: 'sam@example.com', confirm_recipient: 'sam@example.com', confirm_amount: 45 });
   const row = db.raw.prepare('SELECT * FROM invoices').get() as Record<string, unknown>;
   assert.ok(String(row.client_email_enc).startsWith('v1:'));
   assert.ok(!JSON.stringify(row).includes('sam@example.com'));
