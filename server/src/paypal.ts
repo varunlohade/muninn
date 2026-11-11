@@ -20,7 +20,11 @@ export type PayPal = {
   createDatedInvoice(i: DatedInvoiceInput, requestId: string): Promise<{ id: string; status: string; payLink: string; dueDate: string }>;
   recordPayment(id: string, p: { date: string; value: string; currency: string; method: string; note: string }, requestId: string): Promise<{ paymentId: string }>;
   warmUp(): Promise<void>;
+  getSubscription(id: string): Promise<SubscriptionState>;
+  /** suspend = pause, activate = resume, cancel = end for good. */
+  changeSubscription(id: string, to: 'suspend' | 'activate' | 'cancel', reason: string, requestId: string): Promise<void>;
 };
+export type SubscriptionState = { status: string; nextBillingAt: string | null; lastPaidAt: string | null };
 // Explicit dates and a reference tag; sent without emailing the recipient. Used by the demo seed.
 // invoiceNumber is unique per merchant, so a re-run finds the invoice a crashed run left behind instead of making a second one.
 export type DatedInvoiceInput = InvoiceInput & { invoiceDate: string; dueDate: string; reference: string; invoiceNumber: string };
@@ -298,6 +302,18 @@ function createClient(creds: Creds): PayPal {
         method: p.method, payment_date: p.date, note: p.note, amount: { currency_code: p.currency, value: p.value },
       }, requestId);
       return { paymentId: String(r?.payment_id ?? '') };
+    },
+
+    async getSubscription(id) {
+      const s = await rest('GET', `/v1/billing/subscriptions/${encodeURIComponent(id)}`);
+      return {
+        status: String(s?.status ?? 'UNKNOWN'), nextBillingAt: s?.billing_info?.next_billing_time ?? null,
+        lastPaidAt: s?.billing_info?.last_payment?.time ?? null,
+      };
+    },
+
+    async changeSubscription(id, to, reason, requestId) {
+      await rest('POST', `/v1/billing/subscriptions/${encodeURIComponent(id)}/${to}`, { reason: reason.slice(0, 127) }, requestId);
     },
 
     async sendDisputeMessage(id, message, requestId) {

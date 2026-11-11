@@ -53,6 +53,8 @@ enum BarState: Equatable {
     case error(String)
     /// A money call a check never found: a tap sends the same chip again with its same key.
     case retry(Chip, confirmed: String?)
+    /// Done, with Undo beside it: "Paused ✓ · Undo". `undo` runs the reverse.
+    case undoable(String, undo: Chip)
 }
 
 /// The one-tap rewrites in the Refine panel. The raw value is the server's tone name.
@@ -379,6 +381,8 @@ final class KeyboardModel: ObservableObject {
                     self.startPolling()
                 case .line(let text):
                     self.bar = .done(text)
+                case .undoable(let text, let undo):
+                    self.bar = .undoable(text, undo: undo)
                 case .insert, .ask:
                     break
                 }
@@ -1030,6 +1034,8 @@ final class KeyboardModel: ObservableObject {
                     self.bar = .done(text)
                 case .ask(let question, let next):
                     self.bar = .ask(next, question: question)
+                case .undoable(let text, let undo):
+                    self.bar = .undoable(text, undo: undo)
                 }
             } catch is CancellationError {
             } catch let e as URLError where e.code == .cancelled {
@@ -1057,7 +1063,7 @@ final class KeyboardModel: ObservableObject {
         case "refund": chip.payload["confirm_token"] == nil ? "Checking refund\u{2026}" : "Refunding\u{2026}"
         case "payments": "Checking who owes you\u{2026}"
         case "reply": "Writing reply\u{2026}"
-        default: "One moment\u{2026}"
+        default: ChipActions.working[chip.kind] ?? "One moment\u{2026}"
         }
     }
 

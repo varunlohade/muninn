@@ -16,6 +16,8 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
   const calls: { fn: string; args: unknown[] }[] = [];
   const aiCalls: { fn: string; args: unknown[] }[] = [];
   let n = 0;
+  // What PayPal says each subscription is now. Unset means ACTIVE.
+  const subStatus = new Map<string, string>();
   const pp: PayPal = {
     async createAndSendInvoice(...args) {
       calls.push({ fn: 'invoice', args });
@@ -48,6 +50,11 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       return { id: `INV2-SEED-${++n}`, status: 'UNPAID', payLink: `https://paypal.test/inv/${n}`, dueDate: args[0].dueDate };
     },
     async recordPayment(...args) { calls.push({ fn: 'record_payment', args }); return { paymentId: `EXTR-${++n}` }; },
+    async getSubscription(id) { calls.push({ fn: 'get_subscription', args: [id] }); return { status: subStatus.get(id) ?? 'ACTIVE', nextBillingAt: '2026-12-01T10:00:00Z', lastPaidAt: null }; },
+    async changeSubscription(...args) {
+      calls.push({ fn: 'change_subscription', args });
+      subStatus.set(args[0], { suspend: 'SUSPENDED', activate: 'ACTIVE', cancel: 'CANCELLED' }[args[1]]);
+    },
   };
   // PayPal data per user, standing in for each user's own connected merchant account.
   const ppData = new Map<string, { txns?: PayPalTxn[] | Error; disputes?: PayPalDisputeDetail[] }>();
@@ -114,7 +121,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  return { db, cipher, app, calls, aiCalls, device, call, ppData, mockPayPal: pp };
+  return { db, cipher, app, calls, aiCalls, device, call, ppData, mockPayPal: pp, subStatus };
 }
 
 export const webhookHeaders = {

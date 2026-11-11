@@ -71,7 +71,7 @@ struct SuggestPolicy {
     static func hasMoneySignal(_ text: String) -> Bool {
         let amount = #"[$€£]\s?\d|\d\s?[$€£]|\d(?:[.,]\d{1,2})?\s?(?:usd|eur|gbp|cad|aud|dollars?|bucks|euros?|pounds?)\b"#
         let priceShape = #"\b\d+(?:[.,]\d+)*\s+for\b|\b(?:do|for)\s+\d"#
-        let word = #"\b(?:invoic\w*|bill\w*|pay\w*|paid|owe[sd]?|owing|refund\w*|remind\w*|link|price[sd]?|pricing|cost\w*|charge[sd]?|how much|rates?|quote|fees?|total|due|overdue|late|money|cash|deposit|balance|receipt|venmo|paypal|transfer|tip|reimburse\w*|available|availability|services?|products?|menu|catalog\w*|in stock|sell|buy)\b"#
+        let word = #"\b(?:invoic\w*|bill\w*|pay\w*|paid|owe[sd]?|owing|refund\w*|remind\w*|link|price[sd]?|pricing|cost\w*|charge[sd]?|how much|rates?|quote|fees?|total|due|overdue|late|money|cash|deposit|balance|receipt|venmo|paypal|transfer|tip|reimburse\w*|available|availability|services?|products?|menu|catalog\w*|in stock|sell|buy|plans?|subscriptions?|pause\w*|resume|restart|suspend\w*)\b"#
         let otherScript = #"[^\P{L}A-Za-z]"#
         return text.range(of: [amount, priceShape, word, otherScript].joined(separator: "|"),
                           options: [.regularExpression, .caseInsensitive]) != nil

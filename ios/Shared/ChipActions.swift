@@ -35,6 +35,8 @@ enum ChipOutcome: Equatable {
     case line(String)
     /// The server wants one more tap. `chip` does the second step.
     case ask(String, chip: Chip)
+    /// Done, and PayPal can undo it: the line, then an Undo chip.
+    case undoable(String, undo: Chip)
 }
 
 /// One place that runs a chip's action, for the keyboard and the app's Ask bar.
@@ -44,8 +46,17 @@ enum ChipActions {
     static let retryDelay: Duration = .milliseconds(1200)
     static let inProgressDelay: Duration = .seconds(2)
     static let inProgressTries = 3
+    /// The PayPal actions that share one shape (server/src/actions-more.ts): kind → route under /v1/actions/.
+    /// The chip's payload is {body, confirm, question}; the server answers {line, undo}.
+    static let moreActions = [
+        "plan_pause": "plan/pause", "plan_resume": "plan/resume", "plan_cancel": "plan/cancel",
+    ]
+    /// What the bar says while each of them runs.
+    static let working = [
+        "plan_pause": "Pausing\u{2026}", "plan_resume": "Restarting\u{2026}", "plan_cancel": "Ending\u{2026}", "plan_status": "Checking\u{2026}",
+    ]
     /// Chips whose call moves money or messages a client. Only these keep a key and a pending call.
-    static let sendsMoney: Set = ["invoice", "paylink", "subscribe", "remind", "refund"]
+    static let sendsMoney = Set(["invoice", "paylink", "subscribe", "remind", "refund"]).union(moreActions.keys)
     private static let networkFailures: Set<URLError.Code> = [
         .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
     ]
@@ -146,6 +157,17 @@ enum ChipActions {
             guard let token = res.confirm_token else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
             let question = res.summary ?? chip.label
             return .ask(question, chip: Chip(kind: "refund", label: question, payload: ["confirm_token": .string(token)], needs_confirm: false))
+        case let kind where moreActions[kind] != nil:
+            var body = object(chip, "body")
+            // The confirm tap showed these values; the server checks each one against its own records.
+            if confirmed != nil { body.merge(object(chip, "confirm")) { _, shown in shown } }
+            let res = try await call { try await api.more(moreActions[kind]!, body, key: key, lookup: lookup) }
+            return res.undo.map { .undoable(res.line, undo: $0) } ?? .line(res.line)
+        case "show":
+            return .line(string(chip, "line") ?? chip.label)
+        case "plan_status":
+            guard let id = string(chip, "id") else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
+            return .line(try await call { try await api.moreRead("plans/" + id) }.line)
         case "payments":
             return .line(KeyboardModel.lateLine(try await call { try await api.payments() }))
         case "reply":
@@ -154,6 +176,10 @@ enum ChipActions {
         default:
             throw APIError.message("Open \(AppConfig.displayName) for this one")
         }
+    }
+
+    private static func object(_ chip: Chip, _ key: String) -> [String: JSONValue] {
+        if case .object(let v)? = chip.payload[key] { v } else { [:] }
     }
 
     private static func string(_ chip: Chip, _ key: String) -> String? {

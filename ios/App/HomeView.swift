@@ -403,6 +403,8 @@ final class AskModel: ObservableObject {
         case idle, loading, chips([Chip]), clients([Client]), unpaid([UnpaidClient]), review(String), confirm(Chip, String), ask(Chip, String), working, result(ActionResult), line(String), error(String)
         /// A money call that may not have run and no lookup found. A tap sends it again with the same key.
         case retry(Chip, String?)
+        /// Done, and PayPal can undo it: "Paused ✓" with Undo.
+        case undoable(String, Chip)
     }
     @Published var text = ""
     @Published var state: State = .idle
@@ -523,6 +525,7 @@ final class AskModel: ObservableObject {
                 case .sent(let r): state = .result(r)
                 case .insert(let line), .line(let line): state = .line(line)
                 case .ask(let question, let next): state = .ask(next, question)
+                case .undoable(let line, let undo): state = .undoable(line, undo)
                 }
                 text = ""
             } catch APIError.needsConfirm(let r) {
@@ -672,6 +675,13 @@ struct AskBar: View {
         case .line(let line):
             Text(line).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
                 .textSelection(.enabled)
+        case .undoable(let line, let undo):
+            HStack(spacing: Theme.Space.xs) {
+                Text(line).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.paid).padding(.leading, Theme.Space.m)
+                AskChip(title: "Undo", detail: nil) { model.run(undo) }
+                    .accessibilityIdentifier("ask.undo")
+            }
+            .padding(.bottom, Theme.Space.xs)
         case .working:
             Text("Creating…").font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
         case .result(let r):

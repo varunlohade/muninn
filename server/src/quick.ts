@@ -218,3 +218,22 @@ export function payoutAsk(text: string): PayoutAsk | null {
   const q = quick(s);
   return { name: raw[0].toUpperCase() + raw.slice(1).toLowerCase(), amount: q.amount, currency: q.currency, email: q.email };
 }
+
+// Repeat bills (PayPal subscriptions). Pause and resume are clear verbs alone; stop, end and cancel need a plan word,
+// so "cancel sam's invoice" or "stop by at 3" never touch a plan.
+const PLAN_WORD = /\b(?:plans?|repeat (?:bills?|billing)|subscriptions?|monthly|weekly|yearly|membership)\b/i;
+const PLANS_LIST = /^(?:(?:what|which|show(?: me)?|list|see|any)\b.*\b(?:plans|repeat bills|subscriptions)\b|(?:my\s+)?(?:plans|repeat bills|subscriptions)\??$)/i;
+
+export type PlanVerb = 'list' | 'pause' | 'resume' | 'cancel' | 'status';
+
+/** "what plans do I have", "pause ana's plan", "restart ana's plan", "stop ana's plan for good", "how is ana's plan". */
+export function planVerb(text: string): PlanVerb | null {
+  const s = lastSentence(text);
+  if (PLANS_LIST.test(s)) return 'list';
+  if (/\b(?:pause|suspend)\b|\bon hold\b/i.test(s)) return 'pause';
+  if (/\b(?:resume|restart|unpause|reactivate)\b/i.test(s)) return 'resume';
+  if (!PLAN_WORD.test(s)) return null;
+  if (/\b(?:stop|end|cancel|kill)\b/i.test(s)) return 'cancel';
+  if (/\bstatus\b|\bhow(?:'s|\s+is)\b/i.test(s)) return 'status';
+  return null;
+}

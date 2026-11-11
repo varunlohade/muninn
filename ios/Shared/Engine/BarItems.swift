@@ -107,6 +107,9 @@ enum BarItems {
             out.append(Item(id: "cancel", title: "Cancel", action: .cancelConfirm))
         case .done(let text):
             out.append(Item(id: "done", title: text, tone: .secondary))
+        case .undoable(let text, let undo):
+            out.append(Item(id: "done", title: text, tone: .paid))
+            out.append(Item(id: "undo", title: "Undo", action: .chip(undo)))
         case .error(let text):
             out.append(Item(id: "error", title: text, tone: .due))
         case .retry(let chip, let confirmed):
@@ -157,6 +160,7 @@ enum BarItems {
     /// Every invoice, repeat bill and reminder, and a pay link the server is unsure of, takes one confirm tap before anything is sent.
     static func asksFirst(_ chip: Chip) -> Bool {
         ["invoice", "subscribe", "remind"].contains(chip.kind) || (chip.kind == "paylink" && chip.needs_confirm)
+            || (ChipActions.moreActions[chip.kind] != nil && chip.needs_confirm)
     }
 
     /// Who an invoice goes to: the email, else the client name, else nobody named. A reminder: the client it names.
@@ -164,7 +168,7 @@ enum BarItems {
         switch chip.kind {
         case "invoice", "subscribe": string(chip, "client_email") ?? string(chip, "client_name") ?? ""
         case "remind": string(chip, "client_name") ?? ""
-        default: ""
+        default: if case .object(let c)? = chip.payload["confirm"], case .string(let who)? = c["confirm_client"] ?? c["confirm_recipient"] { who } else { "" }
         }
     }
 
@@ -172,6 +176,8 @@ enum BarItems {
     /// "Make a $45 invoice link for Sam? No email goes out.", "Make a $45 pay link?", "Email Ana a reminder for $90?",
     /// "Repeat $40 monthly to Sam?". Only an invoice with an email is sent.
     static func confirmTitle(_ chip: Chip, recipient: String) -> String {
+        // A PayPal action brings its own question from the server, built from the same values the server checks.
+        if ChipActions.moreActions[chip.kind] != nil, let question = string(chip, "question") { return question }
         if chip.kind == "remind" {
             return recipient.isEmpty || money(chip).isEmpty ? chip.label + "?" : "Email \(recipient) a reminder for \(money(chip))?"
         }

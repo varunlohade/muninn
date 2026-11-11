@@ -118,6 +118,23 @@ final class FakeAPI: AskAPI {
     func refine(_ text: String, tone: String) async throws -> WriteResponse { calls.append("refine"); return writeReply }
     func toneCheck(draft: String, client: String?) async throws -> ToneResponse { calls.append("tone"); return toneReply }
     func payments() async throws -> [Payment] { calls.append("payments"); try fail(); return paymentsReply }
+
+    /// The PayPal actions of server/src/actions-more.ts. A call with no confirm_ value answers needsConfirm when `moreNeedsConfirm`.
+    var moreReply = MoreResponse(line: "Done \u{2713}", undo: nil)
+    var readReply = MoreResponse(line: "Ana $40/mo \u{00B7} active", undo: nil)
+    var moreNeedsConfirm = false
+    private(set) var moreSent: [(path: String, body: [String: JSONValue])] = []
+
+    func more(_ path: String, _ body: [String: JSONValue], key: String, lookup: Bool) async throws -> MoreResponse {
+        if lookup { try lookUp("more", key); return moreReply }
+        calls.append("more:\(path)"); moreSent.append((path, body)); keys.append(key)
+        try fail()
+        if moreNeedsConfirm, !body.keys.contains(where: { $0.hasPrefix("confirm_") }) { throw APIError.needsConfirm(recipient: "Ana") }
+        stored.insert(key)
+        return moreReply
+    }
+
+    func moreRead(_ path: String) async throws -> MoreResponse { calls.append("read:\(path)"); try fail(); return readReply }
 }
 
 /// In-memory stand-in for the App Group files and the Keychain token. Paired by default.
