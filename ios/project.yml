@@ -18,6 +18,8 @@ settings:
     # Server URLs. Debug builds default to the local server; Release defaults to the hosted demo server.
     DEMO_SERVER_URL: https:/$()/muninn-api-production-ea1c.up.railway.app
     GENERATE_INFOPLIST_FILE: NO
+    # iPhone only: the app is portrait and has no iPad layout.
+    TARGETED_DEVICE_FAMILY: "1"
   configs:
     Debug:
       DEFAULT_SERVER_URL: http:/$()/localhost:8787
