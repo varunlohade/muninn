@@ -34,20 +34,20 @@ struct SuggestionBar: View {
         let items = model.barItems
         HStack(spacing: 0) {
             if model.notesOpen {
-                Text("Notes").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, 12)
+                Text("Notes").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, Theme.Space.s)
                 Spacer()
                 barButton("plus", id: "notes.add", label: "Save typed text as a note", action: model.saveNote)
                     .disabled(!model.canSaveNote)
                     .opacity(model.canSaveNote ? 1 : 0.3)
             } else if model.writeOpen {
-                Text("Refine").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, 12)
+                Text("Refine").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, Theme.Space.s)
                 Spacer()
             } else {
                 HStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                         if i > 0 { Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight) }
                         Slot(item: item, palette: palette, action: item.action.map { a in { model.perform(a) } },
-                             width: confirming && item.id == "cancel" ? 76 : nil)
+                             width: confirming && item.id == "cancel" ? 80 : nil)
                             .accessibilityIdentifier("chip.\(item.id)")
                             .transition(.opacity)
                     }
@@ -120,13 +120,13 @@ struct SuggestionBar: View {
                 VStack(spacing: 0) {
                     Text(item.title).font(item.detail == nil ? M.prediction : M.prediction.weight(.medium))
                         .foregroundStyle(tint)
-                        .lineLimit(item.id == "confirm" ? 2 : 1).minimumScaleFactor(0.6)
+                        .lineLimit(item.id == "confirm" ? 2 : 1).minimumScaleFactor(item.id == "confirm" ? 0.8 : 0.6)
                         .multilineTextAlignment(.center)
                     if let d = item.detail {
                         Text(d).font(M.predictionSmall).foregroundStyle(palette.secondaryLabel).lineLimit(1).minimumScaleFactor(0.7)
                     }
                 }
-                .padding(.horizontal, 6)
+                .padding(.horizontal, Theme.Space.xs)
                 .frame(maxWidth: width ?? .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
@@ -160,14 +160,14 @@ struct NotesPanel: View {
                         Text(note.text).font(M.mode).foregroundStyle(palette.label)
                             .lineLimit(2).multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, minHeight: M.keyHeight - 20, alignment: .leading)
-                            .padding(.horizontal, 12).padding(.vertical, 10)
+                            .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xs)
                             .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("note.\(i)")
                 }
                 if model.notes.isEmpty {
-                    Text("No notes yet. Type a reply, then tap +.").font(M.mode).foregroundStyle(palette.secondaryLabel).padding(.top, 40)
+                    Text("No notes yet. Type a reply, then tap +.").font(M.mode).foregroundStyle(palette.secondaryLabel).padding(.top, Theme.Space.xl)
                 }
             }
             .padding(.horizontal, M.sideInset)
@@ -213,13 +213,13 @@ struct WritePanelView: View {
     private func preview(_ p: WritePreview) -> some View {
         VStack(spacing: M.keyGap) {
             Button(action: model.usePreview) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(p.title).font(M.predictionSmall.weight(.semibold)).foregroundStyle(palette.secondaryLabel)
                     Text(p.text).font(M.mode).foregroundStyle(palette.label)
                         .multilineTextAlignment(.leading).minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-                .padding(.horizontal, 12).padding(.vertical, 10)
+                .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xs)
                 .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
             }
             .buttonStyle(.plain)

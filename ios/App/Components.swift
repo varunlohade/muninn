@@ -48,12 +48,12 @@ struct SectionHeader: View {
     var count: Int? = nil
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Theme.Space.xs) {
             Text(title).font(Theme.Font.section).foregroundStyle(Theme.Color.text2)
             if let count {
                 Text("\(count)").font(Theme.Font.count).monospacedDigit().foregroundStyle(Theme.Color.text2)
-                    .frame(minWidth: 22, minHeight: 22).padding(.horizontal, 4)
-                    .background(Theme.Color.button, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .frame(minWidth: Theme.Space.l, minHeight: Theme.Space.l).padding(.horizontal, Theme.Space.xxs)
+                    .background(Theme.Color.button, in: RoundedRectangle(cornerRadius: Theme.Space.s, style: .continuous))
             }
         }
         .padding(.horizontal, Theme.Metric.margin)
@@ -211,7 +211,10 @@ struct FolderView: View {
 
 /// Frosted folder front: material plus a top highlight and a soft sheen. Glass lives only on folders.
 struct Glass: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
+        let shadow = colorScheme == .dark ? 1.0 : 0.4
         let shape = RoundedRectangle(cornerRadius: 15, style: .continuous)
         shape
             .fill(.ultraThinMaterial)
@@ -220,8 +223,8 @@ struct Glass: View {
                                                startPoint: .topLeading, endPoint: .bottomTrailing)))
             .overlay(shape.strokeBorder(.white.opacity(0.11), lineWidth: 1))
             .overlay(alignment: .top) { Capsule().fill(.white.opacity(0.5)).frame(height: 1.5).padding(.horizontal, 12) }
-            .shadow(color: .black.opacity(0.35), radius: 10, y: 8)
-            .shadow(color: .black.opacity(0.4), radius: 1, y: 1)
+            .shadow(color: .black.opacity(0.35 * shadow), radius: 10, y: 8)
+            .shadow(color: .black.opacity(0.4 * shadow), radius: 1, y: 1)
     }
 }
 

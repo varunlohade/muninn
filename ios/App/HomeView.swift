@@ -108,7 +108,7 @@ struct HomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
                 header
                 // The AI's work comes first: the brief, then who to bill today.
                 if !model.brief.isEmpty { briefCard }
@@ -120,14 +120,17 @@ struct HomeView: View {
                 if let error = model.error {
                     Text(error).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Metric.margin)
                 }
-                clientsShelf
-                unpaidList
+                clientsShelf.padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
+                unpaidList.padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
             }
-            .padding(.bottom, 24)
+            .padding(.top, Theme.Space.xs)
+            .padding(.bottom, Theme.Space.l)
         }
         .scrollIndicators(.hidden)
         .background(Theme.Color.bg.ignoresSafeArea())
         .safeAreaInset(edge: .bottom) { AskBar(model: ask) }
+        // No navigation bar here, so cover the status bar: scrolled cards never run under the clock.
+        .overlay(alignment: .top) { Theme.Color.bg.frame(height: 0).ignoresSafeArea(edges: .top) }
         .toolbar(.hidden, for: .navigationBar)
         .refreshable { await model.load() }
         .task { await model.load() }
@@ -140,7 +143,7 @@ struct HomeView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Theme.Space.xs) {
             MarkView(size: 36)
             Text(AppConfig.displayName).font(Theme.Font.appName).tracking(Theme.Tracking.appName).foregroundStyle(Theme.Color.text1)
             Spacer()
@@ -154,21 +157,21 @@ struct HomeView: View {
                 .accessibilityLabel("Integrations")
                 .accessibilityIdentifier("nav.integrations")
         }
-        .padding(.leading, Theme.Metric.margin)
-        .padding(.trailing, Theme.Metric.cardInset)
+        .padding(.horizontal, Theme.Metric.cardInset)
+        .padding(.bottom, Theme.Space.xs)
     }
 
     private var summaryCard: some View {
         Card {
-            VStack(spacing: 22) {
+            VStack(spacing: Theme.Space.l) {
                 HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                         let today = mainTotal(model.summary?.earned_today) ?? ("0.00", "USD")
                         MoneyValue(amount: today.amount, currency: today.currency)
                         Text("Earned today").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
                     }
                     Spacer()
-                    VStack(alignment: .trailing, spacing: 4) {
+                    VStack(alignment: .trailing, spacing: Theme.Space.xxs) {
                         let week = mainTotal(model.summary?.earned_this_week) ?? ("0.00", "USD")
                         MoneyValue(amount: week.amount, currency: week.currency, font: Theme.Font.heroSmall, tracking: Theme.Tracking.heroSmall, showCents: false)
                             .padding(.top, 18)
@@ -182,8 +185,8 @@ struct HomeView: View {
     }
 
     private var briefCard: some View {
-        Card(padding: 18) {
-            VStack(alignment: .leading, spacing: 6) {
+        Card {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 ForEach(model.brief, id: \.self) { line in
                     Text(line).font(Theme.Font.body).foregroundStyle(Theme.Color.text1).fixedSize(horizontal: false, vertical: true)
                 }
@@ -195,29 +198,30 @@ struct HomeView: View {
 
     /// Today's appointments from the phone calendar. An ended one with no invoice today offers "Bill Sam?".
     private var todaySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             SectionHeader(title: "Today", count: calendar.today.count)
             Card(padding: 0) {
                 TimelineView(.everyMinute) { now in
                     VStack(spacing: 0) {
-                        ForEach(Array(calendar.today.enumerated()), id: \.element.id) { i, a in
-                            if i > 0 { Rectangle().fill(Theme.Color.hairline).frame(height: 1).padding(.horizontal, 18) }
+                        ForEach(calendar.today) { a in
                             appointmentRow(a, ended: a.end <= now.date)
                         }
                     }
                 }
+                .padding(.vertical, Theme.Space.xs)
             }
             .padding(.horizontal, Theme.Metric.cardInset)
         }
+        .padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.today")
     }
 
     private func appointmentRow(_ a: Appointment, ended: Bool) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: Theme.Space.s) {
             Text(a.time).font(Theme.Font.body).monospacedDigit().foregroundStyle(ended ? Theme.Color.text3 : Theme.Color.text1)
-                .frame(width: 46, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
+                .frame(width: Theme.Space.xxl, alignment: .leading)
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(a.title).font(Theme.Font.body).foregroundStyle(Theme.Color.text1).lineLimit(1)
                 if let name = a.clientName ?? a.clientEmail {
                     Text(name).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).lineLimit(1)
@@ -233,7 +237,7 @@ struct HomeView: View {
                 }
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, Theme.Metric.cardPadding)
         .frame(minHeight: Theme.Metric.rowHeight)
     }
 
@@ -241,10 +245,10 @@ struct HomeView: View {
         NavigationLink {
             ScrollView { EnableKeyboardSteps().padding(Theme.Metric.cardInset) }.background(Theme.Color.bg.ignoresSafeArea())
         } label: {
-            Card(padding: 14) {
-                HStack(spacing: 14) {
+            Card {
+                HStack(spacing: Theme.Space.s) {
                     IconCircle(systemImage: "keyboard")
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                         Text(model.keyboardOn ? "Keyboard is on" : "Turn on the keyboard")
                             .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                         if let b = model.broughtBack {
@@ -266,10 +270,10 @@ struct HomeView: View {
 
     /// Optional, and never a blocking step. It goes away once the owner answers the system prompt.
     private var calendarCard: some View {
-        Card(padding: 14) {
-            HStack(spacing: 14) {
+        Card {
+            HStack(spacing: Theme.Space.s) {
                 IconCircle(systemImage: "calendar")
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text("Connect Calendar").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                     Text("See who to bill today").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
                 }
@@ -283,8 +287,8 @@ struct HomeView: View {
 
     private func disputesRow(_ n: Int) -> some View {
         NavigationLink { DisputesView() } label: {
-            Card(padding: 14) {
-                HStack {
+            Card {
+                HStack(spacing: Theme.Space.xs) {
                     Text("Disputes").font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
                     Spacer()
                     Text("\(n) open").font(Theme.Font.label).foregroundStyle(Theme.Color.due)
@@ -297,20 +301,20 @@ struct HomeView: View {
     }
 
     private var clientsShelf: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             SectionHeader(title: "Clients", count: model.clients.count)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 16) {
+                HStack(alignment: .top, spacing: Theme.Space.m) {
                     ForEach(model.clients.prefix(6)) { client in
                         NavigationLink {
                             ClientDetailView(client: client, papers: model.papers(for: client))
                                 .zoomTransition(id: client.id, in: folders)
                         } label: {
-                            VStack(alignment: .leading, spacing: 6) {
+                            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 FolderView(papers: model.folderPapers(for: client), width: 160, channel: channelIcon(client.channels))
                                     .zoomSource(id: client.id, in: folders)
                                     .padding(.top, 26)
-                                Text(client.displayName).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1).padding(.top, 8)
+                                Text(client.displayName).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1).padding(.top, Theme.Space.xs)
                                 ClientLine(client: client)
                             }
                         }
@@ -324,11 +328,10 @@ struct HomeView: View {
     }
 
     private var unpaidList: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             SectionHeader(title: "Unpaid", count: model.unpaid.count)
             VStack(spacing: 0) {
-                ForEach(Array(model.unpaid.prefix(8).enumerated()), id: \.element.id) { i, p in
-                    if i > 0 { Rectangle().fill(Theme.Color.hairline).frame(height: 1) }
+                ForEach(model.unpaid.prefix(8)) { p in
                     PaymentRow(payment: p)
                 }
             }
@@ -355,14 +358,14 @@ struct PaymentRow: View {
     var showClient = true
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: Theme.Space.s) {
             MiniSheet(paid: payment.state == "paid")
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(showClient ? payment.client_name ?? payment.item : payment.item).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
                 Text(showClient ? payment.item : shortDate(payment.created_at)).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
+            VStack(alignment: .trailing, spacing: Theme.Space.xxs) {
                 let m = moneyParts(payment.amount, payment.currency)
                 Text(m.whole + m.cents).font(Theme.Font.body).monospacedDigit().foregroundStyle(Theme.Color.text1)
                 status
@@ -508,8 +511,8 @@ struct AskBar: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            HStack(spacing: Theme.Space.xs) {
                 TextField("", text: $model.text, prompt: Text("Ask Muninn anything").foregroundStyle(Theme.Color.text3))
                     .font(Theme.Font.body)
                     .foregroundStyle(Theme.Color.text1)
@@ -517,7 +520,7 @@ struct AskBar: View {
                     .onSubmit(model.submit)
                     .focused($focused)
                     .onChange(of: model.focusRequests) { focused = true }
-                    .padding(.leading, 16)
+                    .padding(.leading, Theme.Space.m)
                     .accessibilityIdentifier("ask.field")
                 Button(action: model.submit) { IconCircle(systemImage: model.state == .loading ? "ellipsis" : "arrow.up") }
                     .buttonStyle(PressScale())
@@ -525,12 +528,18 @@ struct AskBar: View {
             }
             content
         }
-        .padding(6)
+        .padding(Theme.Space.xs)
         .background(Theme.Color.card, in: RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
         .padding(.horizontal, Theme.Metric.cardInset)
-        .padding(.bottom, 4)
+        .padding(.top, Theme.Space.xs)
+        .padding(.bottom, Theme.Space.xs)
         .background(Theme.Color.bg.ignoresSafeArea(edges: .bottom))
+        // Content scrolls under the bar; a short fade shows it goes on instead of a hard cut.
+        .background(alignment: .top) {
+            LinearGradient(colors: [Theme.Color.bg.opacity(0), Theme.Color.bg], startPoint: .top, endPoint: .bottom)
+                .frame(height: Theme.Space.l).offset(y: -Theme.Space.l).allowsHitTesting(false)
+        }
         .animation(Theme.Motion.chipAppear, value: model.state)
     }
 
@@ -540,72 +549,72 @@ struct AskBar: View {
             EmptyView()
         case .chips(let chips):
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: Theme.Space.xs) {
                     ForEach(chips) { chip in
                         AskChip(title: BarItems.title(chip), detail: BarItems.detail(chip, fromCopied: false)) { model.run(chip) }
                             .accessibilityIdentifier("ask.chip.\(chip.kind)")
                     }
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, Theme.Space.xs)
             }
-            .padding(.bottom, 6)
+            .padding(.bottom, Theme.Space.xxs)
         case .clients(let clients):
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: Theme.Space.xs) {
                     ForEach(clients.prefix(8)) { client in
                         AskChip(title: client.displayName, detail: mainTotal(client.open_amount).map { "\(formatMoney($0.amount, $0.currency)) open" }) {
                             model.prefill((["Invoice", client.name, client.email].compactMap { $0 }).joined(separator: " ") + " $")
                         }
                     }
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, Theme.Space.xs)
             }
-            .padding(.bottom, 6)
+            .padding(.bottom, Theme.Space.xxs)
         case .confirm(let chip, let email):
-            HStack(spacing: 8) {
+            HStack(spacing: Theme.Space.xs) {
                 AskChip(title: BarItems.confirmTitle(chip, recipient: email), detail: nil) { model.run(chip, confirmed: email) }
                 AskChip(title: "Cancel", detail: nil) { model.state = .idle }
             }
-            .padding(.horizontal, 10).padding(.bottom, 6)
+            .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xxs)
         case .ask(let chip, let question):
-            HStack(spacing: 8) {
+            HStack(spacing: Theme.Space.xs) {
                 AskChip(title: question, detail: nil) { model.run(chip) }
                 AskChip(title: "Cancel", detail: nil) { model.state = .idle }
             }
-            .padding(.horizontal, 10).padding(.bottom, 6)
+            .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xxs)
         case .retry(let chip, let confirmed):
-            HStack(spacing: 8) {
+            HStack(spacing: Theme.Space.xs) {
                 AskChip(title: "It didn't go through. Tap to try again.", detail: nil) { model.run(chip, confirmed: confirmed) }
                     .accessibilityIdentifier("ask.retry")
                 AskChip(title: "Cancel", detail: nil) { model.state = .idle }
             }
-            .padding(.horizontal, 10).padding(.bottom, 6)
+            .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xxs)
         case .line(let line):
-            Text(line).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, 16).padding(.bottom, 8)
+            Text(line).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
                 .textSelection(.enabled)
         case .working:
-            Text("Creating…").font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, 16).padding(.bottom, 8)
+            Text("Creating…").font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
         case .result(let r):
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                HStack(spacing: Theme.Space.xs) {
                     Image(systemName: "checkmark").foregroundStyle(Theme.Color.paid)
                     Text(r.kind == "invoice" ? "Invoice sent · \(r.money)" : "Pay link ready · \(r.money)").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                 }
                 Text(r.link).font(Theme.Font.paper(12)).foregroundStyle(Theme.Color.text2).lineLimit(2).textSelection(.enabled)
                     .accessibilityIdentifier("ask.link")
-                HStack(spacing: 8) {
+                HStack(spacing: Theme.Space.xs) {
                     Button(model.copied ? "Copied" : "Copy link") { model.copy(r.link) }
                         .buttonStyle(PrimaryButton())
                         .accessibilityIdentifier("ask.copy")
                     Button("Done") { model.state = .idle; model.copied = false }
-                        .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text2).frame(width: 80, height: 48)
+                        .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text2).frame(width: 80, height: Theme.Metric.secondaryButton)
                 }
             }
-            .padding(.horizontal, 12).padding(.bottom, 8)
+            .padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("ask.result")
         case .error(let e):
-            Text(e).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, 16).padding(.bottom, 8)
+            Text(e).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
         }
     }
 }
@@ -622,8 +631,8 @@ struct AskChip: View {
                 if let detail { Text(detail).font(Theme.Font.urbanist(11, 500)).foregroundStyle(Theme.Color.text3) }
             }
             .lineLimit(1)
-            .padding(.horizontal, 14)
-            .frame(height: Theme.Metric.chipHeight + (detail == nil ? 0 : 6))
+            .padding(.horizontal, Theme.Space.m)
+            .frame(height: Theme.Metric.chipHeight + (detail == nil ? 0 : Theme.Space.xs))
             .background(Theme.Color.button, in: Capsule())
             .overlay(Capsule().strokeBorder(Theme.Color.chipEdge, lineWidth: 1))
         }

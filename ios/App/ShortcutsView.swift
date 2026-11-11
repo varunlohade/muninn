@@ -10,7 +10,7 @@ struct ShortcutsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
                 HStack {
                     Text("Shortcuts").font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
                     Spacer()
@@ -24,12 +24,12 @@ struct ShortcutsView: View {
                 Text("Type a shortcut on the keyboard, then space. Shortcuts stay on this phone.")
                     .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.margin)
 
-                SectionHeader(title: "Actions")
+                SectionHeader(title: "Actions").padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
                 ForEach(actions) { a in
                     row(trigger: a.usage, title: a.title, detail: a.detail, dimmed: !a.enabled) { editingAction = a }
                         .accessibilityIdentifier("shortcut.\(a.id)")
                 }
-                SectionHeader(title: "Your text")
+                SectionHeader(title: "Your text").padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
                 ForEach(notes.filter { $0.trigger != nil }) { n in
                     row(trigger: n.trigger ?? "", title: n.text, detail: nil, dimmed: false) { editingNote = n }
                 }
@@ -37,8 +37,8 @@ struct ShortcutsView: View {
                     Text("No text shortcuts yet. Tap + to add one.").font(Theme.Font.label).foregroundStyle(Theme.Color.text3).padding(.horizontal, Theme.Metric.margin)
                 }
             }
-            .padding(.top, 8)
-            .padding(.bottom, 24)
+            .padding(.top, Theme.Space.xs)
+            .padding(.bottom, Theme.Space.l)
         }
         .background(Theme.Color.bg.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
@@ -59,11 +59,11 @@ struct ShortcutsView: View {
 
     private func row(trigger: String, title: String, detail: String?, dimmed: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Card(padding: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 10) {
+            Card {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    HStack(spacing: Theme.Space.xs) {
                         Text(trigger).font(Theme.Font.paper(14)).foregroundStyle(Theme.Color.text1)
-                            .padding(.horizontal, 10).frame(height: 28)
+                            .padding(.horizontal, Theme.Space.s).frame(height: Theme.Space.xl)
                             .background(Theme.Color.button, in: Capsule())
                         if dimmed { Text("Off").font(Theme.Font.label).foregroundStyle(Theme.Color.text3) }
                         Spacer(minLength: 0)
@@ -105,22 +105,22 @@ struct ActionShortcutEditor: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
                 TextField("", text: $shortcut.trigger, prompt: Text("Shortcut").foregroundStyle(Theme.Color.text3))
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .modifier(FieldStyle())
                     .accessibilityIdentifier("shortcut.trigger")
                 Text(problem ?? shortcut.detail)
                     .font(Theme.Font.label).foregroundStyle(problem == nil ? Theme.Color.text2 : Theme.Color.due)
-                    .padding(.horizontal, 8).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Theme.Space.xs).fixedSize(horizontal: false, vertical: true)
                 Toggle("On", isOn: $shortcut.enabled)
                     .font(Theme.Font.body).foregroundStyle(Theme.Color.text1).tint(Theme.Color.paid)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, Theme.Space.xs)
                     .accessibilityIdentifier("shortcut.enabled")
                 Button("Reset to \(ActionShortcut.defaults.first { $0.action == shortcut.action }?.trigger ?? "")") {
                     shortcut.trigger = ActionShortcut.defaults.first { $0.action == shortcut.action }?.trigger ?? shortcut.trigger
                 }
-                .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, 8)
+                .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Space.xs)
                 Spacer()
             }
             .padding(Theme.Metric.cardInset)

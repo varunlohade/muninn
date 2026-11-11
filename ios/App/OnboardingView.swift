@@ -63,13 +63,16 @@ struct OnboardingView: View {
     @EnvironmentObject var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
     /// The real keyboard view and model, typing into a string on this screen. Its calls go to the real server.
     @StateObject private var typing = LabHost()
     @State private var step: Step = .signIn
     @State private var checked = false
     @State private var busy = false
     @State private var nonce = ""
+    #if DEBUG
     @State private var showDevPairing = false
+    #endif
     @State private var sceneIndex = 0
     @State private var tryTimedOut = false
     @State private var tryTimer: Task<Void, Never>?
@@ -98,24 +101,24 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             VStack(spacing: 0) {
                 StepDots(count: Step.allCases.count, current: step.rawValue)
-                    .padding(.top, 16)
-                Spacer(minLength: 0).frame(maxHeight: step == .signIn ? .infinity : 36)
+                    .padding(.top, Theme.Space.s)
+                Spacer(minLength: 0).frame(maxHeight: step == .signIn ? .infinity : Theme.Space.xl)
                 mark
-                VStack(spacing: 10) {
+                VStack(spacing: Theme.Space.xs) {
                     Text(title).font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
                     Text(line).font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
                         .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                    if step == .keyboard { keyboardSteps.padding(.top, 18) }
-                    if step == .tryIt { messageField.padding(.top, 18) }
+                    if step == .keyboard { keyboardSteps.padding(.top, Theme.Space.m) }
+                    if step == .tryIt { messageField.padding(.top, Theme.Space.m) }
                 }
-                .padding(.top, 24)
+                .padding(.top, Theme.Space.l)
                 .id(step == .tryIt ? scene.id : "\(step)")
                 .transition(slide)
-                Spacer(minLength: 16).frame(maxHeight: .infinity)
+                Spacer(minLength: Theme.Space.l).frame(maxHeight: .infinity)
                 if let error = session.error {
                     Text(error).font(Theme.Font.label).foregroundStyle(Theme.Color.due)
                         .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                        .padding(.bottom, 12)
+                        .padding(.bottom, Theme.Space.s)
                         .accessibilityIdentifier("onboarding.error")
                 }
                 actions
@@ -124,19 +127,21 @@ struct OnboardingView: View {
                     .disabled(busy || checked)
             }
             .padding(.horizontal, Theme.Metric.cardInset)
-            .padding(.bottom, step == .tryIt ? 4 : 12)
+            .padding(.bottom, step == .tryIt ? Theme.Space.xs : Theme.Space.m)
             if step == .tryIt {
                 KeyboardView(model: typing.model)
-                    .background(Theme.SystemKeyboard.dark.bed.ignoresSafeArea(edges: .bottom))
+                    .background((colorScheme == .dark ? Theme.SystemKeyboard.dark : Theme.SystemKeyboard.light).bed.ignoresSafeArea(edges: .bottom))
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.Color.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        #if DEBUG
         .sheet(isPresented: $showDevPairing) {
             DevPairingSheet { showDevPairing = false; Task { await complete(.signIn) } }
         }
+        #endif
         .onChange(of: scenePhase) { _, phase in
             if phase == .active, step == .keyboard, Self.keyboardAdded, !checked { Task { await complete(.keyboard) } }
         }
@@ -168,17 +173,19 @@ struct OnboardingView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(AppConfig.displayName)
         .accessibilityIdentifier("onboarding.mark")
-        // Hidden developer path: hold the mark on the first screen to pair with a device token.
+        #if DEBUG
+        // Hidden developer path, Debug builds only: hold the mark on the first screen to pair with a device token.
         .onLongPressGesture(minimumDuration: 0.8) { if step == .signIn { session.error = nil; showDevPairing = true } }
+        #endif
     }
 
     private var keyboardSteps: some View {
         Card {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
                 ForEach(Array(["Tap Keyboards.", "Turn on \(AppConfig.keyboardName).", "Turn on Allow Full Access."].enumerated()), id: \.offset) { i, text in
-                    HStack(spacing: 12) {
+                    HStack(spacing: Theme.Space.s) {
                         Text("\(i + 1)").font(Theme.Font.count).foregroundStyle(Theme.Color.text1)
-                            .frame(width: 28, height: 28).background(Theme.Color.button, in: Circle())
+                            .frame(width: Theme.Space.xl, height: Theme.Space.xl).background(Theme.Color.button, in: Circle())
                         Text(text).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
                     }
                 }
@@ -187,7 +194,7 @@ struct OnboardingView: View {
     }
 
     @ViewBuilder private var actions: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: Theme.Space.xs) {
             switch step {
             case .signIn:
                 SignInWithAppleButton(.continue) { request in
@@ -198,8 +205,8 @@ struct OnboardingView: View {
                 } onCompletion: { result in
                     Task { await appleFinished(result) }
                 }
-                .signInWithAppleButtonStyle(.white)
-                .frame(height: 52)
+                .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+                .frame(height: Theme.Metric.primaryButton)
                 .clipShape(Capsule())
                 .opacity(busy ? 0.5 : 1)
                 .accessibilityIdentifier("onboarding.apple")
@@ -231,8 +238,8 @@ struct OnboardingView: View {
             .font(Theme.Font.body)
             .foregroundStyle(typing.text.isEmpty ? Theme.Color.text3 : Theme.Color.text1)
             .lineLimit(4).truncationMode(.middle)
-            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
-            .padding(.horizontal, 18).padding(.vertical, 14)
+            .frame(maxWidth: .infinity, minHeight: Theme.Space.l, alignment: .leading)
+            .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.m)
             .background(checked ? Theme.Color.paidChip : Theme.Color.button, in: RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous).strokeBorder(checked ? Theme.Color.paidChipEdge : Theme.Color.edge, lineWidth: 1))
             // The whole bubble keeps its full height, so a long link never spills out of it.
@@ -296,7 +303,7 @@ struct OnboardingView: View {
     private func quietButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: Theme.Metric.secondaryButton)
     }
 
     private func appleFinished(_ result: Result<ASAuthorization, Error>) async {
@@ -344,7 +351,7 @@ struct OnboardingView: View {
                 typing.model.textChanged()
                 sceneIndex += 1
             } else if let next = next(after: done) {
-                if next == .tryIt { typing.model.isDark = true; typing.model.refreshAccess() }
+                if next == .tryIt { typing.model.isDark = colorScheme == .dark; typing.model.refreshAccess() }
                 step = next
             } else {
                 tryTimer?.cancel()
@@ -387,11 +394,11 @@ struct StepDots: View {
     let current: Int
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Theme.Space.xs) {
             ForEach(0..<count, id: \.self) { i in
                 Capsule()
                     .fill(i == current ? Theme.Color.text1 : i < current ? Theme.Color.text2 : Theme.Color.tick)
-                    .frame(width: i == current ? 22 : 6, height: 6)
+                    .frame(width: i == current ? Theme.Space.l : 6, height: 6)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -400,7 +407,8 @@ struct StepDots: View {
     }
 }
 
-/// Developer path, opened by holding the mark. It pairs with a device token from `npm run device`.
+#if DEBUG
+/// Developer path, opened by holding the mark. It pairs with a device token from `npm run device`. Debug builds only.
 struct DevPairingSheet: View {
     @EnvironmentObject var session: Session
     @State private var server = SharedStore.serverURL
@@ -409,13 +417,13 @@ struct DevPairingSheet: View {
     let onPaired: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text("Developer pairing").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
             TextField("", text: $server, prompt: Text("Server URL").foregroundStyle(Theme.Color.text3))
                 .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 .modifier(FieldStyle())
             if let demo = AppConfig.demoServerURL {
-                HStack(spacing: 8) {
+                HStack(spacing: Theme.Space.xs) {
                     ServerOption(title: "This Mac", selected: server == "http://localhost:8787") { server = "http://localhost:8787" }
                     ServerOption(title: "Demo server", selected: server == demo) { server = demo }
                         .accessibilityIdentifier("server.demo")
@@ -444,16 +452,17 @@ struct DevPairingSheet: View {
             Spacer(minLength: 0)
         }
         .padding(Theme.Metric.cardPadding)
-        .padding(.top, 8)
+        .padding(.top, Theme.Space.xs)
         .background(Theme.Color.bg.ignoresSafeArea())
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
     }
 }
+#endif
 
 struct EnableKeyboardSteps: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
             StepCard(number: 2, title: "Turn on the keyboard") {
                 ForEach(Array([
                     "Open Settings › General › Keyboard › Keyboards.",
@@ -484,6 +493,7 @@ struct OpenSettingsButton: View {
     }
 }
 
+#if DEBUG
 struct ServerOption: View {
     let title: String
     let selected: Bool
@@ -494,13 +504,14 @@ struct ServerOption: View {
             Text(title)
                 .font(Theme.Font.label)
                 .foregroundStyle(selected ? Theme.Color.bg : Theme.Color.text2)
-                .padding(.horizontal, 14)
-                .frame(height: 32)
+                .padding(.horizontal, Theme.Space.m)
+                .frame(height: Theme.Metric.iconButton)
                 .background(selected ? Theme.Color.text1 : Theme.Color.button, in: Capsule())
         }
         .buttonStyle(PressScale())
     }
 }
+#endif
 
 struct StepCard<Content: View>: View {
     let number: Int
@@ -509,10 +520,10 @@ struct StepCard<Content: View>: View {
 
     var body: some View {
         Card {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                HStack(spacing: Theme.Space.s) {
                     Text("\(number)").font(Theme.Font.count).foregroundStyle(Theme.Color.text1)
-                        .frame(width: 28, height: 28).background(Theme.Color.button, in: Circle())
+                        .frame(width: Theme.Space.xl, height: Theme.Space.xl).background(Theme.Color.button, in: Circle())
                     Text(title).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                 }
                 content
@@ -526,8 +537,8 @@ struct FieldStyle: ViewModifier {
         content
             .font(Theme.Font.body)
             .foregroundStyle(Theme.Color.text1)
-            .padding(.horizontal, 18)
-            .frame(height: 48)
+            .padding(.horizontal, Theme.Space.m)
+            .frame(height: Theme.Metric.secondaryButton)
             .background(Theme.Color.button, in: Capsule())
             .overlay(Capsule().strokeBorder(Theme.Color.edge, lineWidth: 1))
     }
@@ -538,7 +549,7 @@ struct PrimaryButton: ButtonStyle {
         configuration.label
             .font(Theme.Font.cardTitle)
             .foregroundStyle(Theme.Color.bg)
-            .frame(maxWidth: .infinity, minHeight: 48)
+            .frame(maxWidth: .infinity, minHeight: Theme.Metric.primaryButton)
             .background(Theme.Color.text1, in: Capsule())
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(Theme.Motion.press, value: configuration.isPressed)

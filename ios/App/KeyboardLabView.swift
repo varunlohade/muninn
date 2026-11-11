@@ -4,6 +4,7 @@ import SwiftUI
 /// It proves the network path without the system keyboard switch.
 struct KeyboardLabView: View {
     @StateObject private var lab = LabHost()
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,13 +17,15 @@ struct KeyboardLabView: View {
                     .accessibilityIdentifier("lab.text")
             }
             if let ms = lab.model.lastLatencyMs {
-                Text("keystroke → chip \(ms) ms").font(Theme.Font.label).foregroundStyle(Theme.Color.text3)
+                Text("keystroke → chip \(ms) ms").font(Theme.Font.label).foregroundStyle(Theme.Color.text3).padding(.bottom, Theme.Space.xs)
             }
             KeyboardView(model: lab.model)
+                .background((lab.model.isDark ? Theme.SystemKeyboard.dark : Theme.SystemKeyboard.light).bed.ignoresSafeArea(edges: .bottom))
         }
         .background(Theme.Color.bg)
         .navigationTitle("Keyboard Lab")
-        .onAppear { lab.model.keyboardAppeared() }
+        .onAppear { lab.model.isDark = colorScheme == .dark; lab.model.keyboardAppeared() }
+        .onChange(of: colorScheme) { _, scheme in lab.model.isDark = scheme == .dark }
     }
 }
 

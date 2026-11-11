@@ -7,7 +7,7 @@ struct NotesView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
                 HStack {
                     Text("Notes").font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
                     Spacer()
@@ -22,8 +22,8 @@ struct NotesView: View {
                     .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.margin)
                 ForEach(notes) { note in
                     Button { editing = note } label: {
-                        Card(padding: 18) {
-                            VStack(alignment: .leading, spacing: 6) {
+                        Card {
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                                 Text(note.text).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
                                     .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                                 if let t = note.trigger { Text(t).font(Theme.Font.paper(13)).foregroundStyle(Theme.Color.text2) }
@@ -38,7 +38,8 @@ struct NotesView: View {
                     Text("No notes yet").font(Theme.Font.label).foregroundStyle(Theme.Color.text3).padding(.horizontal, Theme.Metric.margin)
                 }
             }
-            .padding(.top, 8)
+            .padding(.top, Theme.Space.xs)
+            .padding(.bottom, Theme.Space.l)
         }
         .background(Theme.Color.bg.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
@@ -78,26 +79,26 @@ struct NoteEditor: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
                 TextField("", text: $trigger, prompt: Text("Shortcut, like ;prices (optional)").foregroundStyle(Theme.Color.text3))
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .modifier(FieldStyle())
                     .accessibilityIdentifier("note.trigger")
                 Text(triggerProblem ?? "Type the shortcut, then space. The keyboard puts this note in the message.")
                     .font(Theme.Font.label).foregroundStyle(triggerProblem == nil ? Theme.Color.text2 : Theme.Color.due)
-                    .padding(.horizontal, 8).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Theme.Space.xs).fixedSize(horizontal: false, vertical: true)
                 TextEditor(text: $note.text)
                     .font(Theme.Font.body)
                     .foregroundStyle(Theme.Color.text1)
                     .scrollContentBackground(.hidden)
-                    .padding(12)
+                    .padding(Theme.Space.s)
                     .frame(height: 160)
                     .background(Theme.Color.card, in: RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
                     .accessibilityIdentifier("note.text")
                 if !isNew {
                     Button("Delete note", role: .destructive) { delete(note); dismiss() }
-                        .font(Theme.Font.label).padding(.horizontal, 8)
+                        .font(Theme.Font.label).padding(.horizontal, Theme.Space.xs)
                         .accessibilityIdentifier("note.delete")
                 }
                 Spacer()

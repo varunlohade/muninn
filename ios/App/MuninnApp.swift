@@ -8,7 +8,6 @@ struct MuninnApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(session)
-                .preferredColorScheme(.dark)
                 .onOpenURL { session.handle(url: $0) }
         }
     }
@@ -36,7 +35,8 @@ final class Session: ObservableObject {
         return false
     }
 
-    /// Developer path: pair with a device token from `npm run device`.
+    #if DEBUG
+    /// Developer path, Debug builds only: pair with a device token from `npm run device`.
     @discardableResult
     func pair(token: String, server: String) async -> Bool {
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -49,6 +49,7 @@ final class Session: ObservableObject {
         }
         return save(token: token, server: server)
     }
+    #endif
 
     /// Writes the token to the shared Keychain and reads it back. A failed write shows an error; it never passes silently.
     private func save(token: String, server: String) -> Bool {

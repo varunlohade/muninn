@@ -26,15 +26,17 @@ struct KeyCap: Identifiable, Equatable {
 enum KeyboardGeometry {
     typealias M = Theme.SystemKeyboard
 
-    static func rowTop(_ row: Int) -> CGFloat { M.barHeight + CGFloat(row) * (M.keyHeight + M.rowGap) }
+    static func rowTop(_ row: Int, _ s: M.Sizes) -> CGFloat { M.barHeight + CGFloat(row) * (s.keyHeight + s.rowGap) }
 
     static func keys(layout: KeyLayout, width w: CGFloat, globe: Bool, currency: String) -> [KeyCap] {
+        let s = M.sizes(for: w)
+        func rowTop(_ r: Int) -> CGFloat { Self.rowTop(r, s) }
         let keyW = (w - 2 * M.sideInset - 9 * M.keyGap) / 10
         let pitch = keyW + M.keyGap
         var out: [KeyCap] = []
         func row(_ chars: [String], _ r: Int, startX: CGFloat, width kw: CGFloat = keyW, gap: CGFloat = M.keyGap) {
             for (i, c) in chars.enumerated() {
-                let f = CGRect(x: startX + CGFloat(i) * (kw + gap), y: rowTop(r), width: kw, height: M.keyHeight)
+                let f = CGRect(x: startX + CGFloat(i) * (kw + gap), y: rowTop(r), width: kw, height: s.keyHeight)
                 out.append(KeyCap(id: "k.\(r).\(c)", kind: .char(c), frame: f, a11y: c))
             }
         }
@@ -48,7 +50,7 @@ enum KeyboardGeometry {
         row(rows[1], 1, startX: layout == .letters ? M.sideInset + pitch / 2 : M.sideInset)
 
         // Row 3: shift (or #+= / 123), the middle keys, delete.
-        let r3 = CGRect(x: M.sideInset, y: rowTop(2), width: M.wideKey, height: M.keyHeight)
+        let r3 = CGRect(x: M.sideInset, y: rowTop(2), width: s.wideKey, height: s.keyHeight)
         switch layout {
         case .letters:
             out.append(KeyCap(id: "shift", kind: .shift, frame: r3, a11y: "shift"))
@@ -60,20 +62,20 @@ enum KeyboardGeometry {
             let span = w - 2 * start
             row(rows[2], 2, startX: start, width: (span - 4 * M.keyGap) / 5)
         }
-        out.append(KeyCap(id: "delete", kind: .delete, frame: CGRect(x: w - M.sideInset - M.wideKey, y: rowTop(2), width: M.wideKey, height: M.keyHeight), a11y: "delete"))
+        out.append(KeyCap(id: "delete", kind: .delete, frame: CGRect(x: w - M.sideInset - s.wideKey, y: rowTop(2), width: s.wideKey, height: s.keyHeight), a11y: "delete"))
 
         // Row 4: 123/ABC, globe (only when iOS does not draw its own), space, return.
         let y4 = rowTop(3)
         out.append(KeyCap(id: "mode", kind: .mode(layout == .letters ? .numbers : .letters),
-                          frame: CGRect(x: M.sideInset, y: y4, width: M.modeKey, height: M.keyHeight), a11y: "more"))
-        var x = M.sideInset + M.modeKey + M.keyGap
+                          frame: CGRect(x: M.sideInset, y: y4, width: s.modeKey, height: s.keyHeight), a11y: "more"))
+        var x = M.sideInset + s.modeKey + M.keyGap
         if globe {
-            out.append(KeyCap(id: "globe", kind: .globe, frame: CGRect(x: x, y: y4, width: M.modeKey, height: M.keyHeight), a11y: "next keyboard"))
-            x += M.modeKey + M.keyGap
+            out.append(KeyCap(id: "globe", kind: .globe, frame: CGRect(x: x, y: y4, width: s.modeKey, height: s.keyHeight), a11y: "next keyboard"))
+            x += s.modeKey + M.keyGap
         }
-        let retX = w - M.sideInset - M.returnKey
-        out.append(KeyCap(id: "space", kind: .space, frame: CGRect(x: x, y: y4, width: retX - M.keyGap - x, height: M.keyHeight), a11y: "space"))
-        out.append(KeyCap(id: "return", kind: .ret, frame: CGRect(x: retX, y: y4, width: M.returnKey, height: M.keyHeight), a11y: "return"))
+        let retX = w - M.sideInset - s.returnKey
+        out.append(KeyCap(id: "space", kind: .space, frame: CGRect(x: x, y: y4, width: retX - M.keyGap - x, height: s.keyHeight), a11y: "space"))
+        out.append(KeyCap(id: "return", kind: .ret, frame: CGRect(x: retX, y: y4, width: s.returnKey, height: s.keyHeight), a11y: "return"))
         return out
     }
 

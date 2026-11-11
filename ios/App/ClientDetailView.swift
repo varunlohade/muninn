@@ -14,8 +14,8 @@ struct ClientDetailView: View {
             VStack(spacing: 0) {
                 FolderView(papers: Array(papers.filter { $0.state == "unpaid" }.prefix(2)) + Array(papers.filter { $0.state == "paid" }.prefix(1)), width: 250, channel: channelIcon(client.channels), openness: open ? 1 : 0, fanned: fanned)
                     .padding(.top, 120)
-                    .padding(.bottom, 28)
-                VStack(alignment: .leading, spacing: 4) {
+                    .padding(.bottom, Theme.Space.xl)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(client.displayName).font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
                     ClientLine(client: client)
                     if let paid = mainTotal(client.total_paid) {
@@ -24,21 +24,21 @@ struct ClientDetailView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, Theme.Metric.margin)
-                .padding(.bottom, 12)
+                .padding(.bottom, Theme.Space.m)
                 VStack(spacing: 0) {
                     ForEach(Array(papers.enumerated()), id: \.element.id) { i, p in
-                        if i > 0 { Rectangle().fill(Theme.Color.hairline).frame(height: 1) }
                         PaymentRow(payment: p, showClient: false)
                             .opacity(rowsIn ? 1 : 0)
                             .offset(x: rowsIn || reduceMotion ? 0 : 9)
                             .animation(reduceMotion ? Theme.Motion.crossfade : Theme.Motion.rowsIn.delay(Double(i) * 0.07), value: rowsIn)
                     }
                     if papers.isEmpty {
-                        Text("No invoices yet").font(Theme.Font.label).foregroundStyle(Theme.Color.text3).padding(.vertical, 20)
+                        Text("No invoices yet").font(Theme.Font.label).foregroundStyle(Theme.Color.text3).padding(.vertical, Theme.Space.l)
                     }
                 }
                 .padding(.horizontal, Theme.Metric.margin)
             }
+            .padding(.bottom, Theme.Space.l)
         }
         .background(Theme.Color.bg.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
@@ -70,13 +70,13 @@ struct IntegrationsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
                 Text("Integrations").font(Theme.Font.title).foregroundStyle(Theme.Color.text1).padding(.horizontal, Theme.Metric.margin)
                 ForEach(items.filter { $0.status != "coming_soon" }) { i in
                     Card {
-                        HStack(spacing: 14) {
+                        HStack(spacing: Theme.Space.s) {
                             IconCircle(systemImage: "dollarsign")
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 Text(i.name).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                                 Text(i.status == "connected" ? "Connected" : "Not connected").font(Theme.Font.label)
                                     .foregroundStyle(i.status == "connected" ? Theme.Color.paid : Theme.Color.text2)
@@ -89,11 +89,11 @@ struct IntegrationsView: View {
                     .accessibilityIdentifier("integration.\(i.id)")
                 }
                 calendarTile
-                SectionHeader(title: "Coming soon")
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                SectionHeader(title: "Coming soon").padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: Theme.Metric.cardGap), GridItem(.flexible(), spacing: Theme.Metric.cardGap)], spacing: Theme.Metric.cardGap) {
                     ForEach(items.filter { $0.status == "coming_soon" && $0.id != "google_calendar" }) { i in
-                        Card(padding: 16) {
-                            VStack(alignment: .leading, spacing: 10) {
+                        Card {
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                                 IconCircle(systemImage: icon(i.id), size: 36)
                                 Text(i.name).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text2)
                                 Text("Coming soon").font(Theme.Font.label).foregroundStyle(Theme.Color.text3)
@@ -107,12 +107,15 @@ struct IntegrationsView: View {
                 if let error { Text(error).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Metric.margin) }
                 #if DEBUG
                 NavigationLink("Keyboard Lab (debug)") { KeyboardLabView() }
-                    .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.margin)
+                    .font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                    .frame(minHeight: Theme.Metric.iconButton).padding(.horizontal, Theme.Metric.margin)
+                    .padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
                 #endif
                 Button("Unpair this device", role: .destructive) { session.unpair() }
-                    .font(Theme.Font.label).padding(.horizontal, Theme.Metric.margin).padding(.top, 8)
+                    .font(Theme.Font.label).frame(minHeight: Theme.Metric.iconButton).padding(.horizontal, Theme.Metric.margin)
             }
-            .padding(.top, 8)
+            .padding(.top, Theme.Space.xs)
+            .padding(.bottom, Theme.Space.l)
         }
         .background(Theme.Color.bg.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
@@ -124,9 +127,9 @@ struct IntegrationsView: View {
     /// The phone calendar, read with EventKit. Google calendars synced to the phone come with it.
     private var calendarTile: some View {
         Card {
-            HStack(spacing: 14) {
+            HStack(spacing: Theme.Space.s) {
                 IconCircle(systemImage: "calendar")
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text("Calendar").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                     Text(calendar.connected ? "Connected · Apple + Google synced" : "Apple + Google synced").font(Theme.Font.label)
                         .foregroundStyle(calendar.connected ? Theme.Color.paid : Theme.Color.text2)
@@ -166,7 +169,7 @@ struct DisputesView: View {
 
     var body: some View {
         List(items) { d in
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(d.reason.replacingOccurrences(of: "_", with: " ").capitalized).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
                 Text(d.status.replacingOccurrences(of: "_", with: " ").capitalized).font(Theme.Font.label).foregroundStyle(Theme.Color.due)
                 if let a = d.amount { Text(formatMoney(a.value, a.currency_code)).font(Theme.Font.label).foregroundStyle(Theme.Color.text2) }
