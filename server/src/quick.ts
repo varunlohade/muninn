@@ -34,6 +34,8 @@ const PRICE_SHAPE = /[$€£]\s?\d|\d\s?[$€£]|\b\d+(?:[.,]\d+)*\s+for\b|\b(?:
 const NUMBER = /\d+(?:[.,]\d+)*|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|dozens?|half)\b/gi;
 // A discount, tip, part payment or quantity word: the number may not be the total.
 const RATE = /[×*]|\d\s*x|\bx\s*\d|\b(?:x|times|each|per|ea|hours?|hrs?|months?|people|pax|off|minus|discount\w*|less|tips?|plus|extra|couple|twice|both|half|double|deposit|partial|split)\b|\/\s*(?:hr|h|mo)\b/i;
+// $45/person, 45 usd/day, €300 / week: "/word" right after an amount is a rate, not a link.
+const SLASH_RATE = /(\d\s*(?:[$€£]|(?:usd|eur|gbp|cad|aud|dollars?|bucks|euros?)\b)?)\s*\/\s*(?=\p{L})/iu;
 const URL = /\S*\/\S*/g;
 /** Text with every URL-like token (anything with a slash) removed, so an email inside a link never counts as typed. */
 export const withoutUrls = (text: string) => text.replace(URL, ' ');
@@ -76,7 +78,7 @@ export function quick(text: string, context = ''): Quick {
   const typed = amountsIn(text);
   const copied = amountsIn(context);
   const plain = text.replace(EMAIL, ' ');
-  const amt = (plain.match(NUMBER) ?? []).length === 1 && !RATE.test(plain) ? single(typed) : null;
+  const amt = (plain.match(NUMBER) ?? []).length === 1 && !RATE.test(plain) && !SLASH_RATE.test(plain) ? single(typed) : null;
   const currency = one(typed.map((a) => a.currency).filter((c) => c !== null), (c) => c);
   const emails = typedEmails(text);
   const none = typed.length + copied.length === 0 && !MONEY_WORDS.test(all) && !PRICE_SHAPE.test(all) && !OTHER_SCRIPT.test(all);
@@ -94,7 +96,7 @@ export const typedEmails = (text: string) => [...withoutUrls(text).matchAll(EMAI
 
 /** True when every word of `text` is an amount, an email, a currency or money word, a filler word, or one of `names`. */
 export function onlyKnownWords(text: string, names: string[]): boolean {
-  let rest = withoutUrls(text).replace(EMAIL, ' ');
+  let rest = withoutUrls(text.replace(new RegExp(SLASH_RATE, 'giu'), '$1 ')).replace(EMAIL, ' ');
   for (const n of names) if (n.trim().length >= 2) rest = rest.replace(wholeWords(n.trim(), 'giu'), ' ');
   const words = rest.toLowerCase().match(/[\p{L}']+/gu) ?? [];
   return words.every((w) => FILLER.has(w) || Object.hasOwn(WORD, w) || MONEY_WORDS.test(w));

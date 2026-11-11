@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAi } from '../src/ai.ts';
 import type { Intent } from '../src/config.ts';
-import { mentions, quick } from '../src/quick.ts';
+import { mentions, onlyKnownWords, quick } from '../src/quick.ts';
 import { paidEvent, setup, webhookHeaders } from './helpers.ts';
 
 test('quick: amounts, currencies, emails', () => {
@@ -243,4 +243,12 @@ test('review fix 1b: an unsure amount needs a server-side confirm even for a kno
   assert.deepEqual(await tap.json(), { error: 'confirm the amount and recipient', needs_confirm: true, recipient: 'ana@example.com', amount: '50.00', currency: 'USD' });
   assert.equal((await post('/v1/actions/invoice', { ...chip.payload, confirm_recipient: 'ana@example.com', confirm_amount: chip.payload.amount, confirm_currency: chip.payload.currency })).status, 200);
   assert.equal((await post('/v1/actions/paylink', r.chips[1].payload)).status, 200, 'a pay link sends nothing, so it needs no confirm');
+});
+
+test('review fix 6: a slash rate after an amount is a rate word, never a regex amount or a link', () => {
+  for (const t of ['invoice sam $45/person for the dinner', '$45/day', '$45 / head', '45 usd/night', '€300/week', '$5/item', '$45/guest']) {
+    assert.equal(quick(t).amount, null, t);
+    assert.equal(onlyKnownWords(t, ['sam']), false, t);
+  }
+  assert.equal(onlyKnownWords('invoice sam $45 https://example.com/pay', ['sam']), true, 'a real link is still not a word');
 });
