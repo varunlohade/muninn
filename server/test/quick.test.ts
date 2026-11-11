@@ -66,7 +66,8 @@ async function world(opts: Parameters<typeof setup>[0]) {
     (await s.call(token, 'POST', '/v1/suggest', context === undefined ? { text } : { text, context })).json();
   const invoice = async (client_name: string, amount = 30) =>
     (await s.call(token, 'POST', '/v1/actions/invoice', { amount, item: 'Trim', client_name })).json();
-  return { s, suggest, invoice };
+  const post = (path: string, b: unknown) => s.call(token, 'POST', path, b);
+  return { s, suggest, invoice, post };
 }
 
 test('suggest paths: paid calls per message, before vs after', async (t) => {
@@ -226,4 +227,21 @@ test('review fix 5: the regex invoice keeps a known client name; tone logs its p
   }
   const paid = lines.map((l) => JSON.parse(l)).filter((e) => e.event === 'write').map((e) => e.paid_calls);
   assert.deepEqual(paid, [1, 2]);
+});
+
+test('review fix 1b: an unsure amount needs a server-side confirm even for a known client', async () => {
+  const { suggest, post } = await world({ ext: { amount: 99, client_email: 'ana@example.com', item: 'beard trim' } });
+  const first = { amount: 45, item: 'Haircut', client_name: 'Ana', client_email: 'ana@example.com', confirm_recipient: 'ana@example.com' };
+  assert.equal((await post('/v1/actions/invoice', first)).status, 200);
+  const sure = (await suggest('$99 for the beard trim, ana@example.com')).chips[0];
+  assert.equal(sure.needs_confirm, false);
+  assert.equal(sure.payload.amount_unsure, undefined, 'a sure chip keeps its old payload');
+  const r = await suggest('$50 for the beard trim, ana@example.com');
+  const chip = r.chips[0];
+  assert.equal(chip.needs_confirm, true);
+  const tap = await post('/v1/actions/invoice', chip.payload);
+  assert.equal(tap.status, 409, 'one tap on an unsure amount must not send, known client or not');
+  assert.deepEqual(await tap.json(), { error: 'confirm the recipient', needs_confirm: true, recipient: 'ana@example.com' });
+  assert.equal((await post('/v1/actions/invoice', { ...chip.payload, confirm_recipient: 'ana@example.com' })).status, 200);
+  assert.equal((await post('/v1/actions/paylink', r.chips[1].payload)).status, 200, 'a pay link sends nothing, so it needs no confirm');
 });

@@ -104,6 +104,8 @@ const ToneBody = z.object({ text: OptionalWriteText, context: OptionalWriteText 
   .refine((b) => b.text || b.context, { message: 'text or context is required' });
 const InvoiceBody = z.object({
   amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName, client_email: ClientEmail, confirm_recipient: ClientEmail,
+  // Set by suggest when the owner did not type the amount or the model read another one: a known client needs a confirm too.
+  amount_unsure: z.literal(true).optional(),
 }).strict();
 const PayLinkBody = z.object({ amount: Amount, currency: Currency.optional(), item: Item, client_name: ClientName }).strict();
 const RemindBody = z.object({ invoice_id: z.string().min(1).max(64) }).strict();
@@ -379,7 +381,7 @@ export function createApp(deps: Deps) {
       // The model can inject an email. Only an email the owner typed, or a known client, is pre-confirmed.
       const confirmed = !unsure && (email ? typed.includes(email) || knownClient(userId, email) : true);
       const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`,
-        { ...base, client_email: email, ...(email && confirmed ? { confirm_recipient: email } : {}) }, !confirmed);
+        { ...base, client_email: email, ...(email && confirmed ? { confirm_recipient: email } : {}), ...(unsure ? { amount_unsure: true } : {}) }, !confirmed);
       const link = chip('paylink', `Pay link ${money} · ${item}`, base, unsure);
       return intent === 'create_invoice' ? [invoice, link] : [link, invoice];
     }
@@ -416,7 +418,7 @@ export function createApp(deps: Deps) {
   app.post('/v1/actions/invoice', async (c) => {
     const userId = c.get('userId');
     const b = await body(c, InvoiceBody);
-    if (b.client_email && b.confirm_recipient !== b.client_email && !knownClient(userId, b.client_email)) {
+    if (b.client_email && b.confirm_recipient !== b.client_email && (b.amount_unsure || !knownClient(userId, b.client_email))) {
       c.set('idemSkip', true);
       return c.json({ error: 'confirm the recipient', needs_confirm: true, recipient: b.client_email }, 409);
     }
