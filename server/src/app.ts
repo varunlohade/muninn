@@ -982,14 +982,26 @@ export function createApp(deps: Deps) {
         db.setSubscriptionActive(owner, res.id, now());
         handled = true;
       }
+    } else if (type === 'BILLING.SUBSCRIPTION.CANCELLED' || type === 'BILLING.SUBSCRIPTION.SUSPENDED') {
+      const owner = res.id && db.ownerOfSubscription(res.id);
+      if (owner) {
+        db.setSubscriptionStatus(owner, res.id, type === 'BILLING.SUBSCRIPTION.CANCELLED' ? 'CANCELLED' : 'SUSPENDED');
+        handled = true;
+      }
     } else if (type === 'PAYMENT.SALE.COMPLETED') {
       // A payment on a subscription: the sale's billing_agreement_id is the subscription id.
+      // A late sale counts, but only ACTIVATED brings back a cancelled or suspended repeat bill.
       const subId = res.billing_agreement_id;
       const owner = subId && res.id && db.ownerOfSubscription(subId);
       if (owner) {
-        db.setSubscriptionActive(owner, subId, now());
         const sub = db.getSubscription(owner, subId);
-        if (db.addSubscriptionPayment(owner, subId, String(res.id), now()) && sub) notify = paidNow(owner, { ...sub, paid_at: null });
+        if (sub && sub.status !== 'CANCELLED' && sub.status !== 'SUSPENDED') db.setSubscriptionActive(owner, subId, now());
+        // The alert names this sale's own amount. A sale with no readable amount gets no alert.
+        const saleCents = amountToCents(res.amount?.total);
+        const saleCurrency = Currency.safeParse(res.amount?.currency).data;
+        if (db.addSubscriptionPayment(owner, subId, String(res.id), now()) && sub && saleCents !== null && saleCurrency) {
+          notify = paidNow(owner, { ...sub, paid_at: null, amount_cents: saleCents, currency: saleCurrency });
+        }
         handled = true;
       }
     } else if (type === 'PAYMENT.CAPTURE.COMPLETED') {
@@ -1001,7 +1013,8 @@ export function createApp(deps: Deps) {
         handled = true;
       }
     }
-    if (notify) await notify();
+    // Slack goes out after the answer, so a slow Slack never holds up PayPal. notifyPaid logs its own failures.
+    if (notify) setImmediate(notify);
     log('webhook', { event_type: type, handled });
     return c.json({ ok: true, handled });
   });

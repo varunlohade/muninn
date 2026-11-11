@@ -212,3 +212,23 @@ test('webhook: ACTIVATED marks the repeat bill active, each new PAYMENT.SALE.COM
   assert.equal(await hook(subscriptionPaidEvent('I-UNKNOWN', 'SALE-3')), false);
   assert.equal(await hook({ event_type: 'BILLING.SUBSCRIPTION.ACTIVATED', resource: { id: 'I-UNKNOWN' } }), false);
 });
+
+test('webhook: CANCELLED and SUSPENDED set the status, and a later sale never makes the repeat bill active again', async () => {
+  const s = setup();
+  const a = s.device();
+  await s.call(a.token, 'POST', '/v1/actions/subscribe', confirmed);
+  await s.call(a.token, 'POST', '/v1/actions/subscribe', { ...confirmed, amount: 50, confirm_amount: 50 });
+  const [second, first] = s.db.listSubscriptions(a.userId).map((r) => r.id);
+  const hook = async (event: unknown) => (await (await s.call(null, 'POST', '/webhooks/paypal', event, webhookHeaders)).json() as any).handled;
+  const status = (id: string) => s.db.getSubscription(a.userId, id)!.status;
+
+  for (const id of [first, second]) assert.equal(await hook({ event_type: 'BILLING.SUBSCRIPTION.ACTIVATED', resource: { id } }), true);
+  assert.equal(await hook({ event_type: 'BILLING.SUBSCRIPTION.CANCELLED', resource: { id: first } }), true);
+  assert.equal(await hook({ event_type: 'BILLING.SUBSCRIPTION.SUSPENDED', resource: { id: second } }), true);
+  assert.deepEqual([status(first), status(second)], ['CANCELLED', 'SUSPENDED']);
+
+  assert.equal(await hook(subscriptionPaidEvent(first, 'SALE-LATE-1')), true);
+  assert.equal(await hook(subscriptionPaidEvent(second, 'SALE-LATE-2')), true);
+  assert.deepEqual([status(first), status(second)], ['CANCELLED', 'SUSPENDED']);
+  assert.equal(await hook({ event_type: 'BILLING.SUBSCRIPTION.CANCELLED', resource: { id: 'I-UNKNOWN' } }), false);
+});

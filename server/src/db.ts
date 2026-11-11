@@ -224,6 +224,9 @@ export function openDb(path: string) {
     setSubscriptionActive(userId: string, id: string, at: number) {
       q(`UPDATE subscriptions SET status = 'ACTIVE', activated_at = COALESCE(activated_at, ?) WHERE id = ? AND user_id = ?`).run(at, id, userId);
     },
+    setSubscriptionStatus(userId: string, id: string, status: 'CANCELLED' | 'SUSPENDED') {
+      q('UPDATE subscriptions SET status = ? WHERE id = ? AND user_id = ?').run(status, id, userId);
+    },
     // One row per PayPal sale, so a webhook PayPal sends twice counts once. True when this sale is new.
     addSubscriptionPayment(userId: string, id: string, saleId: string, at: number): boolean {
       const added = q('INSERT OR IGNORE INTO subscription_payments (sale_id, user_id, subscription_id, paid_at) VALUES (?, ?, ?, ?)')

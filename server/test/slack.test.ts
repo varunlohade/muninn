@@ -1,15 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { paidEvent, setup, subscriptionPaidEvent, webhookHeaders } from './helpers.ts';
+import { paidEvent, setup, sleep, subscriptionPaidEvent, webhookHeaders } from './helpers.ts';
 
 const HOOK = 'https://hooks.slack.com/services/T000AAA/B000BBB/abcDEF123secret';
 
 /** Stubs fetch for Slack posts. `answer` is the reply per post: a status code or an Error to throw. */
-function stubFetch(answer: () => number | Error = () => 200) {
-  const posts: { url: string; body: any }[] = [];
+function stubFetch(answer: () => number | Error = () => 200, delayMs = 0) {
+  const posts: { url: string; body: any; redirect?: RequestRedirect }[] = [];
   const real = globalThis.fetch;
   globalThis.fetch = (async (url: string, init: RequestInit) => {
-    posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
+    posts.push({ url: String(url), body: JSON.parse(String(init.body)), redirect: init.redirect });
+    await sleep(delayMs);
     const a = answer();
     if (a instanceof Error) throw a;
     return new Response('ok', { status: a });
@@ -68,10 +69,15 @@ test('slack: a paid invoice, order or repeat bill posts first name, amount and i
       amount: 90, currency: 'USD', item: 'Haircut', client_name: 'Ana Lopez', client_email: 'ana@example.com',
       confirm_amount: 90, confirm_currency: 'USD', confirm_recipient: 'ana@example.com',
     })).json() as any;
-    const hook = (event: unknown) => s.call(null, 'POST', '/webhooks/paypal', event, webhookHeaders);
+    // The post goes out after the webhook answers, so each call waits a moment for it.
+    const hook = async (event: unknown) => {
+      const r = await s.call(null, 'POST', '/webhooks/paypal', event, webhookHeaders);
+      await sleep(5);
+      return r;
+    };
     assert.equal((await hook(paidEvent(inv.id))).status, 200);
     assert.equal((await hook(paidEvent(inv.id))).status, 200);
-    assert.deepEqual(posts, [{ url: HOOK, body: { text: 'Ana paid $90 · Haircut' } }]);
+    assert.deepEqual(posts, [{ url: HOOK, body: { text: 'Ana paid $90 · Haircut' }, redirect: 'error' }]);
     assert.ok(!JSON.stringify(posts).includes('ana@example.com'));
 
     const order = await (await s.call(a.token, 'POST', '/v1/actions/paylink', { amount: 35, item: 'Blowout <b>' })).json() as any;
@@ -85,8 +91,10 @@ test('slack: a paid invoice, order or repeat bill posts first name, amount and i
     const subId = s.db.listSubscriptions(a.userId)[0].id;
     await hook(subscriptionPaidEvent(subId, 'SALE-1'));
     await hook(subscriptionPaidEvent(subId, 'SALE-1'));
-    await hook(subscriptionPaidEvent(subId, 'SALE-2'));
-    assert.deepEqual(posts.slice(2).map((p) => p.body.text), ['Sam paid $40 · Color', 'Sam paid $40 · Color']);
+    // The alert names what PayPal took in this sale, not the amount stored when the bill was made.
+    const sale2 = subscriptionPaidEvent(subId, 'SALE-2');
+    await hook({ ...sale2, resource: { ...sale2.resource, amount: { total: '55.00', currency: 'USD' } } });
+    assert.deepEqual(posts.slice(2).map((p) => p.body.text), ['Sam paid $40 · Color', 'Sam paid $55 · Color']);
 
     // B never connected Slack: no post.
     const binv = await (await s.call(b.token, 'POST', '/v1/actions/invoice', { amount: 10, item: 'Trim', client_name: 'Bo' })).json() as any;
@@ -107,6 +115,7 @@ test('slack: a failed post is logged with its reason, tried once, and the PayPal
     const pay = async () => {
       const inv = await (await s.call(a.token, 'POST', '/v1/actions/invoice', { amount: 20, item: 'Trim', client_name: 'Ana' })).json() as any;
       const r = await s.call(null, 'POST', '/webhooks/paypal', paidEvent(inv.id), webhookHeaders);
+      await sleep(5);
       assert.equal(r.status, 200);
       assert.equal((await r.json() as any).handled, true);
       assert.equal(s.db.getInvoice(a.userId, inv.id)!.status, 'PAID');
@@ -118,6 +127,45 @@ test('slack: a failed post is logged with its reason, tried once, and the PayPal
     const failed = [...httpLogs, ...netLogs].filter((l) => l.event === 'slack_notify_failed');
     assert.deepEqual(failed.map((l) => l.reason), ['HTTP 404', 'ENOTFOUND']);
     assert.ok(!JSON.stringify([...httpLogs, ...netLogs]).includes('hooks.slack.com'));
+  } finally {
+    restore();
+  }
+});
+
+test('slack: a post never carries an @ or an email, even when the name or item is one', async () => {
+  const s = setup();
+  const a = s.device();
+  const { posts, restore } = stubFetch();
+  try {
+    await s.call(a.token, 'PUT', '/v1/integrations/slack', { webhook_url: HOOK });
+    const pay = async (client_name: string, item: string) => {
+      const inv = await (await s.call(a.token, 'POST', '/v1/actions/invoice', { amount: 30, item, client_name })).json() as any;
+      await s.call(null, 'POST', '/webhooks/paypal', paidEvent(inv.id), webhookHeaders);
+      await sleep(5);
+    };
+    await pay('ana@example.com', 'Haircut');
+    await pay('Bo', 'Trim for bo@example.com');
+    await pay('Cy', 'Color @ salon');
+    assert.deepEqual(posts.map((p) => p.body.text), ['A client paid $30 · Haircut', 'Bo paid $30', 'Cy paid $30']);
+    assert.ok(!JSON.stringify(posts.map((p) => p.body)).includes('@'));
+  } finally {
+    restore();
+  }
+});
+
+test('slack: a slow Slack never holds up the webhook answer', async () => {
+  const s = setup();
+  const a = s.device();
+  const { posts, restore } = stubFetch(() => 200, 1500);
+  try {
+    await s.call(a.token, 'PUT', '/v1/integrations/slack', { webhook_url: HOOK });
+    const inv = await (await s.call(a.token, 'POST', '/v1/actions/invoice', { amount: 20, item: 'Trim', client_name: 'Ana' })).json() as any;
+    const t = performance.now();
+    const r = await s.call(null, 'POST', '/webhooks/paypal', paidEvent(inv.id), webhookHeaders);
+    assert.equal(r.status, 200);
+    assert.ok(performance.now() - t < 500, `webhook took ${Math.round(performance.now() - t)} ms`);
+    await sleep(1600);
+    assert.equal(posts.length, 1);
   } finally {
     restore();
   }

@@ -37,11 +37,14 @@ export function createSlack(db: Db, cipher: Cipher, now: () => number) {
   async function notifyPaid(userId: string, p: { clientName: string | null; cents: number; currency: string; item: string }) {
     const url = urlFor(userId);
     if (!url) return;
+    // Nothing with an @ goes to Slack: a name or item that holds an email is dropped.
     const first = p.clientName?.trim().split(/\s+/)[0];
-    const text = escape(`${first || 'A client'} paid ${formatMoney(p.cents, p.currency)} · ${p.item}`);
+    const who = first && !first.includes('@') ? first : 'A client';
+    const item = p.item.includes('@') ? '' : ` · ${p.item}`;
+    const text = escape(`${who} paid ${formatMoney(p.cents, p.currency)}${item}`);
     try {
       const res = await fetch(url, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }), signal: AbortSignal.timeout(TIMEOUT_MS),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }), redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       if (!res.ok) log('slack_notify_failed', { user_id: userId, reason: `HTTP ${res.status}` });
       else log('slack_notified', { user_id: userId });
