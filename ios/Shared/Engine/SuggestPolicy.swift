@@ -28,13 +28,24 @@ struct SuggestPolicy {
     init() {}
 
     /// `typed` is the trimmed text before the cursor. `prefix` is "Invoice Sam sam@…" after an "Invoice Sam" tap.
-    static func ask(_ typed: String, lastAsked: String, prefix: String? = nil) -> Ask {
+    /// `clear`: the phone already read an event, reminder or note. Then a soft money word ("remind me", "buy")
+    /// is not enough to ask; an amount or a billing word still is.
+    static func ask(_ typed: String, lastAsked: String, prefix: String? = nil, clear: Bool = false) -> Ask {
         guard typed != lastAsked else { return .keep }
         guard !typed.isEmpty, !typed.hasPrefix(shortcutPrefix), SecretScan.scan(typed) == .clean else { return .skip }
         let text = prefix.map { $0 + " " + typed } ?? typed
         let words = text.split(whereSeparator: \.isWhitespace).count
         guard hasMoneySignal(text), words >= minMoneyWords else { return .skip }
+        if clear, prefix == nil, !hasStrongMoneySignal(text) { return .skip }
         return .ask(text, after: debounce)
+    }
+
+    /// An amount, a price shape or a billing word: money even when the text is also a reminder.
+    static func hasStrongMoneySignal(_ text: String) -> Bool {
+        let amount = #"[$€£]\s?\d|\d\s?[$€£]|\d(?:[.,]\d{1,2})?\s?(?:usd|eur|gbp|cad|aud|dollars?|bucks|euros?|pounds?)\b"#
+        let priceShape = #"\b\d+(?:[.,]\d+)*\s+for\b"#
+        let word = #"\b(?:invoic\w*|bill\w*|pay\w*|paid|owe[sd]?|owing|refund\w*|charge[sd]?|price[sd]?|cost\w*|deposit|venmo|paypal|link|quote|fees?)\b"#
+        return text.range(of: [amount, priceShape, word].joined(separator: "|"), options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     /// Text with no money signal and no clear on-device match, but action-ish signals ("can we do Ana's thing Friday"):

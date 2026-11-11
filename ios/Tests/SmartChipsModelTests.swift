@@ -138,7 +138,7 @@ final class SmartChipsModelTests: XCTestCase {
         model.textChanged()
         host.text = ""
         model.textChanged()
-        XCTAssertEqual(model.barItems.map(\.title), ["Who paid? \u{00B7} 2 unpaid", "Notes"], "an empty field after a send reloads the snapshot")
+        XCTAssertEqual(model.barItems.map(\.detail), ["2 unpaid", nil], "an empty field after a send reloads the snapshot")
         XCTAssertEqual(api.calls, [])
     }
 }

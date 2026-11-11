@@ -453,7 +453,7 @@ final class KeyboardModel: ObservableObject {
         if text.isEmpty, !wasEmpty { reloadSnapshot() }
         let clear = detectSmart(text)
         suggest.observe(text)
-        switch SuggestPolicy.ask(text, lastAsked: lastSent, prefix: billing?.invoicePrefix) {
+        switch SuggestPolicy.ask(text, lastAsked: lastSent, prefix: billing?.invoicePrefix, clear: clear) {
         case .keep:
             return
         case .skip:

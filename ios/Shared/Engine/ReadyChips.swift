@@ -20,12 +20,12 @@ enum ReadyChips {
         if let a = i.nextUp {
             let known = (a.clientName ?? a.clientEmail) != nil
             out.append(known
-                ? Item(id: "next", title: "Next: \(a.who) \(a.time) \u{00B7} Invoice", action: .bill(a))
-                : Item(id: "next", title: "Next: \(a.who) \(a.time)", tone: .secondary))
+                ? Item(id: "next", title: "Next: \(a.who) \(a.time)", detail: "Invoice", action: .bill(a))
+                : Item(id: "next", title: "Next: \(a.time)", detail: a.who, tone: .secondary))
         }
         switch i.unpaidCount {
         case nil: out.append(Item(id: "whopaid", title: "Who paid?", action: .whoPaid))
-        case let n? where n > 0: out.append(Item(id: "whopaid", title: "Who paid? \u{00B7} \(n) unpaid", action: .whoPaid))
+        case let n? where n > 0: out.append(Item(id: "whopaid", title: "Who paid?", detail: "\(n) unpaid", action: .whoPaid))
         default: break
         }
         if let w = i.watch {
@@ -35,7 +35,7 @@ enum ReadyChips {
         }
         if !i.today.isEmpty {
             let n = i.today.count
-            out.append(Item(id: "today", title: "Today \u{00B7} \(n) appointment\(n == 1 ? "" : "s")", action: .today))
+            out.append(Item(id: "today", title: "Today", detail: "\(n) appointment\(n == 1 ? "" : "s")", action: .today))
         }
         out.append(Item(id: "notes", title: "Notes", action: .notes))
         return Array(out.prefix(3))

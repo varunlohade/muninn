@@ -106,6 +106,15 @@ final class SmartDetectTests: XCTestCase {
         XCTAssertEqual(SmartChip(action: .note(text: "x"), trigger: "note").label(now: now), "Save note")
     }
 
+    func testAClearDeviceMatchSkipsTheServerUnlessMoneyIsStrong() {
+        XCTAssertEqual(SuggestPolicy.ask("remind me in 20 min to check oven", lastAsked: "", clear: true), .skip)
+        XCTAssertEqual(SuggestPolicy.ask("need to buy shampoo", lastAsked: "", clear: true), .skip)
+        XCTAssertEqual(SuggestPolicy.ask("need to buy shampoo", lastAsked: "", clear: false), .ask("need to buy shampoo", after: SuggestPolicy.debounce))
+        XCTAssertEqual(SuggestPolicy.ask("$45 for the haircut tomorrow", lastAsked: "", clear: true), .ask("$45 for the haircut tomorrow", after: SuggestPolicy.debounce))
+        XCTAssertEqual(SuggestPolicy.ask("remind Ana to pay the invoice tomorrow", lastAsked: "", clear: true),
+                       .ask("remind Ana to pay the invoice tomorrow", after: SuggestPolicy.debounce))
+    }
+
     func testMaybeAsksOncePerSentenceAndNeverForPlainChat() {
         var policy = SuggestPolicy()
         XCTAssertNil(policy.maybe("lol ok see you", clear: false))
@@ -134,14 +143,16 @@ final class ReadyChipsTests: XCTestCase {
         let next = appt("Sam Okafor", 30)
         let items = ReadyChips.build(.init(nextUp: next, today: [appt("Ava", -60), next, appt(nil, 90)], unpaidCount: 2,
                                            watch: Watch(id: "I", who: "Jordan", money: "$45", paid: true)))
-        XCTAssertEqual(items.map(\.title), ["Next: Sam \(next.time) \u{00B7} Invoice", "Who paid? \u{00B7} 2 unpaid", "Jordan paid \u{2713}"])
+        XCTAssertEqual(items.map(\.title), ["Next: Sam \(next.time)", "Who paid?", "Jordan paid \u{2713}"])
+        XCTAssertEqual(items.map(\.detail), ["Invoice", "2 unpaid", nil])
         XCTAssertEqual(items[0].action, .bill(next))
     }
 
     func testCopiedComesFirstAndNothingUnpaidHidesWhoPaid() {
         let items = ReadyChips.build(.init(copiedAvailable: true, today: [appt("Ava", -60)], unpaidCount: 0,
                                            watch: Watch(id: "I", who: "Jordan", money: "$45")))
-        XCTAssertEqual(items.map(\.title), ["Use copied message", "Waiting on $45", "Today \u{00B7} 1 appointment"])
+        XCTAssertEqual(items.map(\.title), ["Use copied message", "Waiting on $45", "Today"])
+        XCTAssertEqual(items.last?.detail, "1 appointment")
     }
 
     func testNextWithNoClientIsOnlyInformation() {

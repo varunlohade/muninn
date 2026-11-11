@@ -30,6 +30,8 @@ enum BarItems {
         var action: Action? = nil
         /// The typed words that caused the chip. The bar shows them quoted, in the accent color, before the title.
         var trigger: String? = nil
+        /// A shorter title to sit beside the trigger when the full one does not fit: "Add to calendar".
+        var short: String? = nil
     }
 
     /// A smart chip and whether its store can take it now.
@@ -83,10 +85,11 @@ enum BarItems {
         }
         switch s.bar {
         case .idle:
+            // A chip about the typed words gets the room; the day's chips wait for an empty field.
             out += smart
-            if s.copiedAvailable { out.append(Item(id: "copied", title: "Use copied message", action: .useCopied)) }
-            if let a = s.toBill { out.append(Item(id: "bill", title: "Invoice \(a.who)", action: .bill(a))) }
-            if let a = s.nextUp { out.append(Item(id: "next", title: "Next: \(a.who) \(a.time)", tone: .secondary)) }
+            if smart.isEmpty, s.copiedAvailable { out.append(Item(id: "copied", title: "Use copied message", action: .useCopied)) }
+            if smart.isEmpty, let a = s.toBill { out.append(Item(id: "bill", title: "Invoice \(a.who)", action: .bill(a))) }
+            if smart.isEmpty, let a = s.nextUp { out.append(Item(id: "next", title: "Next: \(a.who) \(a.time)", tone: .secondary)) }
             out = Array(out.prefix(3))
         case .chips(let chips, let fromCopied):
             for chip in chips.prefix(max(1, 3 - out.count)) {
@@ -119,7 +122,7 @@ enum BarItems {
             let item: Item
             switch s.access {
             case .ready:
-                item = Item(id: s.chip.id, title: s.chip.label(now: now), action: .smart(s.chip), trigger: s.chip.trigger)
+                item = Item(id: s.chip.id, title: s.chip.label(now: now), action: .smart(s.chip), trigger: s.chip.trigger, short: s.chip.shortLabel)
             case .needsFullAccess:
                 item = Item(id: "allow.full", title: "Allow Full Access for \(AppConfig.keyboardName)", tone: .secondary)
             case .needsPermission:

@@ -43,6 +43,16 @@ struct SmartChip: Equatable, Hashable {
         }
     }
 
+    /// The action alone, for beside the trigger, which already says when.
+    var shortLabel: String {
+        switch action {
+        case .event: "Add to calendar"
+        case .reminder: "Remind me"
+        case .note: "Save note"
+        case .invoiceLater: "Invoice later"
+        }
+    }
+
     /// The bar's line after one tap added it.
     func doneLabel(now: Date, calendar cal: Calendar = .current) -> String {
         switch action {
