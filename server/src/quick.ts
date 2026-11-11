@@ -193,3 +193,28 @@ export function deviceTitle(sentence: string): string {
     .trim();
   return t ? t[0].toUpperCase() + t.slice(1) : '';
 }
+
+// ---- More PayPal verbs (payouts, plans, invoices, balance, disputes). Regex only: no model reads these.
+// Each one reads the last sentence the owner typed, never copied client text.
+const NOT_A_NAME = new Set([
+  'me', 'you', 'a', 'an', 'the', 'them', 'it', 'him', 'her', 'us', 'back', 'over', 'out', 'to', 'my', 'your', 'this', 'that', 'money', 'now', 'later', 'for',
+]);
+const PAY_ROLE = String.raw`(?:my\s+(?:supplier|vendor|contractor|freelancer|assistant|cleaner|landlord|guy)\s+)?`;
+const PAY_NAME = String.raw`(?<name>\p{L}[\p{L}'’-]*)`;
+const PAY_TO_NAME = new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_ROLE}${PAY_NAME}`, 'iu');
+const PAY_AMOUNT_TO = new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+\S+\s+to\s+${PAY_ROLE}${PAY_NAME}`, 'iu');
+// A request for the client to pay, not a payment to someone.
+const NOT_PAYOUT = /\b(?:invoice|bill|link|reminder|receipt|quote|request)\b/i;
+
+export type PayoutAsk = { name: string; amount: number | null; currency: string | null; email: string | null };
+
+/** "pay joe $200", "send my supplier joe $200 joe@x.com", "send $200 to joe". Null when the sentence is not a payout. */
+export function payoutAsk(text: string): PayoutAsk | null {
+  const s = lastSentence(text);
+  if (NOT_PAYOUT.test(s) || !/\d/.test(s)) return null;
+  const m = s.match(PAY_TO_NAME) ?? s.match(PAY_AMOUNT_TO);
+  const raw = m?.groups?.name;
+  if (!raw || NOT_A_NAME.has(raw.toLowerCase())) return null;
+  const q = quick(s);
+  return { name: raw[0].toUpperCase() + raw.slice(1).toLowerCase(), amount: q.amount, currency: q.currency, email: q.email };
+}

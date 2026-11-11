@@ -188,7 +188,7 @@ final class BarItemsTests: XCTestCase {
     func testConfirmHasSendAndCancel() {
         let chip = Chip(kind: "invoice", label: "x", payload: ["amount": .string("45.00"), "currency": .string("USD")], needs_confirm: true)
         let items = BarItems.build(state(.confirm(chip, recipient: "sam@example.com")))
-        XCTAssertEqual(items.map(\.title), ["Send $45 invoice to sam@example.com?", "Cancel"])
+        XCTAssertEqual(items.map(\.title), ["Email sam@example.com a $45 invoice?", "Cancel"])
         XCTAssertEqual(items.map(\.action), [.confirm(chip, recipient: "sam@example.com"), .cancelConfirm])
         XCTAssertEqual(items.first?.tone, .accent)
     }

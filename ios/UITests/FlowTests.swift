@@ -490,7 +490,7 @@ final class FlowTests: XCTestCase {
         XCTAssertLessThan(left, before - 5, "delete repeats on hold")
     }
 
-    /// Calendar: Connect on Integrations, the system prompt, then Home "Today" and "Bill Ava?".
+    /// Calendar: Connect on Integrations, the system prompt, then Home "Today" and "Invoice Ava".
     /// "-calendarDemo" seeds four events for today. No model call: the prefilled request is not submitted.
     func test15Calendar() {
         let app = XCUIApplication()

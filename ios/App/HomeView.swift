@@ -241,7 +241,7 @@ struct HomeView: View {
                 if a.billed {
                     Text("Billed").font(Theme.Font.label).foregroundStyle(Theme.Color.paid)
                 } else if ended {
-                    AskChip(title: "Bill \(a.who)?", detail: nil) { ask.prefill(a.invoicePrefix + " $") }
+                    AskChip(title: "Invoice \(a.who)", detail: nil) { ask.prefill(a.invoicePrefix + " $") }
                         .accessibilityIdentifier("today.bill.\(a.who)")
                 }
             }
@@ -444,7 +444,7 @@ final class AskModel: ObservableObject {
     private func show(_ result: AskResponse.Result) {
         switch result {
         case .chips(let chips):
-            state = chips.isEmpty ? .error("No action for that yet. Try \"invoice Sam $45 for a haircut\".") : .chips(chips)
+            state = chips.isEmpty ? .line(AskModel.hint) : .chips(chips)
         case .text(let line), .line(let line):
             state = .line(line)
         case .tone(let t):
@@ -531,9 +531,12 @@ final class AskModel: ObservableObject {
         }
     }
 
+    /// The neutral line when no action fits: every verb, not only invoices.
+    static let hint = "Try: invoice Sam $45 \u{00B7} nudge Ana \u{00B7} refund Sam $20 \u{00B7} who owes me"
+
     static func resultTitle(_ r: ActionResult) -> String {
         switch r.kind {
-        case "invoice": "Invoice sent \u{00B7} \(r.money)"
+        case "invoice": r.emailed ? "Invoice emailed \u{00B7} \(r.money)" : "Invoice link ready \u{00B7} \(r.money)"
         case "subscribe": "Repeat billing ready \u{00B7} \(r.money)"
         default: "Pay link ready \u{00B7} \(r.money)"
         }

@@ -81,7 +81,7 @@ enum BarItems {
         if let w = s.watch {
             out.append(w.paid
                 ? Item(id: "paid", title: "\(w.who) paid \(w.money) ✓", tone: .paid)
-                : Item(id: "waiting", title: "Sent \(w.money)", detail: "waiting to be paid", tone: .secondary))
+                : Item(id: "waiting", title: "Waiting on \(w.money) \u{00B7} \(w.who)", tone: .secondary))
         }
         switch s.bar {
         case .idle:
@@ -144,9 +144,11 @@ enum BarItems {
         string(chip, "amount").map { a in string(chip, "currency").map { formatMoney(a, $0) } ?? formatMoney(a, "").trimmingCharacters(in: .whitespaces) } ?? ""
     }
 
+    /// An invoice with no email only makes a link, so it says so: "Invoice link $45 Haircut".
     static func title(_ chip: Chip) -> String {
         guard chip.kind == "invoice" || chip.kind == "paylink" else { return chip.label }
-        return [chip.kind == "invoice" ? "Invoice" : "Pay link", money(chip), string(chip, "item") ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+        let verb = chip.kind == "paylink" ? "Pay link" : string(chip, "client_email") == nil ? "Invoice link" : "Invoice"
+        return [verb, money(chip), string(chip, "item") ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     /// How a repeat bill's interval reads: "monthly".
@@ -166,20 +168,27 @@ enum BarItems {
         }
     }
 
-    /// The confirm shows what the tap does: "Send $45 invoice to bob@x.com?", "Create $45 invoice for Sam?",
-    /// "Make a $45 pay link?", "Remind Ana about $90?", "Repeat $40 monthly to Sam?". Only an invoice with an email is sent.
+    /// The confirm shows what the tap does and who gets told: "Email Sam (sam@x.com) a $45 invoice?",
+    /// "Make a $45 invoice link for Sam? No email goes out.", "Make a $45 pay link?", "Email Ana a reminder for $90?",
+    /// "Repeat $40 monthly to Sam?". Only an invoice with an email is sent.
     static func confirmTitle(_ chip: Chip, recipient: String) -> String {
         if chip.kind == "remind" {
-            return recipient.isEmpty || money(chip).isEmpty ? chip.label + "?" : "Remind \(recipient) about \(money(chip))?"
+            return recipient.isEmpty || money(chip).isEmpty ? chip.label + "?" : "Email \(recipient) a reminder for \(money(chip))?"
+        }
+        if chip.kind == "invoice" {
+            let name = string(chip, "client_name")
+            if recipient.contains("@") {
+                let who = name.map { "\($0) (\(recipient))" } ?? recipient
+                return "Email \(who) a \(money(chip)) invoice?"
+            }
+            let who = name ?? (recipient.isEmpty ? nil : recipient)
+            return "Make a \(money(chip)) invoice link\(who.map { " for \($0)" } ?? "")? No email goes out."
         }
         if chip.kind == "subscribe" {
             let words = ["Repeat", money(chip), string(chip, "interval").flatMap { every[$0] } ?? ""] + (recipient.isEmpty ? [] : ["to", recipient])
             return words.filter { !$0.isEmpty }.joined(separator: " ") + "?"
         }
-        let words = if chip.kind == "paylink" { ["Make a", money(chip), "pay link"] }
-            else if recipient.contains("@") { ["Send", money(chip), "invoice", "to", recipient] }
-            else { ["Create", money(chip), "invoice"] + (recipient.isEmpty ? [] : ["for", recipient]) }
-        return words.filter { !$0.isEmpty }.joined(separator: " ") + "?"
+        return ["Make a", money(chip), "pay link"].filter { !$0.isEmpty }.joined(separator: " ") + "?"
     }
 
     /// The recipient stays visible on an invoice (security review M2).

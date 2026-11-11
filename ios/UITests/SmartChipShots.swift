@@ -122,9 +122,9 @@ final class SmartChipShots: XCTestCase {
         Thread.sleep(forTimeInterval: 1.5)
         shot("00-empty-ready-chips")
 
-        // The ready "Who paid?" chip opens the who-paid list above the keys.
+        // The ready "Who owes you" chip opens the who-paid list above the keys.
         let whoPaid = element(messages, "identifier == %@", "chip.whopaid")
-        XCTAssertTrue(whoPaid.waitForExistence(timeout: 5), "no Who paid? ready chip")
+        XCTAssertTrue(whoPaid.waitForExistence(timeout: 5), "no Who owes you ready chip")
         whoPaid.tap()
         XCTAssertTrue(element(messages, "identifier == %@", "whopaid.header").waitForExistence(timeout: 10), "the who-paid list did not open")
         shot("00b-who-paid")

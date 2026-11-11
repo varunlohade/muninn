@@ -99,8 +99,10 @@ final class SuggestionBarTextTests: XCTestCase {
     }
 
     func testInvoiceTitle() {
-        let c = chip("invoice", ["amount": "90.00", "currency": "USD", "item": "logo design"])
+        let c = chip("invoice", ["amount": "90.00", "currency": "USD", "item": "logo design", "client_email": "ana@x.com"])
         XCTAssertEqual(BarItems.title(c), "Invoice $90 logo design")
+        let noEmail = chip("invoice", ["amount": "90.00", "currency": "USD", "item": "logo design"])
+        XCTAssertEqual(BarItems.title(noEmail), "Invoice link $90 logo design", "no email: PayPal only makes a link")
     }
 
     func testPayLinkWithoutCurrencyShowsBareAmount() {

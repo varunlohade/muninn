@@ -371,7 +371,7 @@ final class KeyboardModel: ObservableObject {
                     if !p.before.isEmpty, (self.host?.contextBeforeInput ?? "") == p.before {
                         self.place(r.message, gap: r.kind == "invoice" ? "\n" : " ", readAt: p.before)
                     } else if r.kind == "invoice" {
-                        self.bar = .done("Invoice sent to \(r.who) \u{2713}")
+                        self.bar = .done(r.emailed ? "Invoice emailed to \(r.who) \u{2713}" : "Invoice link ready \u{2713}")
                     } else {
                         self.offerInsert(r.message)
                     }

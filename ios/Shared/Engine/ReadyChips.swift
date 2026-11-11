@@ -19,19 +19,20 @@ enum ReadyChips {
         if let a = i.toBill { out.append(Item(id: "bill", title: "Invoice \(a.who)", action: .bill(a))) }
         if let a = i.nextUp {
             let known = (a.clientName ?? a.clientEmail) != nil
+            // "Next" only informs; "Invoice Sam" is the one chip that bills.
             out.append(known
-                ? Item(id: "next", title: "Next: \(a.who) \(a.time)", detail: "Invoice", action: .bill(a))
+                ? Item(id: "next", title: "Next: \(a.who) \(a.time)", tone: .secondary)
                 : Item(id: "next", title: "Next: \(a.time)", detail: a.who, tone: .secondary))
         }
         switch i.unpaidCount {
-        case nil: out.append(Item(id: "whopaid", title: "Who paid?", action: .whoPaid))
-        case let n? where n > 0: out.append(Item(id: "whopaid", title: "Who paid?", detail: "\(n) unpaid", action: .whoPaid))
+        case nil: out.append(Item(id: "whopaid", title: "Who owes you", action: .whoPaid))
+        case let n? where n > 0: out.append(Item(id: "whopaid", title: "Who owes you", detail: "\(n) unpaid", action: .whoPaid))
         default: break
         }
         if let w = i.watch {
             out.append(w.paid
                 ? Item(id: "paid", title: "\(w.who) paid \u{2713}", tone: .paid)
-                : Item(id: "waiting", title: "Waiting on \(w.money)", tone: .secondary))
+                : Item(id: "waiting", title: "Waiting on \(w.money) \u{00B7} \(w.who)", tone: .secondary))
         }
         if !i.today.isEmpty {
             let n = i.today.count

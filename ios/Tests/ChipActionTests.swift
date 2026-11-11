@@ -72,7 +72,7 @@ final class ChipActionTests: XCTestCase {
         send(chip("remind", "Remind Sam · $45", ["invoice_id": .string("INV-9")]))
         await settled()
         XCTAssertEqual(api.calls, ["remind:INV-9"])
-        XCTAssertEqual(model.bar, .done("Reminder sent \u{2713}"))
+        XCTAssertEqual(model.bar, .done("Reminder emailed to the client \u{2713}"))
         XCTAssertEqual(host.text, "remind Sam")
     }
 
@@ -112,10 +112,10 @@ final class ChipActionTests: XCTestCase {
         guard let remind = model.whoPaid?.first?.remind else { return XCTFail("no reminder on the card") }
         model.tapChip(remind)
         XCTAssertEqual(model.bar, .confirm(remind, recipient: "Ana"))
-        XCTAssertEqual(BarItems.confirmTitle(remind, recipient: "Ana"), "Remind Ana about $90?")
+        XCTAssertEqual(BarItems.confirmTitle(remind, recipient: "Ana"), "Email Ana a reminder for $90?")
         XCTAssertEqual(api.calls, ["payments"], "nothing is sent before the confirm tap")
         model.confirm(remind, recipient: "Ana")
-        await until("reminder") { model.bar == .done("Reminder sent \u{2713}") }
+        await until("reminder") { model.bar == .done("Reminder emailed to Ana \u{2713}") }
         XCTAssertEqual(api.calls, ["payments", "remind:INV-1"])
         XCTAssertEqual(api.reminded, ["Ana"])
         XCTAssertEqual(api.keys, [remind.key])
@@ -327,7 +327,7 @@ final class ChipActionTests: XCTestCase {
         await until("lookup") { store.pendingAction == nil }
         XCTAssertEqual(api.calls, ["invoice", "lookup:invoice"])
         XCTAssertEqual(host.text, "Other chat")
-        XCTAssertEqual(model.bar, .done("Invoice sent to Sam \u{2713}"))
+        XCTAssertEqual(model.bar, .done("Invoice emailed to Sam \u{2713}"))
         XCTAssertEqual(Set(api.keys).count, 1)
     }
 
@@ -401,7 +401,7 @@ final class ChipActionTests: XCTestCase {
                                                 "client_email": .string("bob@x.com")])
         model.tapChip(c)
         XCTAssertEqual(api.calls, [], "one tap never sends an invoice")
-        XCTAssertEqual(titles(), ["Send $45 invoice to bob@x.com?", "Cancel"])
+        XCTAssertEqual(titles(), ["Email bob@x.com a $45 invoice?", "Cancel"])
         guard case .confirm(let next, let recipient) = model.bar else { return XCTFail("expected the confirm slot, got \(model.bar)") }
         model.confirm(next, recipient: recipient)
         await settled()
@@ -414,7 +414,7 @@ final class ChipActionTests: XCTestCase {
                                                 "client_name": .string("Sam")])
         model.tapChip(c)
         XCTAssertEqual(api.calls, [])
-        XCTAssertEqual(titles(), ["Create $45 invoice for Sam?", "Cancel"], "a name-only invoice is not emailed")
+        XCTAssertEqual(titles(), ["Make a $45 invoice link for Sam? No email goes out.", "Cancel"], "a name-only invoice is not emailed")
         guard case .confirm(let next, let recipient) = model.bar else { return XCTFail("expected the confirm slot, got \(model.bar)") }
         model.confirm(next, recipient: recipient)
         await settled()
@@ -473,7 +473,7 @@ final class ChipActionTests: XCTestCase {
         await settled()
         XCTAssertEqual(api.calls, ["lookup:invoice"])
         XCTAssertEqual(host.text, "")
-        XCTAssertEqual(model.bar, .done("Invoice sent to Sam \u{2713}"))
+        XCTAssertEqual(model.bar, .done("Invoice emailed to Sam \u{2713}"))
     }
 
     func testFoundPendingInTheSameFieldInsertsTheLink() async {
@@ -492,7 +492,7 @@ final class ChipActionTests: XCTestCase {
                                                     "amount": .string("90.00"), "currency": .string("USD")])
         model.tapChip(c)
         XCTAssertEqual(api.calls, [], "no reminder goes out on the first tap, even with needs_confirm false")
-        XCTAssertEqual(titles(), ["Remind Ana about $90?", "Cancel"])
+        XCTAssertEqual(titles(), ["Email Ana a reminder for $90?", "Cancel"])
         guard case .confirm(let next, let recipient) = model.bar else { return XCTFail("expected the confirm slot, got \(model.bar)") }
         model.confirm(next, recipient: recipient)
         await settled()

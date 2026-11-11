@@ -39,7 +39,7 @@ enum WhoPaid {
             let top = byLate[0]
             let name = top.client_name ?? top.item
             let chip = byLate.first { $0.kind == "invoice" && $0.client_name != nil }.map { p in
-                kept[p.id] ?? Chip(kind: "remind", label: "Remind \(name) \u{00B7} \(formatMoney(p.amount, p.currency))",
+                kept[p.id] ?? Chip(kind: "remind", label: "Nudge \(name) \u{00B7} \(formatMoney(p.amount, p.currency)) owed",
                                    payload: ["invoice_id": .string(p.id), "client_name": .string(name), "amount": .string(p.amount), "currency": .string(p.currency)],
                                    needs_confirm: true)
             }

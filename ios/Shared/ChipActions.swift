@@ -9,6 +9,8 @@ struct ActionResult: Equatable {
     let who: String
     /// "Here's your invoice for Haircut ($45): <link>" for an invoice, the bare link for a pay link.
     let message: String
+    /// An invoice PayPal emailed to the client. Without an email it is only a link.
+    var emailed = false
 }
 
 /// A money call that has not answered yet. `before` is what the field held at the tap.
@@ -106,7 +108,8 @@ enum ChipActions {
             let item = string(chip, "item") ?? "your order"
             let money = formatMoney(res.amount, res.currency)
             return .sent(ActionResult(id: res.id, kind: "invoice", link: link, money: money, who: who,
-                                      message: "Here's your invoice for \(item) (\(money)): \(link)"))
+                                      message: "Here's your invoice for \(item) (\(money)): \(link)",
+                                      emailed: BarItems.string(chip, "client_email") != nil))
         case "paylink":
             let res = try await call { try await api.payLink(chip.payload, key: key, lookup: lookup) }
             guard let link = res.approve_link else { throw APIError.message("No link came back. Try again.") }
@@ -130,7 +133,8 @@ enum ChipActions {
         case "remind":
             guard let id = string(chip, "invoice_id") else { throw APIError.message("Open \(AppConfig.displayName) for this one") }
             _ = try await call { try await api.remind(invoiceID: id, confirmClient: confirmed, key: key, lookup: lookup) }
-            return .line("Reminder sent \u{2713}")
+            let name = string(chip, "client_name") ?? confirmed.flatMap { $0.isEmpty ? nil : $0 } ?? "the client"
+            return .line("Reminder emailed to \(name) \u{2713}")
         case "refund":
             if let token = string(chip, "confirm_token") {
                 let res = try await call { try await api.refund(["confirm_token": .string(token)], key: key, lookup: lookup) }

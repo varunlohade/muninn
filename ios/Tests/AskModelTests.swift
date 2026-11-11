@@ -111,7 +111,7 @@ final class AskModelTests: XCTestCase {
         await ask("blah", "none", .line("Not sure what you need."))
         XCTAssertEqual(model.state, .line("Not sure what you need."))
         await ask("refund Maya", "refund", .chips([]))
-        XCTAssertEqual(model.state, .error("No action for that yet. Try \"invoice Sam $45 for a haircut\"."))
+        XCTAssertEqual(model.state, .line(AskModel.hint))
         XCTAssertEqual(api.asked.count, 5)
     }
 
@@ -127,10 +127,10 @@ final class AskModelTests: XCTestCase {
         guard let remind = clients.first?.remind else { return XCTFail("no reminder") }
         await tap(remind)
         XCTAssertEqual(model.state, .confirm(remind, "Jordan"))
-        XCTAssertEqual(BarItems.confirmTitle(remind, recipient: "Jordan"), "Remind Jordan about $120?")
+        XCTAssertEqual(BarItems.confirmTitle(remind, recipient: "Jordan"), "Email Jordan a reminder for $120?")
         XCTAssertEqual(api.calls, ["ask"])
         await tap(remind, confirmed: "Jordan")
-        XCTAssertEqual(model.state, .line("Reminder sent \u{2713}"))
+        XCTAssertEqual(model.state, .line("Reminder emailed to Jordan \u{2713}"))
         XCTAssertEqual(api.calls, ["ask", "remind:INV-J"])
         XCTAssertEqual(api.reminded, ["Jordan"])
         XCTAssertEqual(api.keys, [remind.key])
@@ -168,7 +168,7 @@ final class AskModelTests: XCTestCase {
         model.useContact(email: " Kate.Bell@Example.com ", name: "Kate Bell", for: noEmail)
         guard case .confirm(let picked, let recipient) = model.state else { return XCTFail("\(model.state)") }
         XCTAssertEqual(recipient, "kate.bell@example.com")
-        XCTAssertEqual(BarItems.confirmTitle(picked, recipient: recipient), "Send $45 invoice to kate.bell@example.com?")
+        XCTAssertEqual(BarItems.confirmTitle(picked, recipient: recipient), "Email Kate Bell (kate.bell@example.com) a $45 invoice?")
         XCTAssertFalse(AskModel.canAddContact(picked))
         XCTAssertNotEqual(picked.key, noEmail.key, "another recipient is another action")
         XCTAssertEqual(api.calls, ["ask"], "picking a contact sends nothing")

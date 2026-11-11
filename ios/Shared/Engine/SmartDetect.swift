@@ -33,13 +33,13 @@ struct SmartChip: Equatable, Hashable {
         }
     }
 
-    /// "Add to calendar · Tue 3:00 PM", "Remind me 5:00 PM", "Save note", "Invoice later".
+    /// "Add to calendar · Tue 3:00 PM", "Remind me 5:00 PM", "Save note", "Remind me to invoice Sam".
     func label(now: Date, calendar cal: Calendar = .current) -> String {
         switch action {
         case .event(_, let start, let end): "Add to calendar \u{00B7} " + SmartDetect.when(start, allDay: end == nil, now: now, cal: cal)
         case .reminder(_, let due): "Remind me " + SmartDetect.when(due, allDay: false, now: now, cal: cal, todayBare: true)
         case .note: "Save note"
-        case .invoiceLater: "Invoice later"
+        case .invoiceLater(let client, _): "Remind me to invoice \(client)"
         }
     }
 
@@ -49,7 +49,7 @@ struct SmartChip: Equatable, Hashable {
         case .event: "Add to calendar"
         case .reminder: "Remind me"
         case .note: "Save note"
-        case .invoiceLater: "Invoice later"
+        case .invoiceLater: "Remind me to invoice"
         }
     }
 

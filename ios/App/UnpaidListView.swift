@@ -39,7 +39,7 @@ struct UnpaidListView: View {
             }
             HStack(spacing: Theme.Space.xs) {
                 if let chip = c.remind {
-                    AskChip(title: "Remind", detail: nil) { remind(chip) }
+                    AskChip(title: "Nudge", detail: nil) { remind(chip) }
                         .accessibilityIdentifier("unpaid.remind.\(c.name)")
                 }
                 if let link = c.link {
