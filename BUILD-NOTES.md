@@ -1,5 +1,20 @@
 # Build notes
 
+## 0.1 (4) — 2026-11-12
+
+What to test:
+- Make it your default. After you turn on the keyboard, a new step shows how to put Muninn first. Home reminds you until it is first.
+- Fix says what it fixes. Type "I will send the invoice for teh haircut tomorow". The bar says "Fix 2 typos". Tap it. Both words change, and Undo shows.
+- Rewrite. Tap the wand on the keyboard bar. Pick More polite, Shorter, More professional, Friendlier, Firm or Fix grammar. The result shows first. Tap it to use it.
+- Search your own records. Type "invoice for sam". The bar shows Sam's invoice. Tap it to see the card.
+- Connect PayPal. Home and Integrations show Connect PayPal. It stays on the demo account until PayPal Connect is set up on our side. Then tap "Use demo account".
+- Nudge. A late invoice card says "Nudge Sam · $45 owed". Tap it, read the confirm, then tap it or Cancel.
+- Repeat bills. Type "what plans do I have". Then type "pause" and the client's name. Tap Undo to restart it.
+- Mark paid. Type "mark sam paid". Read the confirm. Undo shows after.
+- Pay a supplier. Type "pay my supplier joe $200 joe@x.com". The demo account pays up to $50 a day, so try $20.
+- Balance. Type "how much do I have". Tap the Balance chip.
+- Disputes. Type "any disputes?". Open one. Reply, offer a refund or accept the claim.
+
 ## 0.1 (3) — 2026-11-11
 
 What to test:
