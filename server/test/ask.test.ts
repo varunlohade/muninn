@@ -185,6 +185,10 @@ test('ask: a repeat bill chip names the amount, interval and only a client the o
     assert.equal(r.route, 'none', t);
     assert.equal(r.result.chips, undefined, t);
   }
+  for (const t of ['bill Sam $40 monthly for 3 months', 'bill Sam $40 weekly 3 times']) {
+    assert.equal((await two.ask(t)).result.line, "Repeat billing with an end date isn't ready yet. Send one invoice at a time for now.", t);
+  }
+  assert.match((await two.ask('bill Sam $40 bi-weekly')).result.line, /how often/);
 });
 
 test('ask: review_ask inserts a thank-you with the review link, never an incentive; profile checks the link', async () => {

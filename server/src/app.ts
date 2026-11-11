@@ -12,7 +12,7 @@ import { PayPalError, type PayPalProvider } from './paypal.ts';
 import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './money.ts';
 import { log } from './log.ts';
 import { clean } from './text.ts';
-import { askQuick, intervalOf, mentions, noteText, onlyKnownWords, quick, typedEmails, withoutInterval, type Quick } from './quick.ts';
+import { askQuick, intervalOf, mentions, noteText, onlyKnownWords, quick, repeatEnds, typedEmails, withoutInterval, type Quick } from './quick.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { createSlack, SlackWebhookUrl } from './slack.ts';
@@ -840,6 +840,7 @@ export function createApp(deps: Deps) {
       return ai.extract(text, catalogText(items)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
     };
     if (route === 'subscribe') {
+      if (repeatEnds(text)) return none(confidence, "Repeat billing with an end date isn't ready yet. Send one invoice at a time for now.");
       if (!intervalOf(text)) return none(confidence, 'Say how often, like "bill Sam $40 monthly".');
       return done(route, confidence, { chips: await subscribeChips(userId, text, extract) });
     }
@@ -978,8 +979,10 @@ export function createApp(deps: Deps) {
       }
     } else if (type === 'BILLING.SUBSCRIPTION.ACTIVATED') {
       const owner = res.id && db.ownerOfSubscription(res.id);
+      // CANCELLED and SUSPENDED are final here: a late or replayed ACTIVATED never brings one back.
+      const status = owner && db.getSubscription(owner, res.id)?.status;
       if (owner) {
-        db.setSubscriptionActive(owner, res.id, now());
+        if (status !== 'CANCELLED' && status !== 'SUSPENDED') db.setSubscriptionActive(owner, res.id, now());
         handled = true;
       }
     } else if (type === 'BILLING.SUBSCRIPTION.CANCELLED' || type === 'BILLING.SUBSCRIPTION.SUSPENDED') {

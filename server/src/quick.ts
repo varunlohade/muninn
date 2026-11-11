@@ -136,12 +136,15 @@ export function askQuick(text: string): AskQuick {
 const INTERVAL = /\b(?:every\s+(week|month|year)|(week|month|year)ly|annually)\b/gi;
 // Words that change the interval or end the bill after a count. A plan here has one plain interval and no end, so these give no chip.
 const COUNT = '(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)';
-const NOT_PLAIN = new RegExp(`\\b(?:bi|semi)[\\s-]?(?:week|month|year|annual)|\\btwice\\b|\\bevery\\s+(?:other|second|third|${COUNT})\\b`
-  + `|\\bfor\\s+${COUNT}\\s+(?:weeks?|months?|years?)\\b|\\b${COUNT}\\s+times\\b`, 'i');
+const NOT_PLAIN = new RegExp(`\\b(?:bi|semi)[\\s-]?(?:week|month|year|annual)|\\btwice\\b|\\bevery\\s+(?:other|second|third|${COUNT})\\b`, 'i');
+const ENDS = new RegExp(`\\bfor\\s+${COUNT}\\s+(?:weeks?|months?|years?)\\b|\\b${COUNT}\\s+times\\b`, 'i');
+
+/** True when the text gives the repeat bill an end: "for 3 months", "3 times". */
+export const repeatEnds = (text: string) => ENDS.test(text);
 
 /** The one plain repeat interval in the text, or null when there is none, more than one, or the text changes or ends it. */
 export function intervalOf(text: string): 'week' | 'month' | 'year' | null {
-  if (NOT_PLAIN.test(text)) return null;
+  if (NOT_PLAIN.test(text) || ENDS.test(text)) return null;
   const found = new Set([...text.matchAll(INTERVAL)].map((m) => (m[1] ?? m[2] ?? 'year').toLowerCase() as 'week' | 'month' | 'year'));
   return found.size === 1 ? [...found][0] : null;
 }

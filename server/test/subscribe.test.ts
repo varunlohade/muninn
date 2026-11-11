@@ -230,5 +230,8 @@ test('webhook: CANCELLED and SUSPENDED set the status, and a later sale never ma
   assert.equal(await hook(subscriptionPaidEvent(first, 'SALE-LATE-1')), true);
   assert.equal(await hook(subscriptionPaidEvent(second, 'SALE-LATE-2')), true);
   assert.deepEqual([status(first), status(second)], ['CANCELLED', 'SUSPENDED']);
+  // A late or replayed ACTIVATED never brings either one back.
+  for (const id of [first, second]) assert.equal(await hook({ event_type: 'BILLING.SUBSCRIPTION.ACTIVATED', resource: { id } }), true);
+  assert.deepEqual([status(first), status(second)], ['CANCELLED', 'SUSPENDED']);
   assert.equal(await hook({ event_type: 'BILLING.SUBSCRIPTION.CANCELLED', resource: { id: 'I-UNKNOWN' } }), false);
 });
