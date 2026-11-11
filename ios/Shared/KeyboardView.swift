@@ -46,7 +46,8 @@ struct SuggestionBar: View {
                 HStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                         if i > 0 { Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight) }
-                        Slot(item: item, palette: palette, action: item.action.map { a in { model.perform(a) } })
+                        Slot(item: item, palette: palette, action: item.action.map { a in { model.perform(a) } },
+                             width: confirming && item.id == "cancel" ? 76 : nil)
                             .accessibilityIdentifier("chip.\(item.id)")
                             .transition(.opacity)
                     }
@@ -64,12 +65,12 @@ struct SuggestionBar: View {
                 .accessibilityIdentifier("chip.fix")
                 .transition(.opacity)
             }
-            if model.paired && !model.notesOpen {
+            if model.paired && !model.notesOpen && !confirming {
                 Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
                 barButton(model.writeOpen ? "keyboard" : "wand.and.stars", id: "write.toggle", label: model.writeOpen ? "Keyboard" : "Refine", action: model.toggleWrite)
             }
             // Notes live in the App Group, which the keyboard reaches only with Full Access.
-            if model.hasFullAccess && !model.writeOpen {
+            if model.hasFullAccess && !model.writeOpen && !confirming {
                 Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
                 barButton(model.notesOpen ? "keyboard" : "note.text", id: "notes.toggle", label: model.notesOpen ? "Keyboard" : "Notes", action: model.toggleNotes)
             }
@@ -78,6 +79,14 @@ struct SuggestionBar: View {
         .padding(.bottom, M.barHeight - 2 * 23.8)
         .animation(Theme.Motion.chipAppear, value: items.map(\.id))
         .animation(Theme.Motion.chipAppear, value: showsFix)
+    }
+
+    /// A confirm question takes the whole bar beside Cancel, so the amount and the recipient stay readable.
+    private var confirming: Bool {
+        switch model.bar {
+        case .confirm, .ask: return !model.notesOpen && !model.writeOpen
+        default: return false
+        }
     }
 
     /// Fix sits beside the chips, so it never takes a chip's place.
@@ -103,19 +112,22 @@ struct SuggestionBar: View {
         let item: BarItems.Item
         let palette: Theme.SystemKeyboard.Palette
         let action: (() -> Void)?
+        /// A fixed width, or nil to share the bar with the other slots.
+        var width: CGFloat? = nil
 
         var body: some View {
             Button { action?() } label: {
                 VStack(spacing: 0) {
                     Text(item.title).font(item.detail == nil ? M.prediction : M.prediction.weight(.medium))
                         .foregroundStyle(tint)
-                        .lineLimit(1).minimumScaleFactor(0.6)
+                        .lineLimit(item.id == "confirm" ? 2 : 1).minimumScaleFactor(0.6)
+                        .multilineTextAlignment(.center)
                     if let d = item.detail {
                         Text(d).font(M.predictionSmall).foregroundStyle(palette.secondaryLabel).lineLimit(1).minimumScaleFactor(0.7)
                     }
                 }
                 .padding(.horizontal, 6)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: width ?? .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
