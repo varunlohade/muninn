@@ -25,6 +25,10 @@ protocol KeyboardStore: AnyObject {
     var appointments: [Appointment] { get }
     var notes: [Note] { get set }
     var actionShortcuts: [ActionShortcut] { get }
+    /// One Idempotency-Key per chip for a short time, so a second tap replays the first call.
+    var chipKeys: [String: ChipKey] { get set }
+    /// A money call still waiting for its answer, kept when the keyboard closes.
+    var pendingAction: PendingAction? { get set }
 }
 
 final class SharedKeyboardStore: KeyboardStore {
@@ -43,6 +47,14 @@ final class SharedKeyboardStore: KeyboardStore {
         set { SharedStore.notes = newValue }
     }
     var actionShortcuts: [ActionShortcut] { SharedStore.actionShortcuts }
+    var chipKeys: [String: ChipKey] {
+        get { SharedStore.chipKeys }
+        set { SharedStore.chipKeys = newValue }
+    }
+    var pendingAction: PendingAction? {
+        get { SharedStore.pendingAction }
+        set { SharedStore.pendingAction = newValue }
+    }
 }
 
 /// The parts of UIPasteboard the keyboard uses. Only reading `string` can show the paste prompt.

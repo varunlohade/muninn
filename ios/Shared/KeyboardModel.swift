@@ -321,7 +321,16 @@ final class KeyboardModel: ObservableObject {
         // hasStrings and changeCount do not trigger the paste prompt; only reading the string does.
         let pasteboard = deps.pasteboard
         copiedAvailable = pasteboard.hasStrings && pasteboard.changeCount != deps.store.lastPasteboardChange
+        resumePending()
         if let watch, !watch.paid { startPolling() }
+    }
+
+    /// A money call the keyboard closed on may have gone out. Ask again with the same key and show the answer.
+    private func resumePending() {
+        guard let p = deps.store.pendingAction else { return }
+        guard p.expires > deps.now() else { deps.store.pendingAction = nil; return }
+        if case .working = bar { return }
+        run(p.chip, confirmed: p.confirmed, resuming: p)
     }
 
     func keyboardDisappeared() {
@@ -766,22 +775,38 @@ final class KeyboardModel: ObservableObject {
         lastSent = ""
     }
 
-    private func run(_ chip: Chip, confirmed: String?) {
+    private func run(_ chip: Chip, confirmed: String?, resuming: PendingAction? = nil) {
         suggestTask?.cancel()
         actionTask?.cancel()
         bar = .working(Self.workingLine(chip))
         // What the field held at the tap. The result goes in only if the field still holds it.
-        let before = host?.contextBeforeInput ?? ""
+        let before = resuming?.before ?? host?.contextBeforeInput ?? ""
         let source = chipSource
         let api = deps.api()
         let sleep = deps.sleep
+        let store = deps.store
+        let sendsMoney = ChipActions.sendsMoney.contains(chip.kind)
+        let key = resuming?.key
+            ?? (sendsMoney ? ChipKeys.key(for: chip, confirmed: confirmed, in: store, now: deps.now()) : UUID().uuidString)
+        // Kept until the server answers, so closing the keyboard mid-call does not lose a sent invoice.
+        if sendsMoney {
+            store.pendingAction = resuming
+                ?? PendingAction(chip: chip, confirmed: confirmed, before: before, key: key, expires: deps.now() + ChipKeys.ttl)
+        }
         actionTask = Task { [weak self] in
             do {
-                let outcome = try await ChipActions.run(chip, confirmed: confirmed, source: source, api: api, sleep: sleep)
+                let outcome = try await ChipActions.run(chip, confirmed: confirmed, source: source, api: api, key: key, sleep: sleep,
+                                                        stillSending: { self?.bar = .working("Still sending\u{2026}") })
                 guard let self, !Task.isCancelled else { return }
+                if sendsMoney { store.pendingAction = nil }
                 switch outcome {
                 case .sent(let r):
-                    self.place(r.message, gap: r.kind == "invoice" ? "\n" : " ", readAt: before)
+                    if resuming != nil, r.kind == "invoice", (self.host?.contextBeforeInput ?? "") != before {
+                        // PayPal already emailed it. The owner is in another field, so say so instead of typing.
+                        self.bar = .done("Invoice sent to \(r.who) \u{2713}")
+                    } else {
+                        self.place(r.message, gap: r.kind == "invoice" ? "\n" : " ", readAt: before)
+                    }
                     self.watch = Watch(id: r.id, who: r.who, money: r.money)
                     if let billing = self.billing { self.billedHere.insert(billing.id) }
                     self.billing = nil
@@ -797,9 +822,12 @@ final class KeyboardModel: ObservableObject {
             } catch let e as URLError where e.code == .cancelled {
             } catch APIError.needsConfirm(let recipient) {
                 guard let self, !Task.isCancelled else { return }
+                if sendsMoney { store.pendingAction = nil }
                 self.bar = .confirm(chip, recipient: recipient)
             } catch {
                 guard let self, !Task.isCancelled else { return }
+                // Still in progress: keep it, so the next appear checks again with the same key.
+                if sendsMoney, !isInProgress(error) { store.pendingAction = nil }
                 self.bar = .error(plainLine(error))
             }
         }

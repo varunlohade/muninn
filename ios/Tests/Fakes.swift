@@ -93,6 +93,8 @@ final class FakeStore: KeyboardStore {
     var appointments: [Appointment] = []
     var notes: [Note] = []
     var actionShortcuts: [ActionShortcut] = ActionShortcut.defaults
+    var chipKeys: [String: ChipKey] = [:]
+    var pendingAction: PendingAction?
 }
 
 final class FakePasteboard: Pasteboard {

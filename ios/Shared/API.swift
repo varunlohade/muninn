@@ -27,7 +27,7 @@ enum JSONValue: Codable, Hashable {
     }
 }
 
-struct Chip: Decodable, Hashable, Identifiable {
+struct Chip: Codable, Hashable, Identifiable {
     let kind: String
     let label: String
     let payload: [String: JSONValue]
@@ -125,6 +125,7 @@ func plainLine(_ error: Error) -> String {
     case APIError.notPaired: return "Open \(AppConfig.displayName) to pair"
     case APIError.needsConfirm(let r): return "Confirm \(r) first"
     case APIError.message(let s): return s
+    case _ where isInProgress(error): return "Still sending. Check again in a minute."
     case APIError.http(let code, let body):
         switch code {
         case 401: return "Open \(AppConfig.displayName) to pair"
@@ -136,6 +137,11 @@ func plainLine(_ error: Error) -> String {
     case let e as URLError: return e.code == .timedOut ? "Took too long. Try again." : "No connection. Try again."
     default: return again
     }
+}
+
+/// The server is still running a call with this Idempotency-Key.
+func isInProgress(_ error: Error) -> Bool {
+    if case APIError.http(409, let body) = error { body.contains("in progress") } else { false }
 }
 
 /// The server's own short `error` text, as a sentence. Nil for internal wording such as the idempotency key.
@@ -177,7 +183,10 @@ struct APIClient {
         r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let body {
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            r.httpBody = try JSONEncoder().encode(body)
+            // Sorted keys: a replay must send the same bytes, or the server refuses the reused key.
+            let enc = JSONEncoder()
+            enc.outputFormatting = .sortedKeys
+            r.httpBody = try enc.encode(body)
         }
         if tap {
             r.setValue("tap", forHTTPHeaderField: "X-User-Action")

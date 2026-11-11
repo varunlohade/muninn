@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// What a tapped chip produced: the link, and the line we insert or show.
@@ -9,6 +10,46 @@ struct ActionResult: Equatable {
     let who: String
     /// "Here's your invoice for Haircut ($45): <link>" for an invoice, the bare link for a pay link.
     let message: String
+}
+
+/// The Idempotency-Key a chip uses until `expires`.
+struct ChipKey: Codable, Equatable {
+    let key: String
+    let expires: Date
+}
+
+/// A money call that has not answered yet. `before` is what the field held at the tap.
+struct PendingAction: Codable, Equatable {
+    let chip: Chip
+    let confirmed: String?
+    let before: String
+    let key: String
+    let expires: Date
+}
+
+/// The key belongs to the chip, not the tap: the same chip within `ttl` sends the same key,
+/// so the server replays its stored answer instead of sending a second invoice.
+enum ChipKeys {
+    static let ttl: TimeInterval = 600
+
+    static func key(for chip: Chip, confirmed: String?, in store: KeyboardStore, now: Date) -> String {
+        var keys = store.chipKeys.filter { $0.value.expires > now }
+        let id = fingerprint(chip, confirmed: confirmed)
+        let k = keys[id] ?? ChipKey(key: UUID().uuidString, expires: now + ttl)
+        keys[id] = k
+        store.chipKeys = keys
+        return k.key
+    }
+
+    /// Kind, payload and recipient: what makes the server request this chip sends.
+    private static func fingerprint(_ chip: Chip, confirmed: String?) -> String {
+        let enc = JSONEncoder()
+        enc.outputFormatting = .sortedKeys
+        let value: JSONValue = .object(["kind": .string(chip.kind), "payload": .object(chip.payload),
+                                        "confirmed": confirmed.map { .string($0) } ?? .null])
+        let data = (try? enc.encode(value)) ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 /// Where a chip's result goes.
@@ -27,20 +68,34 @@ enum ChipOutcome: Equatable {
 /// Throws APIError.needsConfirm when the server wants the recipient confirmed first.
 enum ChipActions {
     static let retryDelay: Duration = .milliseconds(1200)
+    static let inProgressDelay: Duration = .seconds(2)
+    static let inProgressTries = 3
+    /// Chips whose call moves money or messages a client. Only these keep a key and a pending call.
+    static let sendsMoney: Set = ["invoice", "paylink", "remind", "refund"]
     private static let networkFailures: Set<URLError.Code> = [
         .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
     ]
 
-    /// `source` is the message a reply answers. `sleep` waits before the one quiet retry.
-    static func run(_ chip: Chip, confirmed: String?, source: String? = nil, api: KeyboardAPI,
-                    sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async throws -> ChipOutcome {
-        // One key per tap. The retry sends the same key, so the server never runs a money action twice.
-        let key = UUID().uuidString
-        func call<T>(_ work: () async throws -> T) async throws -> T {
+    /// `source` is the message a reply answers. `key` is the Idempotency-Key; every retry sends it, so the
+    /// server never runs a money action twice. `sleep` waits before a retry. `stillSending` runs while the
+    /// server is still busy with the same key.
+    static func run(_ chip: Chip, confirmed: String?, source: String? = nil, api: KeyboardAPI, key: String = UUID().uuidString,
+                    sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+                    stillSending: @MainActor () -> Void = {}) async throws -> ChipOutcome {
+        func once<T>(_ work: () async throws -> T) async throws -> T {
             do { return try await work() } catch let e as URLError where networkFailures.contains(e.code) {
                 try await sleep(retryDelay)
                 return try await work()
             }
+        }
+        func call<T>(_ work: () async throws -> T) async throws -> T {
+            for _ in 0..<inProgressTries {
+                do { return try await once(work) } catch let e where isInProgress(e) {
+                    await stillSending()
+                    try await sleep(inProgressDelay)
+                }
+            }
+            return try await once(work)
         }
         let who = string(chip, "client_name") ?? "Client"
         switch chip.kind {

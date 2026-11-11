@@ -7,13 +7,15 @@ final class ChipActionTests: XCTestCase {
     private var host: FakeHost!
     private var api: FakeAPI!
     private var clock: FakeClock!
+    private var store: FakeStore!
     private var model: KeyboardModel!
 
     override func setUp() async throws {
         host = FakeHost()
         api = FakeAPI()
         clock = FakeClock()
-        model = KeyboardModel(deps: .fake(api: api, clock: clock))
+        store = FakeStore()
+        model = KeyboardModel(deps: .fake(api: api, store: store, clock: clock))
         model.host = host
         model.keyboardAppeared()
     }
@@ -143,7 +145,7 @@ final class ChipActionTests: XCTestCase {
     func testServerRefusalUsesItsOwnWords() {
         XCTAssertEqual(plainLine(APIError.http(409, #"{"error":"invoice is already paid"}"#)), "Invoice is already paid")
         XCTAssertEqual(plainLine(APIError.http(409, #"{"error":"request with this Idempotency-Key is in progress"}"#)),
-                       "Something went wrong. Try again.")
+                       "Still sending. Check again in a minute.")
         XCTAssertEqual(plainLine(APIError.http(0, "")), "Something went wrong. Try again.")
         XCTAssertEqual(plainLine(URLError(.notConnectedToInternet)), "No connection. Try again.")
         XCTAssertEqual(plainLine(URLError(.timedOut)), "Took too long. Try again.")
@@ -174,10 +176,110 @@ final class ChipActionTests: XCTestCase {
         XCTAssertEqual(api.calls, ["invoice", "invoice"])
     }
 
-    func testEachTapGetsANewKey() async throws {
-        _ = try await ChipActions.run(invoice, confirmed: nil, api: api, sleep: { _ in })
-        _ = try await ChipActions.run(invoice, confirmed: nil, api: api, sleep: { _ in })
+    // MARK: one key per chip, so a second tap never sends a second invoice
+
+    private let inProgress = APIError.http(409, #"{"error":"request with this Idempotency-Key is in progress"}"#)
+
+    func testTwoTapsOfTheSameChipShareOneKey() async {
+        model.tapChip(invoice)
+        await settled()
+        model.tapChip(invoice)
+        await settled()
+        XCTAssertEqual(api.keys.count, 2)
+        XCTAssertEqual(api.keys[0], api.keys[1])
+    }
+
+    func testADifferentChipGetsADifferentKey() async {
+        model.tapChip(invoice)
+        await settled()
+        model.tapChip(chip("invoice", "Invoice $60 · Color", ["amount": .string("60.00"), "currency": .string("USD"), "item": .string("Color"),
+                                                             "client_email": .string("sam@example.com")]))
+        await settled()
+        XCTAssertEqual(api.keys.count, 2)
         XCTAssertNotEqual(api.keys[0], api.keys[1])
+    }
+
+    func testTheKeyExpiresAfterTheTTL() async {
+        model.tapChip(invoice)
+        await settled()
+        clock.advance(ChipKeys.ttl + 1)
+        model.tapChip(invoice)
+        await settled()
+        XCTAssertEqual(api.keys.count, 2)
+        XCTAssertNotEqual(api.keys[0], api.keys[1])
+    }
+
+    func testDisappearMidCallThenReTapUsesTheSameKey() async {
+        host.text = "Thanks Sam"
+        api.failures = [URLError(.networkConnectionLost)]
+        model.tapChip(invoice)
+        await until("retry wait") { clock.sleeping > 0 }
+        model.keyboardDisappeared()
+        for _ in 0..<50 { await Task.yield() }
+        model.tapChip(invoice)
+        await settled()
+        XCTAssertEqual(api.keys.count, 2)
+        XCTAssertEqual(Set(api.keys).count, 1, "the re-tap replays the first call, it does not send a new invoice")
+        XCTAssertTrue(host.text.hasSuffix("https://fake.pay/INV-1"))
+    }
+
+    func testAppearAfterDisappearRechecksWithTheSameKeyAndInsertsTheLink() async {
+        host.text = "Thanks Sam"
+        api.failures = [URLError(.networkConnectionLost)]
+        model.tapChip(invoice)
+        await until("retry wait") { clock.sleeping > 0 }
+        model.keyboardDisappeared()
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertNotNil(store.pendingAction, "a money call cut off by the keyboard closing is kept")
+        model.keyboardAppeared()
+        await settled()
+        XCTAssertEqual(api.keys.count, 2)
+        XCTAssertEqual(Set(api.keys).count, 1)
+        XCTAssertEqual(host.text, "Thanks Sam\nHere's your invoice for Haircut ($45): https://fake.pay/INV-1")
+        XCTAssertEqual(model.watch?.id, "INV-1")
+        XCTAssertNil(store.pendingAction)
+    }
+
+    func testAppearInAnotherFieldShowsSentInsteadOfTyping() async {
+        host.text = "Thanks Sam"
+        api.failures = [URLError(.networkConnectionLost)]
+        model.tapChip(invoice)
+        await until("retry wait") { clock.sleeping > 0 }
+        model.keyboardDisappeared()
+        for _ in 0..<50 { await Task.yield() }
+        host.text = "Other chat"
+        model.keyboardAppeared()
+        await settled()
+        XCTAssertEqual(host.text, "Other chat")
+        XCTAssertEqual(model.bar, .done("Invoice sent to Sam \u{2713}"))
+        XCTAssertEqual(Set(api.keys).count, 1)
+    }
+
+    func testInProgressSaysStillSendingThenShowsTheResult() async {
+        host.text = "Thanks Sam"
+        api.failures = [inProgress]
+        model.tapChip(invoice)
+        await until("in-progress wait") { clock.sleeping > 0 }
+        XCTAssertEqual(model.bar, .working("Still sending\u{2026}"))
+        clock.advance(ChipActions.inProgressDelay.seconds)
+        await settled()
+        XCTAssertEqual(api.keys.count, 2)
+        XCTAssertEqual(Set(api.keys).count, 1, "the re-check sends no new key")
+        XCTAssertTrue(host.text.hasSuffix("https://fake.pay/INV-1"))
+    }
+
+    func testInProgressGivesUpAfterThreeChecksAndKeepsThePendingCall() async {
+        api.failures = Array(repeating: inProgress, count: ChipActions.inProgressTries + 1)
+        model.tapChip(invoice)
+        for _ in 0..<ChipActions.inProgressTries {
+            await until("in-progress wait") { clock.sleeping > 0 }
+            clock.advance(ChipActions.inProgressDelay.seconds)
+        }
+        await settled()
+        XCTAssertEqual(api.keys.count, ChipActions.inProgressTries + 1)
+        XCTAssertEqual(Set(api.keys).count, 1)
+        XCTAssertEqual(model.bar, .error("Still sending. Check again in a minute."))
+        XCTAssertNotNil(store.pendingAction, "the next appear checks it again")
     }
 
     func testTextChangedDuringTheCallWaitsAsAChip() async {
