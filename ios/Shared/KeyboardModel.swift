@@ -279,8 +279,7 @@ final class KeyboardModel: ObservableObject {
     private func tapSpace() {
         let now = deps.now()
         let before = host?.contextBeforeInput ?? ""
-        if let last = lastSpaceTap, now.timeIntervalSince(last) < 0.45, before.hasSuffix(" "),
-           let prev = before.dropLast().last, prev.isLetter || prev.isNumber {
+        if TypingRules.doubleSpaceMakesPeriod(before: before, sinceLastSpace: lastSpaceTap.map { now.timeIntervalSince($0) }) {
             host?.deleteBackward()
             host?.insert(". ")
             lastSpaceTap = nil
@@ -326,15 +325,7 @@ final class KeyboardModel: ObservableObject {
     /// Auto-capitalization follows the field's autocapitalizationType. Caps lock stays until tapped.
     func updateAutoShift() {
         guard shift != .locked else { return }
-        let raw = host?.contextBeforeInput ?? ""
-        let on: Bool
-        switch host?.autocapitalization ?? .sentences {
-        case .none: on = false
-        case .allCharacters: on = true
-        case .words: on = raw.isEmpty || raw.last?.isWhitespace == true
-        default: on = raw.trimmingCharacters(in: .whitespaces).isEmpty || [". ", "! ", "? ", "\n"].contains { raw.hasSuffix($0) }
-        }
-        shift = on ? .once : .off
+        shift = TypingRules.autoShift(before: host?.contextBeforeInput ?? "", type: host?.autocapitalization ?? .sentences) ? .once : .off
     }
 
     // MARK: lifecycle
