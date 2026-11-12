@@ -655,6 +655,22 @@ struct AskBar: View {
         }
     }
 
+    /// A question that needs an answer: the words wrap, the buttons sit right, the main one dark.
+    private func decision<Buttons: View>(_ question: String, pill: String?, @ViewBuilder buttons: () -> Buttons) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            HStack(alignment: .top, spacing: Theme.Space.xs) {
+                Text(question).font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if let pill { StatusPill(text: pill, tone: .due) }
+            }
+            HStack(spacing: Theme.Space.xs) {
+                Spacer(minLength: 0)
+                buttons()
+            }
+        }
+        .padding(.horizontal, Theme.Space.s).padding(.bottom, Theme.Space.xs)
+    }
+
     @ViewBuilder private var content: some View {
         switch model.state {
         case .idle, .loading:
@@ -711,32 +727,34 @@ struct AskBar: View {
             }
             .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xxs)
         case .confirm(let chip, let email):
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Theme.Space.xs) {
-                    AskChip(title: BarItems.confirmTitle(chip, recipient: email), detail: nil) { model.run(chip, confirmed: email) }
-                        .accessibilityIdentifier("ask.confirm")
-                    if AskModel.canAddContact(chip) {
-                        AskChip(title: "Add email from Contacts", detail: nil) { pickingFor = chip }
-                            .accessibilityIdentifier("ask.contacts")
-                    }
-                    AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+            // The question wraps; nothing is sent before the dark button.
+            let question = BarItems.confirmTitle(chip, recipient: email)
+            decision(question, pill: "Needs your OK") {
+                AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+                if AskModel.canAddContact(chip) {
+                    AskChip(title: "Add email", detail: nil) { pickingFor = chip }
+                        .accessibilityLabel("Add email from Contacts")
+                        .accessibilityIdentifier("ask.contacts")
                 }
-                .padding(.horizontal, Theme.Space.xs)
+                Button(ConfirmPanel.verb(chip)) { model.run(chip, confirmed: email) }
+                    .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
+                    .accessibilityLabel(question)
+                    .accessibilityIdentifier("ask.confirm")
             }
-            .padding(.bottom, Theme.Space.xxs)
         case .ask(let chip, let question):
-            HStack(spacing: Theme.Space.xs) {
-                AskChip(title: question, detail: nil) { model.run(chip) }
+            decision(question, pill: "Needs your OK") {
                 AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+                Button("Yes") { model.run(chip) }
+                    .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
+                    .accessibilityLabel(question)
             }
-            .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xxs)
         case .retry(let chip, let confirmed):
-            HStack(spacing: Theme.Space.xs) {
-                AskChip(title: "It didn't go through. Tap to try again.", detail: nil) { model.run(chip, confirmed: confirmed) }
-                    .accessibilityIdentifier("ask.retry")
+            decision("It didn't go through. Tap to try again.", pill: nil) {
                 AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+                Button("Try again") { model.run(chip, confirmed: confirmed) }
+                    .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
+                    .accessibilityIdentifier("ask.retry")
             }
-            .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xxs)
         case .line(let line):
             Text(line).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
                 .textSelection(.enabled)

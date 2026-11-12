@@ -54,7 +54,7 @@ final class CatalogShots: XCTestCase {
             token.tap()
             token.typeText("pkd_fake")
             app.buttons["Pair"].tap()
-            for id in ["onboarding.later", "onboarding.add"] {
+            for id in ["onboarding.later", "onboarding.add", "onboarding.paypal.demo"] {
                 let b = element(app, id)
                 if b.waitForExistence(timeout: 8) { b.tap() }
             }
