@@ -158,11 +158,13 @@ final class KeyboardModel: ObservableObject {
     /// Nothing is typed, so the bar shows ready chips.
     @Published var fieldEmpty = true
     @Published var unpaidCount: Int?
+    /// The catalog panel and the "Share catalog" chip (CatalogPanel.swift).
+    @Published var catalog = CatalogPanelState()
 
     weak var host: TextHost?
     /// False in the intro scenes about writing, where a payment chip would get in the way. Then typing sends nothing.
     var suggestsWhileTyping = true
-    private let deps: KeyboardDeps
+    let deps: KeyboardDeps
     private var suggestTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var actionTask: Task<Void, Never>?
@@ -531,6 +533,7 @@ final class KeyboardModel: ObservableObject {
         reloadShortcuts()
         guard paired else { return }
         reloadSnapshot()
+        reloadCatalog()
         // hasStrings and changeCount do not trigger the paste prompt; only reading the string does.
         let pasteboard = deps.pasteboard
         copiedAvailable = pasteboard.hasStrings && pasteboard.changeCount != deps.store.lastPasteboardChange
@@ -592,6 +595,7 @@ final class KeyboardModel: ObservableObject {
         trackpadTouch = nil
         trackpad = false
         notesOpen = false
+        catalog.open = false
         whoPaid = nil
         resetWriting()
         pollTask?.cancel()
@@ -607,6 +611,7 @@ final class KeyboardModel: ObservableObject {
     func toggleNotes() {
         host?.playClick()
         writeOpen = false
+        catalog.open = false
         if !notesOpen { notes = deps.store.notes }
         notesOpen.toggle()
     }
@@ -646,6 +651,7 @@ final class KeyboardModel: ObservableObject {
         if case .confirm = bar { return }
         if case .ask = bar { return }
         let text = typed
+        updateCatalogTrigger(text)
         let wasEmpty = fieldEmpty
         fieldEmpty = text.isEmpty
         // Empty again, as after a send: the ready chips read the app's latest snapshot.
@@ -686,6 +692,8 @@ final class KeyboardModel: ObservableObject {
             }
             let text = (self.host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             self.bar = .idle
+            self.catalog.copied = String(copied.prefix(1000))
+            self.updateCatalogTrigger(text)
             self.requestSuggest(text: text, context: String(copied.prefix(1000)), debounce: nil)
             self.checkCopiedTone(String(copied.prefix(1000)))
         }
@@ -901,6 +909,7 @@ final class KeyboardModel: ObservableObject {
     func toggleWrite() {
         host?.playClick()
         notesOpen = false
+        catalog.open = false
         writeTask?.cancel()
         writePanel = .menu
         writeOpen.toggle()
@@ -1032,10 +1041,10 @@ final class KeyboardModel: ObservableObject {
     }
 
     /// The pay shortcut only offers the chip. Money moves on the owner's tap, through the same path as a suggested chip.
-    private func offerPayLink(_ amount: String, currency: String?) {
+    func offerPayLink(_ amount: String, currency: String?, item: String = "Payment") {
         guard paired else { return }
         suggestTask?.cancel()
-        var payload: [String: JSONValue] = ["amount": .string(amount), "item": .string("Payment")]
+        var payload: [String: JSONValue] = ["amount": .string(amount), "item": .string(item)]
         if let currency { payload["currency"] = .string(currency) }
         bar = .chips([Chip(kind: "paylink", label: "Pay link", payload: payload, needs_confirm: false)], fromCopied: false)
     }
@@ -1122,8 +1131,9 @@ final class KeyboardModel: ObservableObject {
                                     bar: bar, copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp,
                                     smart: smart.map { BarItems.Smart(chip: $0, access: writer.access($0.place, hasFullAccess: hasFullAccess)) },
                                     added: added?.label, fieldEmpty: fieldEmpty, moneyTrigger: SmartDetect.moneyTrigger(typed),
+                                    catalog: catalog.barItem,
                                     ready: .init(copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp, today: appointments,
-                                                 unpaidCount: unpaidCount, watch: watch),
+                                                 unpaidCount: unpaidCount, watch: watch, catalogCount: catalog.items.count),
                                     predictions: predictions, now: deps.now()))
     }
 
@@ -1142,6 +1152,7 @@ final class KeyboardModel: ObservableObject {
         case .whoPaid: openWhoPaid()
         case .today: showToday()
         case .notes: toggleNotes()
+        case .catalog(let item): openCatalog(item)
         case .predict(let word): usePrediction(word)
         }
     }
@@ -1314,7 +1325,7 @@ final class KeyboardModel: ObservableObject {
     }
 
     /// Types `text` if the field still ends as it did at the tap. If the owner moved on, the text waits as a chip.
-    private func place(_ text: String, gap: String, readAt before: String) {
+    func place(_ text: String, gap: String, readAt before: String) {
         guard let host, (host.contextBeforeInput ?? "") == before else { return offerInsert(text) }
         let needsGap = !(before.last?.isWhitespace ?? true)
         host.insert((needsGap ? gap : "") + text)

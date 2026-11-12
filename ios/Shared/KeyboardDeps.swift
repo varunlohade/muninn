@@ -90,6 +90,13 @@ struct KeyboardDeps {
     var sleep: (Duration) async throws -> Void
     /// The phone's calendar and reminders, for smart chips.
     var writer: SmartWriter = EventKitWriter()
+    /// The catalog the app cached in the App Group.
+    var catalog: CatalogCache = .live
+    /// Puts a catalog photo on the pasteboard. Needs Full Access.
+    var copyImage: (Data) -> Void = { data in
+        let png = data.starts(with: [0x89, 0x50, 0x4E, 0x47])
+        UIPasteboard.general.setData(data, forPasteboardType: png ? "public.png" : "public.jpeg")
+    }
 
     static func live() -> KeyboardDeps {
         KeyboardDeps(api: { APIClient.shared() }, store: SharedKeyboardStore(), pasteboard: UIPasteboard.general,

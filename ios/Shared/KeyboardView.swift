@@ -33,6 +33,8 @@ struct KeyboardView: View {
                 NotesPanel(model: model, palette: p).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
             } else if model.writeOpen {
                 WritePanelView(model: model, palette: p).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
+            } else if model.catalog.open {
+                CatalogPanel(model: model, palette: p).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
             } else {
                 SystemKeysView(model: model)
             }
@@ -127,6 +129,13 @@ struct SuggestionBar: View {
             } else if model.writeOpen {
                 Text("Rewrite").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, Theme.Space.s)
                 Spacer()
+            } else if model.catalog.open {
+                Text("Catalog").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, Theme.Space.s)
+                if model.catalog.selection.count > 0 {
+                    Text("\(model.catalog.selection.count) selected").font(M.prediction).foregroundStyle(palette.secondaryLabel)
+                        .padding(.leading, Theme.Space.xs).accessibilityIdentifier("catalog.count")
+                }
+                Spacer()
             } else {
                 HStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
@@ -152,14 +161,19 @@ struct SuggestionBar: View {
                 .accessibilityIdentifier("chip.fix")
                 .transition(.opacity)
             }
-            if model.paired && !model.notesOpen && !confirming {
+            if model.paired && !model.notesOpen && !model.catalog.open && !confirming {
                 Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
                 barButton(model.writeOpen ? "keyboard" : "wand.and.stars", id: "write.toggle", label: model.writeOpen ? "Keyboard" : "Rewrite", action: model.toggleWrite)
             }
             // Notes live in the App Group, which the keyboard reaches only with Full Access.
-            if model.hasFullAccess && !model.writeOpen && !confirming {
+            if model.hasFullAccess && !model.writeOpen && !model.catalog.open && !confirming {
                 Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
                 barButton(model.notesOpen ? "keyboard" : "note.text", id: "notes.toggle", label: model.notesOpen ? "Keyboard" : "Notes", action: model.toggleNotes)
+            }
+            // The catalog cache lives in the App Group, which needs Full Access too.
+            if model.paired && !model.writeOpen && !model.notesOpen && !confirming {
+                Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
+                barButton(model.catalog.open ? "keyboard" : "tag", id: "catalog.toggle", label: model.catalog.open ? "Keyboard" : "Catalog", action: model.toggleCatalog)
             }
         }
         .padding(.horizontal, 4)
@@ -178,7 +192,7 @@ struct SuggestionBar: View {
 
     /// Fix sits beside the chips, so it never takes a chip's place.
     private var showsFix: Bool {
-        guard model.fixable, model.undo == nil, !model.notesOpen, !model.writeOpen else { return false }
+        guard model.fixable, model.undo == nil, !model.notesOpen, !model.writeOpen, !model.catalog.open else { return false }
         switch model.bar {
         case .idle, .chips: return true
         default: return false

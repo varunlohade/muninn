@@ -44,7 +44,7 @@ function build() {
   const userId = db.createUser();
   db.addDevice(userId, sha256(INNER_TOKEN), 'fake');
   db.putProfile(userId, DEMO_PROFILE);
-  for (const it of DEMO_CATALOG) db.addItem(userId, { name: it.name, price_cents: it.price * 100, currency: 'USD' });
+  for (const it of DEMO_CATALOG) db.addItem(userId, { name: it.name, price_cents: it.price * 100, currency: 'USD', description: it.description, category: it.category });
   const t = Date.now();
   const enc = (v: string) => cipher.encrypt(userId, v);
   db.insertInvoice({
@@ -126,9 +126,11 @@ fake.all('*', async (c) => {
   const req = c.req.raw;
   const headers = new Headers(req.headers);
   if (headers.get('authorization') === `Bearer ${FAKE_TOKEN}`) headers.set('authorization', `Bearer ${INNER_TOKEN}`);
-  const text = ['GET', 'HEAD'].includes(req.method) ? '' : await req.text();
-  const res = await state.app.fetch(new Request(req.url, { method: req.method, headers, body: text || undefined }));
-  let body: unknown = text || null;
+  // Raw bytes, so a photo upload reaches the app unchanged.
+  const raw = ['GET', 'HEAD'].includes(req.method) ? null : Buffer.from(await req.arrayBuffer());
+  const res = await state.app.fetch(new Request(req.url, { method: req.method, headers, body: raw?.length ? raw : undefined }));
+  const text = raw && !(headers.get('content-type') ?? '').startsWith('image/') ? raw.toString('utf8') : '';
+  let body: unknown = raw?.length && !text ? `<${raw.length} bytes>` : text || null;
   try {
     body = text ? JSON.parse(text) : null;
   } catch {}

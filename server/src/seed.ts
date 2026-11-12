@@ -13,9 +13,15 @@ export const DEMO_REFERENCE = 'muninn-demo-seed';
 
 export const DEMO_PROFILE = { business_name: 'Rae Okafor Hair & Design', tone: 'warm, brief, uses first names', currency: 'USD' };
 
-export const DEMO_CATALOG: { name: string; price: number }[] = [
-  { name: 'Haircut', price: 45 }, { name: 'Blowout', price: 35 }, { name: 'Color', price: 120 }, { name: 'Balayage', price: 180 },
-  { name: 'Bridal trial', price: 90 }, { name: 'Logo design', price: 350 }, { name: 'Brand kit', price: 600 }, { name: 'Social templates', price: 150 },
+export const DEMO_CATALOG: { name: string; price: number; description: string; category: string }[] = [
+  { name: 'Haircut', price: 45, description: 'Wash, cut and style', category: 'Hair' },
+  { name: 'Blowout', price: 35, description: 'Wash and blow-dry', category: 'Hair' },
+  { name: 'Color', price: 120, description: 'All-over color, one shade', category: 'Color' },
+  { name: 'Balayage', price: 180, description: 'Hand-painted highlights', category: 'Color' },
+  { name: 'Bridal trial', price: 90, description: 'Try your wedding look', category: 'Hair' },
+  { name: 'Logo design', price: 350, description: 'Three ideas, two rounds of changes', category: 'Design' },
+  { name: 'Brand kit', price: 600, description: 'Logo, colors and fonts', category: 'Design' },
+  { name: 'Social templates', price: 150, description: '10 post templates', category: 'Design' },
 ];
 
 const CLIENTS = {
@@ -80,7 +86,7 @@ export async function seedDemo(o: { db: Db; cipher: Cipher; paypal: PayPal; user
   const { db, cipher, paypal, userId, now } = o;
   db.putProfile(userId, DEMO_PROFILE);
   const have = new Set(db.listItems(userId).map((i) => i.name));
-  for (const it of DEMO_CATALOG) if (!have.has(it.name)) db.addItem(userId, { name: it.name, price_cents: it.price * 100, currency: 'USD' });
+  for (const it of DEMO_CATALOG) if (!have.has(it.name)) db.addItem(userId, { name: it.name, price_cents: it.price * 100, currency: 'USD', description: it.description, category: it.category });
 
   const price = new Map(DEMO_CATALOG.map((i) => [i.name, i.price * 100]));
   const out: SeedResult = { created: 0, recorded: 0, reused: 0 };

@@ -198,7 +198,8 @@ final class IntroStage: ObservableObject, TextHost {
         let api = DemoAPI(askResult: scene.askResult, fixed: scene.fixed)
         let store = DemoStore()
         store.appointments = scene.appointments
-        keyboard = KeyboardModel(deps: KeyboardDeps(api: { api }, store: store, pasteboard: DemoPasteboard(), now: Date.init, sleep: { try await Task.sleep(for: $0) }))
+        keyboard = KeyboardModel(deps: KeyboardDeps(api: { api }, store: store, pasteboard: DemoPasteboard(), now: Date.init, sleep: { try await Task.sleep(for: $0) },
+                                                    catalog: .introSample()))
         ask = AskModel(api: { api }, store: store)
         keyboard.host = self
         keyboard.suggestsWhileTyping = false
