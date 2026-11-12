@@ -1,5 +1,11 @@
 # Build notes
 
+## 0.1 (5) — 2026-11-12
+
+What to test:
+- Fix catches English full of typos; other languages get no chip.
+- Home says Finish keyboard setup until the keyboard opens once.
+
 ## 0.1 (4) — 2026-11-12
 
 What to test:
