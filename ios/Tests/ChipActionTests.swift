@@ -54,9 +54,50 @@ final class ChipActionTests: XCTestCase {
         host.text = "Thanks Sam"
         send(invoice)
         await settled()
-        XCTAssertEqual(host.text, "Thanks Sam\nHere's your invoice for Haircut ($45): https://fake.pay/INV-1")
+        XCTAssertEqual(host.text, "Thanks Sam\nhttps://fake.pay/INV-1")
         XCTAssertEqual(model.watch, Watch(id: "INV-1", who: "Sam", money: "$45"))
         XCTAssertEqual(model.bar, .idle)
+    }
+
+    func testInvoiceCommandSentenceBecomesTheClientMessage() async {
+        host.text = "Great job today. invoice sam $45 for the haircut"
+        send(invoice)
+        await settled()
+        XCTAssertEqual(host.text, "Great job today. Hi Sam, here's the invoice for the haircut ($45): https://fake.pay/INV-1")
+    }
+
+    func testPayLinkCommandBecomesTheClientMessage() async {
+        host.text = "make a pay link for 45 "
+        model.tapChip(chip("paylink", "Pay link $45 · Haircut", ["amount": .string("45.00"), "currency": .string("USD"), "item": .string("Haircut")]))
+        await settled()
+        XCTAssertEqual(host.text, "Hi, here's the payment link for the haircut ($45): https://fake.pay/PL-1")
+    }
+
+    func testChatSentenceStaysAndGetsTheLink() async {
+        host.text = "See you Friday. $45 for the haircut"
+        model.tapChip(chip("paylink", "Pay link $45 · Haircut", ["amount": .string("45.00"), "currency": .string("USD"), "item": .string("Haircut")]))
+        await settled()
+        XCTAssertEqual(host.text, "See you Friday. $45 for the haircut https://fake.pay/PL-1")
+    }
+
+    func testLinkAlreadyInTheFieldIsNotAddedTwice() async {
+        host.text = "Pay here https://fake.pay/PL-1"
+        model.tapChip(chip("paylink", "Pay link $45", ["amount": .string("45.00"), "currency": .string("USD")]))
+        await settled()
+        XCTAssertEqual(host.text, "Pay here https://fake.pay/PL-1")
+    }
+
+    func testCommandWithTextChangedOnlyAppends() async {
+        host.text = "invoice sam $45"
+        api.failures = [URLError(.networkConnectionLost)]
+        send(invoice)
+        await until("retry wait") { clock.sleeping > 0 }
+        host.text = "Other chat"
+        clock.advance(ChipActions.retryDelay.seconds)
+        await settled()
+        guard case .chips(let chips, _) = model.bar, let add = chips.first else { return XCTFail("expected a chip, got \(model.bar)") }
+        model.tapChip(add)
+        XCTAssertEqual(host.text, "Other chat Hi Sam, here's the invoice for the haircut ($45): https://fake.pay/INV-1")
     }
 
     func testPayLinkInsertsTheBareLink() async {
@@ -309,7 +350,7 @@ final class ChipActionTests: XCTestCase {
         await until("lookup") { store.pendingAction == nil }
         XCTAssertEqual(api.calls, ["invoice", "lookup:invoice"])
         XCTAssertEqual(Set(api.keys).count, 1)
-        XCTAssertEqual(host.text, "Thanks Sam\nHere's your invoice for Haircut ($45): https://fake.pay/INV-1")
+        XCTAssertEqual(host.text, "Thanks Sam\nhttps://fake.pay/INV-1")
         XCTAssertEqual(model.watch?.id, "INV-1")
         XCTAssertNil(store.pendingAction)
     }
@@ -369,7 +410,7 @@ final class ChipActionTests: XCTestCase {
         XCTAssertEqual(host.text, "Other chat")
         guard case .chips(let chips, _) = model.bar, let add = chips.first else { return XCTFail("expected a chip, got \(model.bar)") }
         model.tapChip(add)
-        XCTAssertEqual(host.text, "Other chat Here's your invoice for Haircut ($45): https://fake.pay/INV-1")
+        XCTAssertEqual(host.text, "Other chat https://fake.pay/INV-1")
     }
 
     func testDisappearCancelsTheAction() async {
@@ -484,7 +525,7 @@ final class ChipActionTests: XCTestCase {
         await until("lookup") { store.pendingAction == nil }
         await settled()
         XCTAssertEqual(api.calls, ["lookup:invoice"])
-        XCTAssertEqual(host.text, "Thanks Sam\nHere's your invoice for Haircut ($45): https://fake.pay/INV-1")
+        XCTAssertEqual(host.text, "Thanks Sam\nhttps://fake.pay/INV-1")
     }
 
     func testEveryRemindAsksFirstAndSendsTheClientItShowed() async {
@@ -525,7 +566,7 @@ final class ChipActionTests: XCTestCase {
         await settled()
         XCTAssertEqual(api.calls, ["invoice", "lookup:invoice"], "the check only looks up")
         XCTAssertEqual(Set(api.keys).count, 1)
-        XCTAssertEqual(host.text, "Thanks Sam\nHere's your invoice for Haircut ($45): https://fake.pay/INV-1")
+        XCTAssertEqual(host.text, "Thanks Sam\nhttps://fake.pay/INV-1")
         XCTAssertNil(store.pendingAction)
     }
 

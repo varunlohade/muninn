@@ -608,11 +608,11 @@ final class KeyboardModel: ObservableObject {
                 case .sent(let r):
                     // The link goes in only where the owner left it, and never into an empty field.
                     if !p.before.isEmpty, (self.host?.contextBeforeInput ?? "") == p.before {
-                        self.place(r.message, gap: r.kind == "invoice" ? "\n" : " ", readAt: p.before)
+                        self.placeSent(r, chip: p.chip, readAt: p.before)
                     } else if r.kind == "invoice" {
                         self.bar = .done(r.emailed ? "Invoice emailed to \(r.who) \u{2713}" : "Invoice link ready \u{2713}")
                     } else {
-                        self.offerInsert(r.message)
+                        self.offerInsert(Self.sentEdit(r, chip: p.chip, before: p.before).fallback)
                     }
                     if r.kind != "subscribe" { self.watch = Watch(id: r.id, who: r.who, money: r.money) }
                     self.startPolling()
@@ -1350,7 +1350,7 @@ final class KeyboardModel: ObservableObject {
                 if sendsMoney { store.pendingAction = nil }
                 switch outcome {
                 case .sent(let r):
-                    self.place(r.message, gap: r.kind == "invoice" ? "\n" : " ", readAt: before)
+                    self.placeSent(r, chip: chip, readAt: before)
                     // A repeat bill is not in the payments list, so there is nothing to watch.
                     if r.kind != "subscribe" { self.watch = Watch(id: r.id, who: r.who, money: r.money) }
                     if let billing = self.billing { self.billedHere.insert(billing.id) }
@@ -1402,6 +1402,23 @@ final class KeyboardModel: ObservableObject {
         host.insert((needsGap ? gap : "") + text)
         lastSent = typed
         bar = .idle
+    }
+
+    /// A typed command ("invoice sam $45") gives way to the client message; typed chat stays and gets the link.
+    /// Deletes only the measured trigger sentence, and only if the field still ends as it did at the tap.
+    private func placeSent(_ r: ActionResult, chip: Chip, readAt before: String) {
+        let e = Self.sentEdit(r, chip: chip, before: before)
+        guard let host, (host.contextBeforeInput ?? "") == before else { return offerInsert(e.fallback) }
+        for _ in 0..<e.delete { host.deleteBackward() }
+        if !e.insert.isEmpty { host.insert(e.insert) }
+        lastSent = typed
+        updateAutoShift()
+        bar = .idle
+    }
+
+    private static func sentEdit(_ r: ActionResult, chip: Chip, before: String) -> ChipText.Edit {
+        ChipText.edit(before: before, kind: r.kind, who: r.who, item: BarItems.string(chip, "item"), money: r.money, link: r.link,
+                      gap: r.kind == "invoice" ? "\n" : " ")
     }
 
     /// The text waits as a chip: it goes in only on a tap.

@@ -99,7 +99,7 @@ final class KeyboardModelTests: XCTestCase {
         }
 
         await until("link inserted") { host.text.hasSuffix("https://fake.pay/INV-1") }
-        XCTAssertEqual(host.text, "That is $45 for the haircut, sam@example.com\nHere's your invoice for haircut ($45): https://fake.pay/INV-1")
+        XCTAssertEqual(host.text, "That is $45 for the haircut, sam@example.com\nhttps://fake.pay/INV-1")
         XCTAssertEqual(api.invoiced.last?["confirm_recipient"], .string("sam@example.com"))
         XCTAssertEqual(model.watch, Watch(id: "INV-1", who: "Sam", money: "$45"))
         XCTAssertEqual(model.bar, .idle)
