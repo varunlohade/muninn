@@ -68,7 +68,10 @@ enum StreetScene {
     private static func within(_ t: Double, _ r: (Double, Double)) -> Bool { t >= r.0 && t < r.1 }
 
     /// One frame at time t (seconds), as a 98 x 118 image.
-    static func frame(at time: Double) -> CGImage? {
+    static func frame(at time: Double) -> CGImage? { image(pixels(at: time)) }
+
+    /// One frame's pixels, row by row, as RGBA bytes in memory.
+    static func pixels(at time: Double) -> [UInt32] {
         let t = (time.truncatingRemainder(dividingBy: loop) + loop).truncatingRemainder(dividingBy: loop)
         var p = Painter()
         let W = width, H = height
@@ -193,7 +196,7 @@ enum StreetScene {
             let tx = xs[si] + jsRound(Double(s.w - s.amt.count * 4) / 2) + 1
             if dt < 1.5 { text(&p, tx, y, s.amt, 0xFFE29A, shadow: 0x2A2338) } else { text(&p, tx, y, s.amt, 0xA88C8A) }
         }
-        return image(p.px)
+        return p.px
     }
 
     private static func text(_ p: inout Painter, _ x: Int, _ y: Int, _ s: String, _ c: UInt32, shadow: UInt32? = nil) {
