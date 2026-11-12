@@ -46,9 +46,11 @@ final class LabHost: ObservableObject, TextHost {
     var needsGlobeKey: Bool { false }
     var returnKeyType: UIReturnKeyType { .default }
     var autocapitalization: UITextAutocapitalizationType { .sentences }
+    var autocorrection: UITextAutocorrectionType { .default }
     var enablesReturnKeyAutomatically: Bool { false }
     func playClick() {}
     func insert(_ s: String) { text += s }
     func deleteBackward() { if !text.isEmpty { text.removeLast() } }
+    func adjustCursor(by offset: Int) {}
     func nextKeyboard() {}
 }

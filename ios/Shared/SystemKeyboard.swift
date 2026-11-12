@@ -79,6 +79,15 @@ enum KeyboardGeometry {
         return out
     }
 
+    /// The letter keys of the letters layout, for the touch decoder.
+    static func touchKeys(_ keys: [KeyCap]) -> [TouchKey] {
+        keys.compactMap { k in
+            guard case .char(let c) = k.kind, c.count == 1, let ch = c.first, LanguageModel.index(ch) != nil,
+                  let row = Int(k.id.split(separator: ".").dropFirst().first ?? "") else { return nil }
+            return TouchKey(letter: ch, frame: k.frame, row: row)
+        }
+    }
+
     /// The key under a touch: its frame grown by half the gaps, else the nearest key.
     static func key(at p: CGPoint, in keys: [KeyCap]) -> KeyCap? {
         if let hit = keys.first(where: { $0.frame.insetBy(dx: -M.keyGap / 2, dy: -M.rowGap / 2).contains(p) }) { return hit }
@@ -154,8 +163,8 @@ struct SystemKeysView: View {
                         .accessibilityHidden(true)
                 }
                 TouchSurface(
-                    began: { id, pt in if let k = KeyboardGeometry.key(at: pt.offsetBy(M.barHeight - 6), in: keys) { model.touchBegan(id, k) } },
-                    moved: { id, pt in if let k = KeyboardGeometry.key(at: pt.offsetBy(M.barHeight - 6), in: keys) { model.touchMoved(id, k) } },
+                    began: { id, pt in let p = pt.offsetBy(M.barHeight - 6); if let k = model.key(for: id, at: p, in: keys) { model.touchBegan(id, k, at: p) } },
+                    moved: { id, pt in let p = pt.offsetBy(M.barHeight - 6); if let k = model.key(for: id, at: p, in: keys) { model.touchMoved(id, k, at: p) } },
                     ended: { id, _ in model.touchEnded(id) },
                     cancelled: { id in model.touchCancelled(id) }
                 )
@@ -183,7 +192,8 @@ struct KeyCapView: View {
         let isReturnAccent = key.kind == .ret && model.returnStyle.accent
         RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous)
             .fill(isReturnAccent ? palette.accent : pressed && !isChar ? palette.keyPressed : palette.key)
-            .overlay { label.foregroundStyle(isReturnAccent ? .white : palette.label) }
+            .overlay { label.foregroundStyle(isReturnAccent ? .white : palette.label).opacity(model.trackpad ? 0 : 1) }
+            .animation(.easeOut(duration: 0.15), value: model.trackpad)
             .opacity(hidden ? 0 : 1)
             .accessibilityElement()
             .accessibilityLabel(key.a11y)

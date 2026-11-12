@@ -9,11 +9,15 @@ final class FakeHost: TextHost {
     var needsGlobeKey = false
     var returnKeyType: UIReturnKeyType = .default
     var autocapitalization: UITextAutocapitalizationType = .sentences
+    var autocorrection: UITextAutocorrectionType = .default
     var enablesReturnKeyAutomatically = false
 
     var contextBeforeInput: String? { text }
     func insert(_ s: String) { text += s }
     func deleteBackward() { if !text.isEmpty { text.removeLast() } }
+    /// Each cursor move, in order. The cursor itself stays at the end of `text`.
+    private(set) var cursorMoves: [Int] = []
+    func adjustCursor(by offset: Int) { cursorMoves.append(offset) }
     func nextKeyboard() {}
     func playClick() {}
 }
@@ -147,6 +151,7 @@ final class FakeStore: KeyboardStore {
     var notes: [Note] = []
     var actionShortcuts: [ActionShortcut] = ActionShortcut.defaults
     var pendingAction: PendingAction?
+    var touchOffsets: [Double] = []
 }
 
 /// The phone's calendar and reminders, in memory. `granted` is what the app was allowed.
