@@ -38,9 +38,39 @@ You need Node 24 or later and a PayPal sandbox app.
 
 Run `npm run seed:demo -- --refresh-today` on a demo day. It adds today's paid invoices.
 
+## How Muninn uses PayPal (sandbox)
+
+| Typed in any chat | PayPal API | What happens |
+|---|---|---|
+| "Sign in with PayPal" (onboarding) | Partner Referrals v2 | Connects the owner's PayPal business account |
+| `invoice Sam 45 for a haircut` | Invoicing v2 | Creates and emails a real invoice |
+| `send me 45 for the haircut` | Orders v2 | Makes a one-tap pay link |
+| `remind Leo` | Invoicing v2 (remind) | Nudges a late client |
+| `mark sam paid` / `cancel sam's invoice` | Invoicing v2 (payments, cancel) | Records or cancels, with Undo where PayPal allows it |
+| `refund sam $20` | Payments v2 (captures/refund) | Refunds a paid payment |
+| `pay Joe $20` | Payouts | Pays a supplier, with a strict confirm and a daily cap |
+| `bill ana $40 every month`, `pause ana's plan` | Subscriptions (catalog products, plans, subscriptions) | Monthly client billing, pause, resume, cancel |
+| `make me a projection for next 3 months` | Transaction Search | Monthly sales history behind the forecast chart |
+| App Home | Transaction Search, Balances, Invoicing search, Disputes | Money in, who owes you, disputes |
+| (background) | Webhooks + verify-webhook-signature | Live "Sam paid $45 ✓" updates |
+
+The server also uses the **PayPal Agent Toolkit** (`@paypal/agent-toolkit`) for typed PayPal tools.
+Nothing moves money without the owner's tap and a confirm step, and the server re-checks every amount and recipient.
+
+## How Muninn uses AI
+
+1. **Rules first.** Regex drops plain chat and reads clear amounts with no model call, so casual messages cost nothing.
+2. **TypeSafe jev** (`jev-latest`) routes the message to an intent (invoice, pay link, reminder, refund, payout, plan, chart or none) in about 0.2 s.
+3. **Meta Llama 3.3 70B Instruct via OpenRouter** extracts the details (who, which item, quantity) and writes replies and the daily brief. **Gemini 2.5 Flash via OpenRouter** is the backup.
+4. **The business profile** ("What does your business do?") goes into every prompt, so "how much?" means a haircut for a barber and a per-screen price for an app developer.
+5. **Prices come only from the owner's catalog, never from the model.** With no price, Muninn offers "Add a price".
+
+Tested on 24 kinds of business and 163 messages (`server/test/business-matrix*.ts`, live eval `server/scripts/eval-businesses.ts`).
+
 ## For judges
 
-- Server: `<hosted URL, added by the owner>`
+- Server: `https://muninn-api-production-ea1c.up.railway.app` (hosted on Railway)
+- iOS app: TestFlight (invite on request)
 - Demo device token: the owner shares it with you. It never goes in this repo.
 - PayPal sandbox logins: `<added by the owner>`
 
@@ -58,7 +88,8 @@ The paid ones use PayPal's "record payment" API, so they show as `paid_via: reco
 
 ## Deploy
 
-`render.yaml` describes one Render web service with a 1 GB disk for SQLite.
+The live server runs on Railway (service with a volume for SQLite).
+`render.yaml` also describes the same setup as one Render web service with a 1 GB disk.
 Render asks for each secret in its dashboard.
 With `DEMO_SEED=1`, the first boot seeds the demo and prints the demo token once in the logs.
 
@@ -67,8 +98,10 @@ With `DEMO_SEED=1`, the first boot seeds the demo and prints the demo token once
 - PayPal REST APIs and the PayPal Agent Toolkit
 - TypeSafe jev
 - OpenRouter (Llama 3.3 70B on Groq, Gemini 2.5 Flash)
-- Hono, zod, Node.js built-in SQLite
-- Swift and SwiftUI
+- Hono, zod, Node.js built-in SQLite, hosted on Railway
+- Swift and SwiftUI (app + custom keyboard extension)
+- Excalidraw (MIT) for charts and drawings in the keyboard
+- No hackathon sponsor tools beyond PayPal
 
 ## Security
 
