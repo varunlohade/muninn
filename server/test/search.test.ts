@@ -94,7 +94,6 @@ test('suggest: Sam vs Samantha, ambiguity and unknown names', async () => {
 test('suggest: kinds across a salon, a restaurant, a tutor and a contractor', async () => {
   const salon = seeded(BUSINESSES.salon);
   assert.equal((await salon.lookup("ana's booking"))?.label, "Ana Lopez's pay link · $35 · paid · Nov 4");
-  assert.equal((await salon.lookup('price of balayage'))?.label, 'Balayage · $180');
   const rest = seeded(BUSINESSES.restaurant);
   assert.equal((await rest.lookup('last order from maria'))?.label, "Maria Gomez's pay link · $64 · paid · Nov 10");
   assert.equal((await rest.lookup('did theo pay'))?.label, "Theo Park's invoice · $850 · unpaid · Nov 8");

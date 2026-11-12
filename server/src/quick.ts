@@ -123,7 +123,8 @@ export type MoneyRequest = { amount: number; currency: string | null; reason: st
  */
 export function moneyRequest(text: string): MoneyRequest | null {
   const s = text.trim();
-  if (!s || SPENT.some((re) => re.test(s)) || TIME_LIKE.test(s)) return null;
+  // A rate, tip, discount or quantity word ("3 cuts at $45", "half off"): the total is not plain, so the model decides.
+  if (!s || SPENT.some((re) => re.test(s)) || TIME_LIKE.test(s) || RATE.test(s) || SLASH_RATE.test(s)) return null;
   const marked = amountsIn(s).filter((a) => a.total);
   let amount: number;
   let currency: string | null = null;

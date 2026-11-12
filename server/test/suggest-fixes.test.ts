@@ -22,30 +22,10 @@ test('commandIntent: the first word names the action', () => {
   assert.equal(commandIntent('the bill is high'), null);
 });
 
-test('suggest: "kids haircut" never becomes the plain Haircut price', async () => {
-  const s = setup({ cls: { intent: 'catalog_reply' }, ext: { client_name: null, client_email: null, amount: null, item: 'kids haircut' } });
-  const { token } = s.device();
-  assert.equal((await s.call(token, 'POST', '/v1/catalog', { name: 'Haircut', price: '30.00' })).status, 200);
-  const r = await (await s.call(token, 'POST', '/v1/suggest', { text: '', context: 'how much for a kids haircut?' })).json();
-  assert.deepEqual(r.chips.map((c: { kind: string }) => c.kind), ['add_price']);
-  assert.equal(r.chips[0].payload.item, 'kids haircut');
-});
-
-test('suggest: a follow-up naming a catalog item reaches the model with no money word', async () => {
-  const s = setup({ cls: { intent: 'catalog_reply' }, ext: { client_name: null, client_email: null, amount: null, item: 'extra hour', quantity: 2 } });
-  const { token } = s.device();
-  assert.equal((await s.call(token, 'POST', '/v1/catalog', { name: 'Extra hour', price: '150.00' })).status, 200);
-  const r = await (await s.call(token, 'POST', '/v1/suggest', { text: '', context: 'and 2 extra hours?' })).json();
-  assert.equal(r.chips[0].kind, 'insert');
-  assert.equal(r.chips[0].payload.quantity, 2);
-  assert.equal(r.chips[0].payload.amount, '300.00');
-});
-
 test('suggest: "remind <unpaid client> ..." and "bill <client> ..." skip the intent question', async () => {
   // The intent model would say none; the command decides instead.
-  const s = setup({ cls: { intent: 'none' }, ext: { client_name: 'Kowalski', client_email: 'kowalski@law.biz', amount: null, item: 'retainer' } });
+  const s = setup({ cls: { intent: 'none' }, ext: { client_name: 'Kowalski', client_email: 'kowalski@law.biz', amount: 2500, item: 'retainer' } });
   const { token } = s.device();
-  assert.equal((await s.call(token, 'POST', '/v1/catalog', { name: 'Retainer', price: '2500.00' })).status, 200);
   assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', { amount: '20.00', item: 'Retainer', client_name: 'Emma' })).status, 200);
 
   // "Retainer" is the item of Emma's unpaid invoice, so the word names it.

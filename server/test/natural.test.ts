@@ -4,11 +4,18 @@ import { moneyRequest, payoutAsk, saidAll } from '../src/quick.ts';
 import { EVAL } from './natural-eval-data.ts';
 import { setup } from './helpers.ts';
 
-test('natural requests: every eval positive reads its amount with no model, and no negative is a request', () => {
+test('natural requests: eval positives read their amount with no model, and no negative is a request', () => {
+  let read = 0;
   for (const b of EVAL) {
-    for (const p of b.pos) assert.equal(moneyRequest(p.say)?.amount.toFixed(2), p.amount, p.say);
+    for (const p of b.pos) {
+      const r = moneyRequest(p.say);
+      // A rate word ("40 for the hour") leaves the amount to the model, never to a wrong regex read.
+      if (r) { read++; assert.equal(r.amount.toFixed(2), p.amount, p.say); }
+    }
     for (const n of b.neg) assert.equal(moneyRequest(n), null, n);
   }
+  assert.ok(read >= 55, `read ${read}`);
+  assert.equal(moneyRequest('3 haircuts at $45'), null);
   for (const t of ['table for 2', 'party for 12 tonight', 'sending you 20 now', 'see you at 5', 'I paid 50 for lunch']) assert.equal(moneyRequest(t), null, t);
 });
 

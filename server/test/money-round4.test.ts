@@ -60,20 +60,9 @@ test('fix 2: a pay link whose amount the model did not read takes a confirm', as
   for (const text of ['pay link for the haircut, half off', 'pay link haircut $45 waived', 'pay link haircut $45 already covered']) {
     const s = setup({ cls: { intent: 'pay_link' }, ext: { client_name: null, client_email: null, amount: null, item: 'haircut' } });
     const { userId, token } = s.device();
-    s.db.addItem(userId, { name: 'haircut', price_cents: 4500, currency: 'USD' });
     const link = (await chipsOf(await s.call(token, 'POST', '/v1/suggest', { text }))).find((c) => c.kind === 'paylink');
     if (link) assert.equal(link.needs_confirm, true, text);
   }
-});
-
-test('fix 3: a typed $ beats the catalog currency, and a clash takes a confirm', async () => {
-  const s = setup({ cls: { intent: 'pay_link' } });
-  const { userId, token } = s.device();
-  s.db.addItem(userId, { name: 'haircut', price_cents: 4500, currency: 'EUR' });
-  const link = (await chipsOf(await s.call(token, 'POST', '/v1/suggest', { text: 'pay link haircut $60' }))).find((c) => c.kind === 'paylink')!;
-  assert.ok(!(link.payload.currency === 'EUR' && !link.needs_confirm), JSON.stringify(link));
-  assert.equal(link.payload.currency, 'USD');
-  assert.equal(link.needs_confirm, true);
 });
 
 test('fix 5: the invoice confirm checks the currency too', async () => {
@@ -89,7 +78,6 @@ test('fix 5: the invoice confirm checks the currency too', async () => {
 test('fix 6: two typed emails pre-fill no email', async () => {
   const s = setup({ cls: { intent: 'create_invoice' }, ext: { client_name: 'Sam', client_email: 'ana@x.com', amount: 45 } });
   const { userId, token } = s.device();
-  s.db.addItem(userId, { name: 'haircut', price_cents: 4500, currency: 'USD' });
   unpaid(s, userId, 'INV-SAM', 'Sam');
   const inv = (await chipsOf(await s.call(token, 'POST', '/v1/suggest', { text: 'invoice sam@x.com $45 haircut, not ana@x.com' }))).find((c) => c.kind === 'invoice')!;
   assert.equal(inv.payload.client_email, null);

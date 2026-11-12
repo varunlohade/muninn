@@ -271,7 +271,6 @@ export function createApp(deps: Deps) {
   /** What the business does, in the owner's words, or '' when the owner has not said. */
   const businessOf = (userId: string) => dec(userId, db.getDescriptionEnc(userId)) ?? '';
   const replyProfile = (userId: string) => ({ ...profileOf(userId), description: businessOf(userId) });
-  const catalogText = (items: CatalogItem[]) => items.map((i) => `${i.name} ${formatMoney(i.price_cents, i.currency)}`).join('; ');
   const requestIdFor = (userId: string, key: string) => sha256(`${userId}:${key}`).slice(0, 36);
   // A connect or disconnect changes whose PayPal sales the chart reads.
   const connect = createPayPalConnect({ db, cipher, paypal, now, onChange: (userId) => biz.forgetHistory(userId) });
@@ -738,8 +737,9 @@ export function createApp(deps: Deps) {
       path = timings.extract_ms !== undefined ? 'regex_ask+extract' : 'regex_ask';
       parallel = false;
       const trigger = moneyTrigger(text);
-      // A bare number, or a rate, tip or discount word next to the amount: the pay link takes a confirm too.
-      const unsure = q.amount === null || q.amount !== asked.amount;
+      // A one-tap pay link only when the regex read a plain total and every other word is known, or the model read the
+      // same total (rule B). Otherwise the pay link confirms too.
+      const unsure = !known.pay_link && !(q.amount === asked.amount && model?.amount === asked.amount);
       return done(buildChips(userId, intent, ext, text, '', profile.currency, unsure).map((ch) => (trigger ? { ...ch, trigger } : ch)), intent, 1);
     }
 
@@ -1243,7 +1243,7 @@ export function createApp(deps: Deps) {
     const userId = c.get('userId');
     const { text } = await body(c, TextBody);
     const t = performance.now();
-    const reply = await ai.reply(text, replyProfile(userId), catalogText(db.listItems(userId)));
+    const reply = await ai.reply(text, replyProfile(userId));
     const ms = Math.round(performance.now() - t);
     log('reply', { user_id: userId, ms });
     return c.json({ reply, ms });
@@ -1378,7 +1378,7 @@ export function createApp(deps: Deps) {
           if (out.tone !== 'ok') paid++;
           return done(route, confidence, out);
         }
-        return done(route, confidence, { reply: await ai.reply(d, replyProfile(userId), catalogText(db.listItems(userId))) });
+        return done(route, confidence, { reply: await ai.reply(d, replyProfile(userId)) });
       } catch (e) {
         // A model error can quote the text, so only its type is logged.
         return none(confidence, 'Writing help is not available right now. Try again.', (e as Error).name);

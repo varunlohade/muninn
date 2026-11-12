@@ -21,7 +21,7 @@ export type Ai = {
   /** A sentence with no money signal: which on-phone action fits it, if any. One jev question. */
   deviceAction(text: string): Promise<{ kind: DeviceAction; confidence: number }>;
   extract(text: string, catalog: string, business?: string): Promise<Extraction>;
-  reply(text: string, profile: { business_name: string; tone: string; description?: string | null }, catalog: string): Promise<string>;
+  reply(text: string, profile: { business_name: string; tone: string; description?: string | null }): Promise<string>;
   brief(facts: string): Promise<string>;
   /** Same text with spelling and grammar fixed. */
   fix(text: string): Promise<string>;
@@ -372,12 +372,12 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
       return hedge(attempt(config.llm.primary), attempt(config.llm.fallback), config.llm.hedgeMs);
     },
 
-    async reply(text, profile, catalog) {
+    async reply(text, profile) {
       const content = await chat([
         {
           role: 'system',
           content: `You write chat replies for ${profile.business_name}, a small business${aboutBusiness(profile.description)}. Tone: ${profile.tone}. ` +
-            `Use only these items and prices; never invent prices: ${catalog || 'no catalog yet'}. ` +
+            'Never state a price, a total or any amount of money. ' +
             'Reply with the message text only, 1-3 short sentences.',
         },
         { role: 'user', content: `The client wrote: ${text.slice(0, config.maxTextChars)}` },

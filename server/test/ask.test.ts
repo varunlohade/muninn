@@ -30,9 +30,9 @@ const TABLE: Row[] = [
   { text: 'hi', want: 'none', paid: 0, calls: [] },
   { text: 'thanks so much!', want: 'none', paid: 0, calls: [] },
   { text: 'invoice jordan $120 for the logo', route: 'invoice', want: 'invoice', paid: 2, calls: ['askRoute', 'extract'] },
-  { text: 'invoice $45 for the haircut, sam@example.com', route: 'invoice', want: 'invoice', paid: 1, calls: ['askRoute'] },
+  { text: 'invoice $45 for the haircut, sam@example.com', route: 'invoice', want: 'invoice', paid: 2, calls: ['askRoute', 'extract'] },
   { text: 'bill Sam for the haircut', group: 'money', route: 'invoice', want: 'invoice', paid: 3, calls: ['askGroup', 'askRoute', 'extract'] },
-  { text: 'pay link for the haircut, $45', route: 'paylink', want: 'paylink', paid: 1, calls: ['askRoute'] },
+  { text: 'pay link for the haircut, $45', route: 'paylink', want: 'paylink', paid: 2, calls: ['askRoute', 'extract'] },
   { text: 'bill Sam $40 monthly', route: 'subscribe', want: 'subscribe', paid: 2, calls: ['askRoute', 'extract'] },
   { text: 'charge ana 90 every month', group: 'money', route: 'subscribe', want: 'subscribe', paid: 3, calls: ['askGroup', 'askRoute', 'extract'] },
   { text: 'bill Ana $40 weekly', route: 'subscribe', want: 'subscribe', paid: 1, calls: ['askRoute'] },
@@ -63,11 +63,10 @@ const TABLE: Row[] = [
   { text: 'who paid me', down: true, want: 'none', paid: 1, calls: ['askGroup'] },
 ];
 
-// One owner with a catalog item, Ana unpaid and Bo paid.
+// One owner with Ana unpaid and Bo paid.
 async function world(opts: Parameters<typeof setup>[0] = {}) {
   const s = setup(opts);
   const { token } = s.device();
-  await s.call(token, 'POST', '/v1/catalog', { name: 'Haircut', price: 45 });
   await s.call(token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', client_name: 'Ana' });
   const bo = await (await s.call(token, 'POST', '/v1/actions/invoice', { amount: 60, item: 'Color', client_name: 'Bo' })).json();
   await s.call(null, 'POST', '/webhooks/paypal', paidEvent(bo.id), webhookHeaders);
@@ -162,7 +161,7 @@ test('ask: a repeat bill chip names the amount, interval and only a client the o
   // The model's email is not one the owner typed, so it is dropped; the typed $40 beats the model's 45.
   const [sam] = await chipsFor('bill Sam $40 monthly', undefined);
   assert.deepEqual([sam.kind, sam.label, sam.needs_confirm], ['subscribe', 'Repeat $40 monthly · Sam', true]);
-  assert.deepEqual(sam.payload, { amount: '40.00', currency: 'USD', interval: 'month', item: 'Haircut', client_name: 'Sam', client_email: null });
+  assert.deepEqual(sam.payload, { amount: '40.00', currency: 'USD', interval: 'month', item: 'Repeat payment', client_name: 'Sam', client_email: null });
 
   const [ana] = await chipsFor('charge ana 90 every month', { client_name: 'Ana', client_email: null, amount: 90, currency: null, item: null }, 'money');
   assert.deepEqual([ana.label, ana.payload.interval, ana.payload.amount, ana.needs_confirm], ['Repeat $90 monthly · Ana', 'month', '90.00', true]);

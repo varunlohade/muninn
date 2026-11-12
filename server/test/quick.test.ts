@@ -55,13 +55,14 @@ const TABLE: Row[] = [
   { text: 'did ana pay yet?', intent: 'payment_status', path: 'regex_none' },
   { text: 'did someone pay yet?', intent: 'payment_status', path: 'jev+extract' },
   { text: 'who still owes me?', intent: 'payment_status', path: 'jev+extract' },
-  { text: '', context: 'how much is a haircut?', intent: 'catalog_reply', path: 'jev+extract' },
-  { text: 'what are your prices', intent: 'catalog_reply', path: 'jev+extract' },
-  { text: '$45 for the haircut, sam@example.com', intent: 'create_invoice', path: 'jev_only' },
-  { text: "that'll be $45 for the beard trim", intent: 'create_invoice', path: 'jev+extract' },
+  // A plain request to be paid is sure from the words: no jev question, and the model reads only the reason and client.
+  { text: '$45 for the haircut, sam@example.com', intent: 'create_invoice', path: 'extract_only' },
+  { text: "that'll be $45 for the beard trim", intent: 'create_invoice', path: 'extract_only' },
+  { text: 'two screens for 50', intent: 'none', path: 'extract_only' },
   // A command word ("invoice", "remind") names the intent, so jev is not asked.
   { text: 'invoice sam 45 haircut', intent: 'create_invoice', path: 'extract_only' },
-  { text: 'here is a pay link for the haircut, $45', intent: 'pay_link', path: 'jev_only' },
+  { text: 'here is a pay link for the haircut, $45', intent: 'pay_link', path: 'extract_only' },
+  { text: 'pay link $45', intent: 'pay_link', path: 'regex_none' },
   { text: 'send me a link to pay', intent: 'pay_link', path: 'jev+extract' },
   { text: 'remind Ana about the invoice', intent: 'send_reminder', path: 'regex_none' },
   { text: 'nudge her about the invoice', intent: 'send_reminder', path: 'jev+extract' },
@@ -74,7 +75,6 @@ const PAID = { regex_none: 0, jev_only: 1, extract_only: 1, 'jev+extract': 2 } a
 async function world(opts: Parameters<typeof setup>[0]) {
   const s = setup(opts);
   const { token } = s.device();
-  await s.call(token, 'POST', '/v1/catalog', { name: 'Haircut', price: 45 });
   await s.call(token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', client_name: 'Ana' });
   const bo = await (await s.call(token, 'POST', '/v1/actions/invoice', { amount: 60, item: 'Color', client_name: 'Bo' })).json();
   await s.call(null, 'POST', '/webhooks/paypal', paidEvent(bo.id), webhookHeaders);
@@ -125,12 +125,12 @@ test('suggest: a remind or refund chip needs the client named in the text; a mod
   }
 });
 
-test('suggest: regex-only invoice keeps the typed-email rule and the catalog item', async () => {
+test('suggest: a plain invoice request keeps the typed-email rule and asks no intent question', async () => {
   const { s, suggest } = await world({});
   const r = await suggest('$45 for the haircut, sam@example.com');
-  assert.deepEqual(s.aiCalls.map((c) => c.fn), ['classify']);
+  assert.deepEqual(s.aiCalls.map((c) => c.fn), ['extract']);
   assert.equal(r.chips[0].label, 'Invoice $45 · Haircut → sam@example.com');
-  assert.deepEqual(r.chips[0].payload, { amount: '45.00', currency: 'USD', item: 'Haircut', client_name: null, client_email: 'sam@example.com' });
+  assert.deepEqual(r.chips[0].payload, { amount: '45.00', currency: 'USD', item: 'Haircut', client_name: 'Sam', client_email: 'sam@example.com' });
   assert.equal(r.chips[0].needs_confirm, true);
   assert.deepEqual(Object.keys(r).sort(), ['chips', 'confidence', 'intent', 'timings']);
 });
@@ -227,7 +227,7 @@ test('review fix 4: an email inside a URL is not typed; odd prices still reach j
 test('review fix 5: the regex invoice keeps a known client name; tone logs its paid calls', async (t) => {
   const { s, suggest } = await world({});
   const r = await suggest('$45 for the haircut for Ana, ana@example.com');
-  assert.deepEqual(s.aiCalls.map((c) => c.fn), ['classify']);
+  assert.deepEqual(s.aiCalls.map((c) => c.fn), ['extract']);
   assert.equal(r.chips[0].payload.client_name, 'Ana');
   const lines: string[] = [];
   for (const tone of [{ tone: 'ok', calm: null }, { tone: 'upset', calm: 'Sorry.' }] as const) {

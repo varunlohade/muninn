@@ -9,7 +9,7 @@ export const daysAgo = (n: number) => NOW - n * DAY;
 type Inv = { client: string; cents: number; item: string; at: number; status?: 'SENT' | 'PAID' | 'REFUNDED' | 'CANCELLED'; email?: string };
 type Ord = { client: string; cents: number; item: string; at: number; paid?: boolean };
 type Sub = { client: string; cents: number; item: string; at: number; interval: 'week' | 'month'; status: 'ACTIVE' | 'APPROVAL_PENDING' };
-export type Business = { invoices?: Inv[]; orders?: Ord[]; subs?: Sub[]; catalog?: [string, number][] };
+export type Business = { invoices?: Inv[]; orders?: Ord[]; subs?: Sub[] };
 
 // Five kinds of business. Each has a Sam-like pair, a two-word name and a mix of states, so one rule set has to fit them all.
 export const BUSINESSES: Record<'salon' | 'restaurant' | 'tutor' | 'contractor' | 'shop', Business> = {
@@ -23,7 +23,6 @@ export const BUSINESSES: Record<'salon' | 'restaurant' | 'tutor' | 'contractor' 
       { client: 'Bo Chen', cents: 6000, item: 'Color', at: daysAgo(12), status: 'PAID' },
     ],
     orders: [{ client: 'Ana Lopez', cents: 3500, item: 'Blowout', at: daysAgo(7), paid: true }],
-    catalog: [['Haircut', 45], ['Balayage', 180], ['Blowout', 35]],
   },
   restaurant: {
     invoices: [{ client: 'Theo Park', cents: 85000, item: 'Catering for 40', at: daysAgo(3) }],
@@ -32,7 +31,6 @@ export const BUSINESSES: Record<'salon' | 'restaurant' | 'tutor' | 'contractor' 
       { client: 'Maria Gomez', cents: 3200, item: 'Takeout', at: daysAgo(15), paid: true },
       { client: 'Kenji Sato', cents: 4800, item: 'Delivery', at: daysAgo(2) },
     ],
-    catalog: [['Pad thai', 16], ['Tasting menu', 95]],
   },
   tutor: {
     invoices: [
@@ -41,7 +39,6 @@ export const BUSINESSES: Record<'salon' | 'restaurant' | 'tutor' | 'contractor' 
       { client: 'Noor Haddad', cents: 6000, item: 'SAT class', at: daysAgo(9), status: 'PAID' },
     ],
     subs: [{ client: 'Priya Shah', cents: 20000, item: 'Weekly lessons', at: daysAgo(20), interval: 'month', status: 'ACTIVE' }],
-    catalog: [['Math session', 75], ['SAT class', 60]],
   },
   contractor: {
     invoices: [
@@ -50,7 +47,6 @@ export const BUSINESSES: Record<'salon' | 'restaurant' | 'tutor' | 'contractor' 
       { client: 'Rosa Diaz', cents: 65000, item: 'Deck repair', at: daysAgo(14), status: 'PAID' },
       { client: 'Ellis Grant', cents: 30000, item: 'Fence quote', at: daysAgo(40), status: 'CANCELLED' },
     ],
-    catalog: [['Hourly labor', 85]],
   },
   shop: {
     invoices: [{ client: 'Zoe Adams', cents: 5500, item: 'Candle set', at: daysAgo(10), status: 'REFUNDED' }],
@@ -58,7 +54,6 @@ export const BUSINESSES: Record<'salon' | 'restaurant' | 'tutor' | 'contractor' 
       { client: 'Chloe Kim', cents: 3900, item: 'Mug', at: daysAgo(3), paid: true },
       { client: 'Marcus Bell', cents: 12000, item: 'Lamp', at: daysAgo(1) },
     ],
-    catalog: [['Candle set', 55], ['Mug', 39], ['Lamp', 120]],
   },
 };
 
@@ -89,7 +84,6 @@ export function seeded(biz: Business, opts: Parameters<typeof setup>[0] = {}) {
       client_email_enc: null, approve_link: `https://paypal.test/sub/${id}`, plan_id: 'P-1', created_at: u.at,
     });
   }
-  for (const [name, price] of biz.catalog ?? []) s.db.addItem(userId, { name, price_cents: price * 100, currency: 'USD' });
   const suggest = async (text: string) => (await s.call(token, 'POST', '/v1/suggest', { text })).json();
   const ask = async (text: string) => (await s.call(token, 'POST', '/v1/ask', { text })).json();
   /** The lookup chip for typed text, or undefined. */
