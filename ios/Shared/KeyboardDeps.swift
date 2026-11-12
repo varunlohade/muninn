@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import UniformTypeIdentifiers
 
 /// The server calls the keyboard makes. APIClient is the real one; tests pass a fake.
 protocol KeyboardAPI {
@@ -18,6 +19,9 @@ protocol KeyboardAPI {
     func payments() async throws -> [Payment]
     func more(_ path: String, _ body: [String: JSONValue], key: String, lookup: Bool) async throws -> MoreResponse
     func moreRead(_ path: String) async throws -> MoreResponse
+    func explain(_ text: String) async throws -> ExplainResponse
+    func explainVisual(_ topic: String) async throws -> Data
+    func shareDrawing(_ png: Data) async throws -> String
 }
 
 /// The intro demo has no PayPal actions beyond its scripted ones.
@@ -26,6 +30,9 @@ extension KeyboardAPI {
         throw APIError.message("Open \(AppConfig.displayName) for this one")
     }
     func moreRead(_ path: String) async throws -> MoreResponse { throw APIError.message("Open \(AppConfig.displayName) for this one") }
+    func explain(_ text: String) async throws -> ExplainResponse { throw APIError.message("No explain in the intro") }
+    func explainVisual(_ topic: String) async throws -> Data { throw APIError.message("No explain in the intro") }
+    func shareDrawing(_ png: Data) async throws -> String { throw APIError.message("No sharing in the intro") }
 }
 
 extension APIClient: KeyboardAPI {}
@@ -43,6 +50,10 @@ protocol KeyboardStore: AnyObject {
     var pendingAction: PendingAction? { get set }
     /// The touch decoder's learned tap offsets.
     var touchOffsets: [Double] { get set }
+    /// An exported visual explanation, kept in the App Group.
+    func saveDrawing(_ png: Data, title: String, scene: Data?) throws
+    /// A word, answer or chart the owner opened in the keyboard.
+    func recordLearned(_ l: Learned)
 }
 
 final class SharedKeyboardStore: KeyboardStore {
@@ -70,6 +81,8 @@ final class SharedKeyboardStore: KeyboardStore {
         get { SharedStore.touchOffsets }
         set { SharedStore.touchOffsets = newValue }
     }
+    func saveDrawing(_ png: Data, title: String, scene: Data?) throws { try SharedStore.saveDrawing(png, title: title, scene: scene) }
+    func recordLearned(_ l: Learned) { SharedStore.learned = [l] + SharedStore.learned.filter { $0.id != l.id } }
 }
 
 /// The parts of UIPasteboard the keyboard uses. Only reading `string` can show the paste prompt.
@@ -77,9 +90,13 @@ protocol Pasteboard: AnyObject {
     var hasStrings: Bool { get }
     var changeCount: Int { get }
     var string: String? { get }
+    /// Puts an image on the pasteboard, so it pastes into a chat. Needs Full Access in the keyboard.
+    func setPNG(_ png: Data)
 }
 
-extension UIPasteboard: Pasteboard {}
+extension UIPasteboard: Pasteboard {
+    func setPNG(_ png: Data) { setData(png, forPasteboardType: UTType.png.identifier) }
+}
 
 /// Everything KeyboardModel reaches outside itself, except the text host.
 struct KeyboardDeps {
@@ -97,6 +114,9 @@ struct KeyboardDeps {
         let png = data.starts(with: [0x89, 0x50, 0x4E, 0x47])
         UIPasteboard.general.setData(data, forPasteboardType: png ? "public.png" : "public.jpeg")
     }
+
+    /// The voice for "Play with voice". Only a tap starts it; tests pass a silent fake.
+    var speaker: @MainActor () -> Speaker = { SystemSpeaker() }
 
     static func live() -> KeyboardDeps {
         KeyboardDeps(api: { APIClient.shared() }, store: SharedKeyboardStore(), pasteboard: UIPasteboard.general,

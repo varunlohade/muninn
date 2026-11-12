@@ -27,7 +27,13 @@ targets:
   Muninn:
     type: application
     platform: iOS
-    sources: [App, Shared]
+    sources:
+      - App
+      - Shared
+      # The drawing page (Excalidraw, MIT), built from visual/ (npm run build). A folder reference keeps its paths.
+      - path: Visual
+        type: folder
+        buildPhase: resources
     info:
       path: App/Info.plist
       properties:
@@ -81,7 +87,12 @@ targets:
   MuninnKeyboard:
     type: app-extension
     platform: iOS
-    sources: [Keyboard, Shared]
+    sources:
+      - Keyboard
+      - Shared
+      - path: Visual
+        type: folder
+        buildPhase: resources
     info:
       path: Keyboard/Info.plist
       properties:

@@ -123,6 +123,15 @@ final class FakeAPI: AskAPI {
     func toneCheck(draft: String, client: String?) async throws -> ToneResponse { calls.append("tone"); return toneReply }
     func payments() async throws -> [Payment] { calls.append("payments"); try fail(); return paymentsReply }
 
+    var explainReply = ExplainResponse(short: "A log is the power you need.", body: "log10(100) = 2", visual_ok: true)
+    var visualReply = Data(#"{"title":"Logs","canvas":{"w":800,"h":500},"steps":[]}"#.utf8)
+    private(set) var explained: [String] = []
+    func explain(_ text: String) async throws -> ExplainResponse { calls.append("explain"); explained.append(text); return explainReply }
+    func explainVisual(_ topic: String) async throws -> Data { calls.append("visual"); explained.append(topic); return visualReply }
+    var shareReply = "http://localhost/d/AAAAAAAAAAAAAAAAAAAAAA.png"
+    private(set) var shared: [Data] = []
+    func shareDrawing(_ png: Data) async throws -> String { calls.append("share"); shared.append(png); return shareReply }
+
     /// The PayPal actions of server/src/actions-more.ts. A call with no confirm_ value answers needsConfirm when `moreNeedsConfirm`.
     var moreReply = MoreResponse(line: "Done \u{2713}", undo: nil)
     var readReply = MoreResponse(line: "Ana $40/mo \u{00B7} active", undo: nil)
@@ -152,6 +161,10 @@ final class FakeStore: KeyboardStore {
     var actionShortcuts: [ActionShortcut] = ActionShortcut.defaults
     var pendingAction: PendingAction?
     var touchOffsets: [Double] = []
+    private(set) var drawings: [(png: Data, title: String, scene: Data?)] = []
+    func saveDrawing(_ png: Data, title: String, scene: Data?) throws { drawings.append((png, title, scene)) }
+    private(set) var learned: [Learned] = []
+    func recordLearned(_ l: Learned) { learned.append(l) }
 }
 
 /// The phone's calendar and reminders, in memory. `granted` is what the app was allowed.
@@ -184,6 +197,8 @@ final class FakePasteboard: Pasteboard {
     var hasStrings: Bool { string != nil }
 
     func copy(_ s: String) { string = s; changeCount += 1 }
+    private(set) var png: Data?
+    func setPNG(_ png: Data) { self.png = png; changeCount += 1 }
 }
 
 /// A clock the test moves by hand. sleep waits until advance() moves `now` past its deadline,
@@ -228,13 +243,27 @@ final class FakeClock {
     }
 }
 
+/// A voice that makes no sound: it records each line and finishes only when the test says so.
+@MainActor
+final class FakeSpeaker: Speaker {
+    private(set) var said: [String] = []
+    private(set) var stops = 0
+    private var pending: (() -> Void)?
+    nonisolated init() {}
+    /// Like the real one, a new line ends the one before it (its completion runs first).
+    func say(_ text: String, done: @escaping () -> Void) { let p = pending; pending = nil; p?(); said.append(text); pending = done }
+    func stop() { stops += 1; let p = pending; pending = nil; p?() }
+    /// The current line ends.
+    func finish() { let p = pending; pending = nil; p?() }
+}
+
 @MainActor
 extension KeyboardDeps {
     static func fake(api: FakeAPI, store: FakeStore = FakeStore(), pasteboard: FakePasteboard = FakePasteboard(),
-                     clock: FakeClock = FakeClock(), writer: FakeWriter = FakeWriter()) -> KeyboardDeps {
+                     clock: FakeClock = FakeClock(), writer: FakeWriter = FakeWriter(), speaker: FakeSpeaker = FakeSpeaker()) -> KeyboardDeps {
         KeyboardDeps(api: { api }, store: store, pasteboard: pasteboard,
                      now: { MainActor.assumeIsolated { clock.now } },
-                     sleep: { d in try await clock.sleep(d) }, writer: writer)
+                     sleep: { d in try await clock.sleep(d) }, writer: writer, speaker: { speaker })
     }
 }
 

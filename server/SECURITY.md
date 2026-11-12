@@ -44,6 +44,14 @@
 - We strip control, newline and bidi characters from item names, client names and chip labels, before display and before PayPal.
 - The invoice chip label shows the recipient. If the email is not in the typed text and not a known client, the chip gets `needs_confirm: true`.
 
+## Shared drawings ("Send as link")
+- `POST /v1/drawings` takes one PNG (checked by its magic bytes), at most 1 MB, 20 an hour per user.
+- The id is 128 random bits (`/d/<22 base64url chars>.png`). It holds nothing about the user or the time, and no route lists ids.
+- `GET /d/<id>.png` needs no token: whoever has the link sees the image, served as `image/png` with `nosniff` and `default-src 'none'`, and nothing else. 120 views a minute per address.
+- A link works for 30 days. Expired rows are deleted on the next upload, and an expired id answers like an unknown one (404).
+- The image itself is not encrypted at rest: anyone with the link may see it, by design.
+- `/v1/explain` and `/v1/explain/visual` take only text the phone read as an explain question (max 200 characters). They log sizes and timings, never the question or the answer. 10 a minute and 100 a day per user.
+
 ## Threat model
 1. **Stolen DB file.** Names and emails are ciphertext. Without the env key, an attacker gets amounts and item names only.
 2. **Stolen or guessed device token.** Tokens have 256 random bits. The DB has only hashes. A stolen token reaches only that one user's data, and rate limits slow abuse.

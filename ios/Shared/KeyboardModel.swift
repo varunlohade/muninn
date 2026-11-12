@@ -160,6 +160,20 @@ final class KeyboardModel: ObservableObject {
     @Published var unpaidCount: Int?
     /// The catalog panel and the "Share catalog" chip (CatalogPanel.swift).
     @Published var catalog = CatalogPanelState()
+    /// A meaning, an answer or a chart for what the last sentence asks ("what does btw mean"). See KeyboardModel+Explain.
+    @Published var explainOffer: ExplainOffer?
+    /// The explain card or the visual panel, in place of the keys. Nil when the keys show.
+    @Published var explainPanel: ExplainPanel?
+    // Explain state, kept here because extensions cannot hold stored properties.
+    var explainTask: Task<Void, Never>?
+    var visualTask: Task<Void, Never>?
+    /// The question the server is answering now, so one pause sends it once.
+    var explainPending: String?
+    var explainCache: [String: ExplainResponse] = [:]
+    /// The drawing page in the visual panel, while it is on screen.
+    weak var visualPage: VisualPage?
+    /// Keeps the voice and the drawing in step while "Play with voice" is on.
+    var narration: NarrationSync?
 
     weak var host: TextHost?
     /// False in the intro scenes about writing, where a payment chip would get in the way. Then typing sends nothing.
@@ -597,6 +611,7 @@ final class KeyboardModel: ObservableObject {
         notesOpen = false
         catalog.open = false
         whoPaid = nil
+        closeExplain()
         resetWriting()
         pollTask?.cancel()
         actionTask?.cancel()
@@ -606,7 +621,7 @@ final class KeyboardModel: ObservableObject {
 
     // MARK: notes
 
-    private var typed: String { (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+    var typed: String { (host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
 
     func toggleNotes() {
         host?.playClick()
@@ -646,11 +661,15 @@ final class KeyboardModel: ObservableObject {
         updatePredictions()
         if let u = undo, !(host?.contextBeforeInput ?? "").hasSuffix(u.replacement) { undo = nil }
         if !paired { fieldEmpty = typed.isEmpty }
+        // The dictionary needs no pairing and no network, so a meaning shows even before pairing.
+        if !paired, suggestsWhileTyping { _ = updateExplain(typed) }
         guard paired, suggestsWhileTyping else { return }
         if case .working = bar { return }
         if case .confirm = bar { return }
         if case .ask = bar { return }
         let text = typed
+        // An explain question or a chart is answered on the phone or by /v1/explain, so it never also goes to /v1/suggest.
+        let explaining = updateExplain(text)
         updateCatalogTrigger(text)
         let wasEmpty = fieldEmpty
         fieldEmpty = text.isEmpty
@@ -658,6 +677,12 @@ final class KeyboardModel: ObservableObject {
         if text.isEmpty, !wasEmpty { reloadSnapshot() }
         let clear = detectSmart(text)
         suggest.observe(text)
+        if explaining {
+            suggestTask?.cancel()
+            lastSent = text
+            bar = .idle
+            return
+        }
         switch SuggestPolicy.ask(text, lastAsked: lastSent, prefix: billing?.invoicePrefix, clear: clear) {
         case .keep:
             return
@@ -1131,7 +1156,7 @@ final class KeyboardModel: ObservableObject {
                                     bar: bar, copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp,
                                     smart: smart.map { BarItems.Smart(chip: $0, access: writer.access($0.place, hasFullAccess: hasFullAccess)) },
                                     added: added?.label, fieldEmpty: fieldEmpty, moneyTrigger: SmartDetect.moneyTrigger(typed),
-                                    catalog: catalog.barItem,
+                                    catalog: catalog.barItem, explain: explainItems,
                                     ready: .init(copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp, today: appointments,
                                                  unpaidCount: unpaidCount, watch: watch, catalogCount: catalog.items.count),
                                     predictions: predictions, now: deps.now()))
@@ -1154,6 +1179,8 @@ final class KeyboardModel: ObservableObject {
         case .notes: toggleNotes()
         case .catalog(let item): openCatalog(item)
         case .predict(let word): usePrediction(word)
+        case .explain: tapExplainChip()
+        case .explainMore: openExplainCard()
         }
     }
 
