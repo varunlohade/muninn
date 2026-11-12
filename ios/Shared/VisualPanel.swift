@@ -159,7 +159,7 @@ struct VisualPanelView: View {
         }
     }
 
-    /// A send the owner tapped is running. The upload that starts by itself does not block Send.
+    /// A send the owner tapped is running. Nothing uploads before that tap.
     private var busy: Bool { state.sending == .link || state.sending == .image }
 
     private var drawn: Bool {

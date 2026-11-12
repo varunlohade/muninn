@@ -144,7 +144,9 @@ final class ExplainShots: XCTestCase {
         while !(note.exists && linked.evaluate(with: note)), Date() < linkBy { Thread.sleep(forTimeInterval: 0.2) }
         XCTAssertTrue(note.exists && linked.evaluate(with: note), "no Link added note: \(note.exists ? note.label : "none")")
         let typed = field.value as? String ?? ""
-        XCTAssertTrue(typed.contains("log function, explained: http") && typed.contains("/d/"), "no caption and link in the field: \(typed)")
+        XCTAssertTrue(typed.hasPrefix("log function, explained: http"), "the request is not replaced by the caption and link: \(typed)")
+        XCTAssertTrue(typed.contains("/d/"), "no link in the field: \(typed)")
+        XCTAssertEqual(element(messages, "visual.hint").label, "Image also copied")
         shot("04-send-link-inserted")
         // Send as image waits in the small menu.
         element(messages, "visual.more").tap()
