@@ -425,6 +425,40 @@ struct APIClient {
         return try await send(request("PUT", "/v1/profile", body: body), as: ProfileResponse.self).profile
     }
 
+    // MARK: catalog
+
+    func catalog() async throws -> [CatalogItem] { try await send(request("GET", "/v1/catalog"), as: CatalogResponse.self).items }
+    func addCatalogItem(_ d: CatalogDraft) async throws -> CatalogItem {
+        try await send(request("POST", "/v1/catalog", body: d.body), as: CatalogItemResponse.self).item
+    }
+    func editCatalogItem(_ id: String, _ d: CatalogDraft) async throws -> CatalogItem {
+        try await send(request("PUT", "/v1/catalog/\(id)", body: d.body), as: CatalogItemResponse.self).item
+    }
+    func deleteCatalogItem(_ id: String) async throws {
+        struct Ok: Decodable { let ok: Bool }
+        _ = try await send(request("DELETE", "/v1/catalog/\(id)"), as: Ok.self)
+    }
+    /// `ids` lists every item once, in the new order.
+    func reorderCatalog(_ ids: [String]) async throws -> [CatalogItem] {
+        try await send(request("POST", "/v1/catalog/reorder", body: ["ids": ids]), as: CatalogResponse.self).items
+    }
+    /// A JPEG the app already re-encoded, at most 1 MB.
+    func uploadCatalogPhoto(_ id: String, jpeg: Data) async throws -> CatalogItem {
+        var r = try request("PUT", "/v1/catalog/\(id)/photo")
+        r.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        r.httpBody = jpeg
+        return try await send(r, as: CatalogItemResponse.self).item
+    }
+    func deleteCatalogPhoto(_ id: String) async throws -> CatalogItem {
+        try await send(request("DELETE", "/v1/catalog/\(id)/photo"), as: CatalogItemResponse.self).item
+    }
+    func catalogPhoto(_ id: String) async throws -> Data {
+        let (data, resp) = try await session.data(for: request("GET", "/v1/catalog/\(id)/photo"))
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else { throw APIError.http(code, "") }
+        return data
+    }
+
     /// Stores the Slack incoming webhook. Nil disconnects. The server never sends the URL back.
     func setSlackWebhook(_ url: String?) async throws -> Integration {
         let body: [String: JSONValue] = ["webhook_url": url.map(JSONValue.string) ?? .null]
