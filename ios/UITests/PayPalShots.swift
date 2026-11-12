@@ -113,6 +113,9 @@ final class PayPalShots: XCTestCase {
         let start = id(app, "onboarding.start")
         if start.waitForExistence(timeout: 3) {
             start.tap()
+            // The PayPal and business steps follow "Get started" (same as WalkthroughTests.test00GetStarted).
+            if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
+            if id(app, "onboarding.business.later").waitForExistence(timeout: 5) { id(app, "onboarding.business.later").tap() }
         } else {
             XCUIDevice.shared.system.open(URL(string: "muninn-dev://pair?token=pkd_fake&server=\(fake.absoluteString)")!)
             let open = springboard.buttons["Open"]
@@ -169,6 +172,9 @@ final class PayPalShots: XCTestCase {
     }
 
     func test01KeyboardShots() {
+        // A fresh fake each run: an earlier run already paused Ana's plan.
+        fakeCall("POST", "_reset")
+        fakeCall("POST", "_paypal-extras")
         let field = openKeyboard()
 
         enter(field, "remind jordan", next: #"{"cls":{"intent":"send_reminder","confidence":0.95},"ext":{"client_name":"Jordan Ray","client_email":null,"amount":null,"currency":null,"item":null}}"#)
@@ -194,10 +200,11 @@ final class PayPalShots: XCTestCase {
         XCTAssertTrue(id(messages, "chip.undo").waitForExistence(timeout: 10), String(messages.debugDescription.suffix(3000)))
         shot("03c-paused-undo")
 
-        enter(field, "pay my supplier joe $200 joe@example.com")
+        // Under the $50 a day demo cap (demoPayoutDailyCap in server/src/config.ts).
+        enter(field, "pay my supplier joe $40 joe@example.com")
         chip("payout").tap()
         XCTAssertTrue(id(messages, "chip.confirm").waitForExistence(timeout: 5))
-        shot("04-send-200-confirm")
+        shot("04-send-40-confirm")
         cancel()
 
         enter(field, "how much do I have")

@@ -85,6 +85,9 @@ final class WalkthroughTests: XCTestCase {
         let search = messages.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 8), messages.debugDescription)
         search.tap()
+        // The swipe-typing intro shows once on a fresh simulator.
+        let intro = label(messages, "label == %@", "Continue")
+        if intro.waitForExistence(timeout: 2) { intro.tap() }
         let ours = id(messages, "muninn.more")
         for _ in 0..<5 where !ours.waitForExistence(timeout: 2) { label(messages, "label == %@", "Next keyboard").tap() }
         XCTAssertTrue(ours.exists, messages.debugDescription)
@@ -190,6 +193,8 @@ final class WalkthroughTests: XCTestCase {
     }
 
     func test02KeyboardRemind() {
+        // A fresh fake each run, so an earlier run's reminder does not count against this one.
+        fakeCall("POST", "_reset")
         var mark = logCount()
         let field = openKeyboard()
         enter(field, "remind Jordan", next: #"{"cls":{"intent":"send_reminder","confidence":0.95},"ext":{"client_name":"Jordan","client_email":null,"amount":null,"item":null}}"#)

@@ -23,12 +23,27 @@ enum LocalWipe {
         if let id = Bundle.main.bundleIdentifier { UserDefaults.standard.removePersistentDomain(forName: id) }
         sandboxFiles()
         group?.set(next, forKey: generationKey)
+        await groupDefaultsReachDisk()
+    }
+
+    /// cfprefsd writes the App Group plist to disk on its own schedule, so the last person's values could still sit in the
+    /// file when logout returns. Wait, at most two seconds, until the file holds only the wipe count.
+    @MainActor
+    private static func groupDefaultsReachDisk() async {
+        guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppConfig.appGroupID) else { return }
+        let file = root.appendingPathComponent("Library/Preferences/\(AppConfig.appGroupID).plist")
+        for _ in 0..<100 {
+            guard let data = FileManager.default.contents(atPath: file.path),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  !Set(plist.keys).isSubset(of: [generationKey]) else { return }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
 
     /// What lives in this process only: URL cache, cookies, saved credentials, web data, decoded photos.
     @MainActor
     static func process() async {
-        URLCache.shared.removeAllCachedResponses()
+        await clearURLCache()
         for storage in [HTTPCookieStorage.shared, HTTPCookieStorage.sharedCookieStorage(forGroupContainerIdentifier: AppConfig.appGroupID)] {
             storage.removeCookies(since: .distantPast)
             for c in storage.cookies ?? [] { storage.deleteCookie(c) }
@@ -37,6 +52,22 @@ enum LocalWipe {
         for (space, all) in creds.allCredentials { for c in all.values { creds.remove(c, for: space) } }
         let web = WKWebsiteDataStore.default()
         await web.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+    }
+
+    /// URLCache clears on a background queue and has no completion. Zero capacity makes it drop what it holds, and
+    /// URLSession.shared.reset (the session APIClient uses; it shares this cache) returns once its caches are flushed.
+    /// Without the wait, a response stored just before logout could land after the clear, and SQLite's truncate scratch
+    /// files (tmpsqlitetruncatedb*) could appear in tmp after the folder was emptied.
+    @MainActor
+    private static func clearURLCache() async {
+        let cache = URLCache.shared
+        let (memory, disk) = (cache.memoryCapacity, cache.diskCapacity)
+        cache.removeAllCachedResponses()
+        cache.memoryCapacity = 0
+        cache.diskCapacity = 0
+        await URLSession.shared.reset()
+        cache.memoryCapacity = memory
+        cache.diskCapacity = disk
     }
 
     /// Every Keychain item this app can reach: the device token, the install id, and anything else.

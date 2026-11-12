@@ -7,7 +7,9 @@ import XCTest
 /// The server is unreachable here on purpose: the wipe must run even when POST /v1/auth/logout fails.
 @MainActor
 final class AuthWipeTests: XCTestCase {
-    private let client = "Alice Anders"
+    /// One marker per run, written into every store. After the wipe no file on disk may hold it.
+    private let mark = "muninn-wipe-marker-\(UUID().uuidString)"
+    private var client: String { "Alice Anders \(mark)" }
     private var group: UserDefaults { UserDefaults(suiteName: AppConfig.appGroupID)! }
     private var container: URL { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppConfig.appGroupID)! }
     private let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
@@ -52,6 +54,7 @@ final class AuthWipeTests: XCTestCase {
         SharedStore.touchOffsets = [1, 2, 3]
         SharedStore.lastPasteboardChange = 42
         SharedStore.keyboardLastSeen = Date()
+        group.set("left by an older build \(mark)", forKey: "some_old_key")
 
         // App Group files: day data, notes, shortcuts, the pending call, learned words, drawings.
         let now = Date()
@@ -77,9 +80,12 @@ final class AuthWipeTests: XCTestCase {
         try png.write(to: tmp)
 
         // URL cache, cookies (URL loading and web view), in-memory singletons.
-        URLCache.shared.storeCachedResponse(CachedURLResponse(response: HTTPURLResponse(url: site, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                                                              data: Data(client.utf8)), for: URLRequest(url: site))
-        let cookie = HTTPCookie(properties: [.domain: "example.com", .path: "/", .name: "session", .value: "a", .expires: Date().addingTimeInterval(3600)])!
+        // A small body stays in the cache database; a large one goes to its own file next to it.
+        let response = HTTPURLResponse(url: site, statusCode: 200, httpVersion: nil, headerFields: ["Cache-Control": "max-age=600"])!
+        URLCache.shared.storeCachedResponse(CachedURLResponse(response: response, data: Data(client.utf8)), for: URLRequest(url: site))
+        let big = Data(String(repeating: "\(mark) ", count: 2000).utf8)
+        URLCache.shared.storeCachedResponse(CachedURLResponse(response: response, data: big), for: URLRequest(url: site.appendingPathComponent("big")))
+        let cookie = HTTPCookie(properties: [.domain: "example.com", .path: "/", .name: "session", .value: mark, .expires: Date().addingTimeInterval(3600)])!
         HTTPCookieStorage.shared.setCookie(cookie)
         await WKWebsiteDataStore.default().httpCookieStore.setCookie(cookie)
         PayPalConnector.shared.note = "Connected as \(client)"
@@ -87,8 +93,27 @@ final class AuthWipeTests: XCTestCase {
         return files + [tmp]
     }
 
+    /// Every file under `dirs` whose bytes hold the marker, as UTF-8 or UTF-16.
+    private func filesHoldingMark(under dirs: [URL]) -> [String] {
+        let needles = [Data(mark.utf8), mark.data(using: .utf16LittleEndian)!, mark.data(using: .utf16BigEndian)!]
+        var hits: [String] = []
+        for dir in dirs {
+            let walk = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: [.isRegularFileKey])
+            while let url = walk?.nextObject() as? URL {
+                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+                      let bytes = try? Data(contentsOf: url) else { continue }
+                if needles.contains(where: { bytes.range(of: $0) != nil }) { hits.append(url.path) }
+            }
+        }
+        return hits
+    }
+
     func testLogoutEmptiesEveryStore() async throws {
         let files = try await seed()
+        let fm = FileManager.default
+        let dirs = [fm.temporaryDirectory, container] + [FileManager.SearchPathDirectory.cachesDirectory, .documentDirectory, .applicationSupportDirectory]
+            .map { fm.urls(for: $0, in: .userDomainMask)[0] }
+        XCTAssertFalse(filesHoldingMark(under: dirs).isEmpty, "the marker search finds seeded files")
         let generation = LocalWipe.generation
         let session = Session()
         XCTAssertTrue(session.paired)
@@ -120,6 +145,7 @@ final class AuthWipeTests: XCTestCase {
         for f in files { XCTAssertFalse(FileManager.default.fileExists(atPath: f.path), f.lastPathComponent) }
         // URL cache and cookies.
         XCTAssertNil(URLCache.shared.cachedResponse(for: URLRequest(url: site)))
+        XCTAssertNil(URLCache.shared.cachedResponse(for: URLRequest(url: site.appendingPathComponent("big"))), "URLCache, large body")
         XCTAssertEqual(HTTPCookieStorage.shared.cookies ?? [], [])
         let webCookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
         XCTAssertEqual(webCookies, [])
@@ -133,6 +159,8 @@ final class AuthWipeTests: XCTestCase {
         XCTAssertTrue(session.onboarding)
         XCTAssertTrue(session.signInNext)
         XCTAssertFalse(session.appleLinked)
+        // The real proof: no file left in temp, caches, documents, app support or the App Group holds the marker.
+        XCTAssertEqual(filesHoldingMark(under: dirs), [], "files that still hold the last person's data")
     }
 
     /// A server that answers every call with `code`.
