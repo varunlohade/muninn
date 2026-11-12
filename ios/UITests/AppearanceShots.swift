@@ -59,6 +59,12 @@ final class AppearanceShots: XCTestCase {
             shot("03-onboarding-keyboard")
             id(app, "onboarding.later").tap()
         }
+        // A phone that has the keyboard already gets the make-default step instead.
+        for later in ["onboarding.default.later", "onboarding.default.next"] where id(app, later).waitForExistence(timeout: 2) {
+            shot("03b-onboarding-make-default")
+            id(app, later).tap()
+            break
+        }
         if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) {
             shot("04-onboarding-calendar")
             id(app, "onboarding.calendar.later").tap()
@@ -152,7 +158,9 @@ final class AppearanceShots: XCTestCase {
         shot("11-integrations")
         app.swipeUp()
         shot("11b-integrations-lower")
+        // Keyboard Lab is in Debug builds only.
         let lab = app.buttons["Keyboard Lab (debug)"]
+        guard lab.exists else { return }
         if !lab.isHittable { app.swipeUp() }
         lab.tap()
         shot("12-keyboard-lab")

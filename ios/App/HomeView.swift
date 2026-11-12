@@ -278,11 +278,13 @@ struct HomeView: View {
     }
 
     /// The event title without the client's name: "Color - Ava Chen" reads "Color" beside "Ava Chen".
+    /// Only a whole part between dashes or a colon is dropped, so "Haircut - Sam Okafor" stays whole for a client named Sam.
     static func what(_ a: Appointment) -> String {
-        guard let name = a.clientName, a.title.localizedCaseInsensitiveContains(name) else { return a.title }
-        let rest = a.title.replacingOccurrences(of: name, with: "", options: .caseInsensitive)
-            .trimmingCharacters(in: CharacterSet(charactersIn: " -\u{2013}\u{2014}:,\u{00B7}"))
-        return rest.isEmpty ? a.title : rest
+        guard let name = a.clientName else { return a.title }
+        let parts = a.title.components(separatedBy: CharacterSet(charactersIn: "-\u{2013}\u{2014}:\u{00B7}"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let rest = parts.filter { $0.caseInsensitiveCompare(name) != .orderedSame }
+        return rest.isEmpty || rest.count == parts.count ? a.title : rest.joined(separator: " ")
     }
 
     private var keyboardCard: some View {

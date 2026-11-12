@@ -243,10 +243,14 @@ struct PixelIcon: View {
 /// Muninn, the raven, sitting. 14 x 9 art pixels.
 struct PixelRaven: View {
     var scale: CGFloat = 2
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        PixelGrid(rows: Self.rows, palette: ["#": Color(hex: 0x151A2B), "b": Color(hex: 0x2E3D63), "e": Color(hex: 0xF2F2F2),
-                                             ">": Color(hex: 0x3A3A3A), "|": Color(hex: 0x1B1B1B)])
+        // On a dark ground the raven turns moonlit grey, so it does not vanish.
+        let dark = scheme == .dark
+        PixelGrid(rows: Self.rows, palette: ["#": Color(hex: dark ? 0xC9CEDB : 0x151A2B), "b": Color(hex: dark ? 0x8FA3CF : 0x2E3D63),
+                                             "e": Color(hex: dark ? 0x151A2B : 0xF2F2F2), ">": Color(hex: dark ? 0xA0A0A0 : 0x3A3A3A),
+                                             "|": Color(hex: dark ? 0xB5B5B5 : 0x1B1B1B)])
             .frame(width: 14 * scale, height: 9 * scale)
             .accessibilityHidden(true)
     }

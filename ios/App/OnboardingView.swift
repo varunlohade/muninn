@@ -76,8 +76,10 @@ struct OnboardingView: View {
                 StepDots(count: Step.allCases.count, current: step.rawValue)
             }
             .padding(.top, Theme.Space.s)
-            Spacer(minLength: 0).frame(maxHeight: step == .start ? .infinity : Theme.Space.xl)
-            mark
+            // The middle scrolls, so the "Type here" keyboard never pushes the mark under the clock.
+            ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+            mark.padding(.top, step == .start ? 72 : Theme.Space.xl)
             VStack(alignment: .leading, spacing: Theme.Space.l) {
                 // The signature two-tone headline: the step in ink, what it does in ink 2.
                 twoTone(title.hasSuffix(".") ? title : title + ".", line)
@@ -98,7 +100,12 @@ struct OnboardingView: View {
             .padding(.top, Theme.Space.l)
             .id(step)
             .transition(slide)
-            Spacer(minLength: Theme.Space.l).frame(maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, Theme.Space.l)
+            }
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize)
             if let error = session.error {
                 Text(error).font(Theme.Font.label).foregroundStyle(Theme.Color.due)
                     .fixedSize(horizontal: false, vertical: true)
