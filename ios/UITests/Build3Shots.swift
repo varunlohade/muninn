@@ -129,7 +129,7 @@ final class Build3Shots: XCTestCase {
         shot("contacts-2-picker")
         kate.tap()
         let confirm = id(app, "ask.confirm")
-        let picked = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'ask.confirm' AND label BEGINSWITH %@", "Send $45 invoice to ")).firstMatch
+        let picked = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'ask.confirm' AND label BEGINSWITH %@", "Email ")).firstMatch
         if !picked.waitForExistence(timeout: 4) {
             // A contact with more than one email opens its card, and the owner picks the address there.
             app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "@")).firstMatch.tap()

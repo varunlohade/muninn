@@ -514,7 +514,7 @@ final class FlowTests: XCTestCase {
             XCTAssertTrue(allow.waitForExistence(timeout: 6), springboard.debugDescription)
             allow.tap()
         }
-        XCTAssertTrue(element(app, "label BEGINSWITH %@", "Connected ·").waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(element(app, "label == %@", "Connected").waitForExistence(timeout: 5), app.debugDescription)
         Thread.sleep(forTimeInterval: 0.5)
         shot("31-integrations-calendar-connected")
         app.navigationBars.buttons.firstMatch.tap()
@@ -816,7 +816,7 @@ final class FlowTests: XCTestCase {
 
         next(#"{"group":{"group":"info"},"route":{"route":"who_paid"}}"#)
         field.typeText("who hasn't paid\n")
-        XCTAssertTrue(element(app, "label BEGINSWITH %@", "Jordan Ray $120").waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(element(app, "identifier == %@", "unpaid.card.Jordan Ray").waitForExistence(timeout: 10), app.debugDescription)
         Thread.sleep(forTimeInterval: 0.6)
         shot("40-ask-who-paid")
 

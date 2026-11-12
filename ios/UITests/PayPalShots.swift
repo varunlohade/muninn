@@ -203,10 +203,10 @@ final class PayPalShots: XCTestCase {
         app.launchArguments = ["-serverURL", fake.absoluteString]
         app.launch()
         XCTAssertTrue(label(app, "label CONTAINS %@", "Jordan Ray").waitForExistence(timeout: 15))
-        let row = label(app, "label BEGINSWITH %@", "Disputes")
+        let row = id(app, "home.disputes")
         XCTAssertTrue(row.waitForExistence(timeout: 10), String(app.debugDescription.suffix(3000)))
-        // The Ask bar sits over the bottom of Home: one short scroll brings the row above it.
-        app.swipeUp(velocity: .slow)
+        // The Disputes row sits near the end of Home: scroll until it is clear of the Ask bar.
+        for _ in 0..<5 where row.frame.maxY > app.frame.height - 180 { app.swipeUp(velocity: .slow) }
         Thread.sleep(forTimeInterval: 0.8)
         row.tap()
         let reply = id(app, "dispute.reply")
