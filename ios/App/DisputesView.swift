@@ -86,24 +86,47 @@ struct DisputesView: View {
     @StateObject private var model = DisputesModel()
 
     var body: some View {
-        List(model.items) { d in
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                Text(d.line).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
-                    .accessibilityIdentifier("dispute.line.\(d.id)")
-                if model.active == d.id { answer(d) } else { buttons(d) }
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
+                twoTone("Disputes.", "Answer a buyer here. Every answer asks you first.")
+                    .font(Theme.Font.title).tracking(-0.3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Theme.Metric.cardInset + 2)
+                    .padding(.bottom, Theme.Space.xs)
+                ForEach(model.items) { d in
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
+                        HStack(alignment: .top, spacing: Theme.Space.xs) {
+                            Text(d.line).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("dispute.line.\(d.id)")
+                            Spacer(minLength: 0)
+                            StatusPill(text: "Open", tone: .due)
+                        }
+                        if model.active == d.id { answer(d) } else { buttons(d) }
+                    }
+                    .padding(Theme.Metric.cardPadding)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .cardSurface()
+                    .padding(.horizontal, Theme.Metric.cardInset)
+                }
+                if model.loaded && model.items.isEmpty {
+                    HStack(spacing: Theme.Space.s) {
+                        IconTile(icon: .check, fill: Color(hex: 0xE0F2DC))
+                        Text("No open disputes").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                        Spacer()
+                        StatusPill(text: "All clear", tone: .paid)
+                    }
+                    .padding(.horizontal, 10).frame(minHeight: Theme.Metric.rowHeight)
+                    .rowSurface()
+                    .padding(.horizontal, Theme.Metric.cardInset)
+                    .accessibilityIdentifier("disputes.empty")
+                }
             }
-            .padding(.vertical, Theme.Space.xxs)
-            .listRowBackground(Theme.Color.bg)
+            .padding(.top, Theme.Space.xs)
+            .padding(.bottom, Theme.Space.l)
         }
-        .overlay {
-            if model.loaded && model.items.isEmpty {
-                Text("No open disputes \u{2713}").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
-            }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
         .background(Theme.Color.bg.ignoresSafeArea())
-        .navigationTitle("Disputes")
+        .navigationBarTitleDisplayMode(.inline)
         .animation(Theme.Motion.chipAppear, value: model.step)
         .task { await model.reload() }
     }
@@ -126,34 +149,40 @@ struct DisputesView: View {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 TextField("", text: $model.draft, prompt: Text(kind == .reply ? "Message to \(d.name)" : "Amount, like 20").foregroundStyle(Theme.Color.text3),
                           axis: kind == .reply ? .vertical : .horizontal)
-                    .font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
+                    .modifier(FieldStyle())
                     .keyboardType(kind == .offer ? .decimalPad : .default)
                     .accessibilityIdentifier("dispute.field")
                 HStack(spacing: Theme.Space.xs) {
-                    AskChip(title: "Next", detail: nil) { model.next(d, kind) }.accessibilityIdentifier("dispute.next")
+                    Button("Next") { model.next(d, kind) }.buttonStyle(TactileButton(small: true, wide: false)).accessibilityIdentifier("dispute.next")
                     AskChip(title: "Cancel", detail: nil) { model.close() }
                 }
             }
         case .confirm(let chip):
-            // The question can quote a long reply, so it wraps above the two chips.
+            // The question can quote a long reply, so it wraps above the two buttons.
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                Text(BarItems.confirmTitle(chip, recipient: d.name)).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top) {
+                    Text(BarItems.confirmTitle(chip, recipient: d.name)).font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: Theme.Space.xs)
+                    StatusPill(text: "Needs your OK", tone: .due)
+                }
                 HStack(spacing: Theme.Space.xs) {
-                    AskChip(title: "Send", detail: nil) { model.send(chip, to: d) }.accessibilityIdentifier("dispute.confirm")
                     AskChip(title: "Cancel", detail: nil) { model.close() }
+                    Button("Send") { model.send(chip, to: d) }.buttonStyle(TactileButton(small: true, wide: false)).accessibilityIdentifier("dispute.confirm")
                 }
             }
         case .working(let line):
             Text(line).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
         case .done(let line):
             HStack(spacing: Theme.Space.xs) {
-                Text(line).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.paid).accessibilityIdentifier("dispute.done")
+                StatusPill(text: line, tone: .paid).accessibilityIdentifier("dispute.done")
+                Spacer()
                 AskChip(title: "Done", detail: nil) { model.close() }
             }
         case .error(let line):
             HStack(spacing: Theme.Space.xs) {
-                Text(line).font(Theme.Font.label).foregroundStyle(Theme.Color.due)
+                Text(line).font(Theme.Font.label).foregroundStyle(Theme.Color.due).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
                 AskChip(title: "Back", detail: nil) { model.close() }
             }
         }

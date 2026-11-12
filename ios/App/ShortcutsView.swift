@@ -11,18 +11,20 @@ struct ShortcutsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
-                HStack {
-                    Text("Shortcuts").font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
-                    Spacer()
-                    Button { editingNote = Note(text: "", trigger: ";") } label: { IconCircle(systemImage: "plus") }
+                HStack(alignment: .top) {
+                    twoTone("Shortcuts.", "Type a few letters, get the whole thing.")
+                        .font(Theme.Font.title).tracking(-0.3).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: Theme.Space.s)
+                    Button { editingNote = Note(text: "", trigger: ";") } label: { IconCircle(systemImage: "plus", size: 40) }
                         .buttonStyle(PressScale())
                         .accessibilityLabel("Add shortcut")
                         .accessibilityIdentifier("shortcuts.new")
                 }
-                .padding(.leading, Theme.Metric.margin)
+                .padding(.leading, Theme.Metric.cardInset + 2)
                 .padding(.trailing, Theme.Metric.cardInset)
                 Text("Type a shortcut on the keyboard, then space. Shortcuts stay on this phone.")
-                    .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.margin)
+                    .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.cardInset + 2)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 SectionHeader(title: "Actions").padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
                 ForEach(actions) { a in
@@ -34,7 +36,7 @@ struct ShortcutsView: View {
                     row(trigger: n.trigger ?? "", title: n.text, detail: nil, dimmed: false) { editingNote = n }
                 }
                 if !notes.contains(where: { $0.trigger != nil }) {
-                    Text("No text shortcuts yet. Tap + to add one.").font(Theme.Font.label).foregroundStyle(Theme.Color.text3).padding(.horizontal, Theme.Metric.margin)
+                    Text("No text shortcuts yet. Tap + to add one.").font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.cardInset + 2)
                 }
             }
             .padding(.top, Theme.Space.xs)
@@ -62,10 +64,10 @@ struct ShortcutsView: View {
             Card {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     HStack(spacing: Theme.Space.xs) {
-                        Text(trigger).font(Theme.Font.paper(14)).foregroundStyle(Theme.Color.text1)
-                            .padding(.horizontal, Theme.Space.s).frame(height: Theme.Space.xl)
-                            .background(Theme.Color.button, in: Capsule())
-                        if dimmed { Text("Off").font(Theme.Font.label).foregroundStyle(Theme.Color.text3) }
+                        Text(trigger).font(Theme.Font.mono(13)).foregroundStyle(Theme.Color.text1)
+                            .padding(.horizontal, Theme.Space.s).frame(height: 26)
+                            .background(Theme.Color.button, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        if dimmed { StatusPill(text: "Off") }
                         Spacer(minLength: 0)
                     }
                     Text(title).font(Theme.Font.body).foregroundStyle(Theme.Color.text1).lineLimit(2).multilineTextAlignment(.leading)

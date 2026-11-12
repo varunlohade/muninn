@@ -100,17 +100,20 @@ struct CatalogView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
-                HStack {
-                    Text("Catalog").font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
-                    Spacer()
-                    Button { editing = Editing(item: nil, draft: CatalogDraft()) } label: { IconCircle(systemImage: "plus") }
+                HStack(alignment: .top) {
+                    twoTone("Catalog.", "What you sell, ready to share in any chat.")
+                        .font(Theme.Font.title).tracking(-0.3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: Theme.Space.s)
+                    Button { editing = Editing(item: nil, draft: CatalogDraft()) } label: { IconCircle(systemImage: "plus", size: 40) }
                         .buttonStyle(PressScale())
                         .disabled(store.items.count >= CatalogCache.maxItems)
                         .accessibilityLabel("Add item")
                         .accessibilityIdentifier("catalog.new")
                 }
-                .padding(.leading, Theme.Metric.margin)
+                .padding(.leading, Theme.Metric.cardInset + 2)
                 .padding(.trailing, Theme.Metric.cardInset)
+                .padding(.bottom, Theme.Space.xs)
                 if let e = store.error {
                     Text(e).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Metric.margin)
                 }
@@ -118,7 +121,8 @@ struct CatalogView: View {
                     empty
                 } else {
                     Text("Tap the tag button on the keyboard to share items, prices and photos in any chat.")
-                        .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.margin)
+                        .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.cardInset + 2)
+                        .fixedSize(horizontal: false, vertical: true)
                     if store.items.count >= CatalogCache.maxItems {
                         Text("Your catalog is full (\(CatalogCache.maxItems) items). Delete one to add another.")
                             .font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Metric.margin)
@@ -140,21 +144,20 @@ struct CatalogView: View {
 
     private func row(_ item: CatalogItem) -> some View {
         Button { editing = Editing(item: item, draft: CatalogDraft(item)) } label: {
-            Card(padding: Theme.Space.s) {
-                HStack(spacing: Theme.Space.s) {
-                    CatalogThumb(image: store.photo(item), size: 56)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.name).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1).lineLimit(1)
-                        let sub = [item.category, item.in_stock ? "" : "Sold out"].filter { !$0.isEmpty }.joined(separator: " \u{00B7} ")
-                        if !sub.isEmpty {
-                            Text(sub).font(Theme.Font.label).foregroundStyle(item.in_stock ? Theme.Color.text2 : Theme.Color.due).lineLimit(1)
-                        }
+            HStack(spacing: Theme.Space.s) {
+                CatalogThumb(image: store.photo(item), size: 44, name: item.name)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name).font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1).lineLimit(1)
+                    if !item.category.isEmpty {
+                        Text(item.category).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).lineLimit(1)
                     }
-                    Spacer(minLength: 0)
-                    Text(item.money).font(Theme.Font.body.monospacedDigit()).foregroundStyle(Theme.Color.text1)
                 }
-                .opacity(item.in_stock ? 1 : 0.55)
+                Spacer(minLength: 0)
+                if !item.in_stock { StatusPill(text: "Sold out", tone: .due) }
+                Text(item.money).font(Theme.Font.sans(15, 500).monospacedDigit()).foregroundStyle(item.in_stock ? Theme.Color.text1 : Theme.Color.text3)
             }
+            .padding(.leading, 8).padding(.trailing, 14).padding(.vertical, 8)
+            .rowSurface()
         }
         .buttonStyle(PressScale())
         .padding(.horizontal, Theme.Metric.cardInset)
@@ -168,9 +171,10 @@ struct CatalogView: View {
 
     private var empty: some View {
         VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
-            Text("Add what you sell").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1).padding(.horizontal, Theme.Metric.margin)
+            Text("Add what you sell").font(Theme.Font.section).foregroundStyle(Theme.Color.text1).padding(.horizontal, Theme.Metric.cardInset + 2)
             Text("Start from an example. Tap one to fill in the form, then change it to yours.")
-                .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.margin)
+                .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.cardInset + 2)
+                .fixedSize(horizontal: false, vertical: true)
             Picker("Business", selection: $kind) {
                 ForEach(CatalogExamples.Kind.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -179,19 +183,20 @@ struct CatalogView: View {
             .accessibilityIdentifier("catalog.kind")
             ForEach(CatalogExamples.drafts(kind), id: \.name) { d in
                 Button { editing = Editing(item: nil, draft: d) } label: {
-                    Card(padding: Theme.Space.s) {
-                        HStack(spacing: Theme.Space.s) {
-                            CatalogThumb(image: nil, size: 56)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(d.name).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text2)
-                                Text(d.description).font(Theme.Font.label).foregroundStyle(Theme.Color.text3).lineLimit(1)
-                            }
-                            Spacer(minLength: 0)
-                            Text(formatMoney(d.cleanPrice ?? d.price, "USD")).font(Theme.Font.body.monospacedDigit()).foregroundStyle(Theme.Color.text2)
+                    HStack(spacing: Theme.Space.s) {
+                        CatalogThumb(image: nil, size: 44, name: d.name)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(d.name).font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1)
+                            Text(d.description).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).lineLimit(1)
                         }
+                        Spacer(minLength: 0)
+                        Text(formatMoney(d.cleanPrice ?? d.price, "USD")).font(Theme.Font.sans(15).monospacedDigit()).foregroundStyle(Theme.Color.text2)
+                        Image(systemName: "plus").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.Color.text3)
                     }
-                    .overlay(RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous)
-                        .strokeBorder(Theme.Color.chipEdge, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
+                    .padding(.leading, 8).padding(.trailing, 14).padding(.vertical, 8)
+                    .background(Theme.Color.bg.opacity(0.01))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Metric.rowRadius, style: .continuous)
+                        .strokeBorder(Theme.Color.dash, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
                 }
                 .buttonStyle(PressScale())
                 .padding(.horizontal, Theme.Metric.cardInset)
@@ -205,18 +210,21 @@ struct CatalogView: View {
 struct CatalogThumb: View {
     let image: UIImage?
     let size: CGFloat
+    var name = ""
 
     var body: some View {
         Group {
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
-                Image(systemName: "tag").font(.system(size: size * 0.32)).foregroundStyle(Theme.Color.text3)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.Color.button)
+                let icon = PixelIcon.forItem(name)
+                PixelIcon(name: icon, fill: PixelIcon.fill(for: icon), size: size * 0.55)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.Color.card)
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.2, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: size * 0.2, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
     }
 }
 
@@ -241,10 +249,9 @@ struct CatalogEditor: View {
                         CatalogThumb(image: photo, size: 88)
                         VStack(alignment: .leading, spacing: Theme.Space.xs) {
                             PhotosPicker(selection: $pick, matching: .images) {
-                                Text(photo == nil ? "Add photo" : "Change photo").font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
-                                    .padding(.horizontal, Theme.Space.m).frame(height: 40)
-                                    .background(Theme.Color.button, in: Capsule())
-                                    .overlay(Capsule().strokeBorder(Theme.Color.edge, lineWidth: 1))
+                                Text(photo == nil ? "Add photo" : "Change photo").font(Theme.Font.smallButton).foregroundStyle(Theme.Color.text1)
+                                    .padding(.horizontal, Theme.Space.m).frame(height: 36)
+                                    .cardSurface(radius: 8, fill: Theme.Color.quietButton)
                             }
                             .accessibilityIdentifier("catalog.photo")
                             if photo != nil {
@@ -262,8 +269,7 @@ struct CatalogEditor: View {
                             .lineLimit(2...4)
                             .font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
                             .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
-                            .background(Theme.Color.button, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
+                            .cardSurface(radius: Theme.Metric.buttonRadius, fill: Theme.Color.surface, lifted: false)
                             .accessibilityIdentifier("catalog.description")
                         Text("\(draft.description.count)/\(CatalogDraft.maxDescription)").font(Theme.Font.axis)
                             .foregroundStyle(draft.description.count > CatalogDraft.maxDescription ? Theme.Color.due : Theme.Color.text3)
@@ -273,7 +279,10 @@ struct CatalogEditor: View {
                     Toggle(isOn: $draft.inStock) {
                         Text("In stock").font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
                     }
+                    .tint(Theme.Color.paid)
                     .padding(.horizontal, Theme.Space.m)
+                    .frame(height: Theme.Metric.secondaryButton)
+                    .cardSurface(radius: Theme.Metric.buttonRadius, fill: Theme.Color.surface, lifted: false)
                     .accessibilityIdentifier("catalog.instock")
                     if let e = store.error, !saving {
                         Text(e).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Space.xs)

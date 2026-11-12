@@ -53,12 +53,16 @@ final class AppearanceShots: XCTestCase {
         app.launchArguments = ["-calendarDemo", "-intro_seen", "NO"]
         app.launch()
         try XCTSkipUnless(id(app, "onboarding.add").waitForExistence(timeout: 8), "already in; reset the simulator keychain first")
+        shot("00-onboarding-hero")
         id(app, "onboarding.add").tap()
         if id(app, "onboarding.step.2").waitForExistence(timeout: 4) {
             shot("03-onboarding-keyboard")
             id(app, "onboarding.later").tap()
         }
-        if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
+        if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) {
+            shot("04-onboarding-calendar")
+            id(app, "onboarding.calendar.later").tap()
+        }
         let mark = id(app, "onboarding.mark")
         XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 8), app.debugDescription)
         shot("01-onboarding-get-started")
@@ -73,7 +77,11 @@ final class AppearanceShots: XCTestCase {
         token.typeText("pkd_fake")
         shot("02-onboarding-dev-pairing")
         app.buttons["Pair"].tap()
-        if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
+        if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) {
+            dismissPrompts(app)
+            shot("04b-onboarding-paypal")
+            id(app, "onboarding.paypal.demo").tap()
+        }
         dismissPrompts(app)
 
         XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 15), app.debugDescription)
@@ -114,9 +122,32 @@ final class AppearanceShots: XCTestCase {
         back(app)
         app.swipeDown()
 
+        id(app, "nav.catalog").tap()
+        Thread.sleep(forTimeInterval: 1.5)
+        shot("10b-catalog")
+        back(app)
+
+        let keyboard = id(app, "home.keyboard")
+        app.swipeUp()
+        if keyboard.waitForExistence(timeout: 3) {
+            keyboard.tap()
+            shot("10c-keyboard-setup")
+            back(app)
+        }
+        let disputes = id(app, "home.disputes")
+        if disputes.waitForExistence(timeout: 3) {
+            disputes.tap()
+            Thread.sleep(forTimeInterval: 1.5)
+            shot("10d-disputes")
+            back(app)
+        }
+        app.swipeDown()
+
         id(app, "nav.integrations").tap()
         XCTAssertTrue(id(app, "integration.paypal").waitForExistence(timeout: 10))
         shot("11-integrations")
+        app.swipeUp()
+        shot("11b-integrations-lower")
         let lab = app.buttons["Keyboard Lab (debug)"]
         if !lab.isHittable { app.swipeUp() }
         lab.tap()
