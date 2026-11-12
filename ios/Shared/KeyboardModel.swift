@@ -263,12 +263,13 @@ final class KeyboardModel: ObservableObject {
     }
 
     /// A memory warning: drop what reloads by itself. Typing keeps working; taps use plain key edges
-    /// until keyboardAppeared loads the language model again.
+    /// until keyboardAppeared loads the language model again. An open drawing stays until Send or close;
+    /// only its ready-made PNG and preview go, and Send exports again.
     func releaseCaches() {
         Self.language = nil
         Self.loadingLanguage = false
         ExplainDictionary.shared.purge()
-        closeExplain()
+        sharePrepared = nil
     }
 
     /// The key a touch means: the key under it or, for a letter tapped near its edge, the likeliest letter there.

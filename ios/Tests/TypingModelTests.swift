@@ -147,7 +147,7 @@ final class TypingModelTests: XCTestCase {
         model.releaseCaches()
 
         XCTAssertNil(KeyboardModel.language)
-        XCTAssertNil(model.explainPanel)
+        XCTAssertNotNil(model.explainPanel, "what the owner sees stays open")
         XCTAssertNotNil(ExplainDictionary.shared.lookup("btw"), "the dictionary reads its file again")
         host.text = ""
         host.autocapitalization = .none

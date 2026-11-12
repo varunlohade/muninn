@@ -541,6 +541,17 @@ final class ExplainModelTests: XCTestCase {
         XCTAssertNotEqual(api.shared[0].preview, first)
     }
 
+    /// The PNG made when the drawing finishes can bring a memory warning. The drawing stays until Send or close.
+    func testAMemoryWarningAfterTheDrawingKeepsThePanelOpen() {
+        drawnGraph()
+        XCTAssertNotNil(model.sharePrepared)
+        model.releaseCaches()
+        guard case .visual(let v)? = model.explainPanel else { return XCTFail("panel closed on a memory warning") }
+        XCTAssertEqual(v.status, .done(steps: 1))
+        XCTAssertNil(model.sharePrepared, "the ready-made PNG and preview are dropped; Send exports again")
+        XCTAssertEqual(model.keyboardHeight, Theme.SystemKeyboard.visualHeight)
+    }
+
     func testWithoutFullAccessNothingIsMadeOrSent() {
         host.hasFullAccess = false
         model.keyboardAppeared()

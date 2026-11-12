@@ -180,6 +180,21 @@ final class ExplainShots: XCTestCase {
         element(messages, "explain.close").tap()
     }
 
+    /// The owner's demo phrase: the projection draws, then stays open 10 s with nothing tapped.
+    func test5ProjectionStaysOpen() {
+        let field = openField()
+        let chip = element(messages, "chip.explain")
+        enter("Show me projection of next 6 Months", in: field)
+        XCTAssertTrue(chip.waitForExistence(timeout: 4), "no projection chip")
+        chip.tap()
+        waitDrawn("projection")
+        if let dir = env["SHOT_DIR"] { try? "\(Date().timeIntervalSince1970)\n".write(toFile: dir + "/drawn.txt", atomically: true, encoding: .utf8) }
+        Thread.sleep(forTimeInterval: 10)
+        XCTAssertTrue(element(messages, "visual.canvas").exists, "the panel closed after the drawing")
+        XCTAssertTrue(element(messages, "visual.send").exists)
+        shot("projection-open-10s")
+    }
+
     /// Opens and closes the projection chart 20 times, typing between opens. Each open must draw (no blank panel, no error line).
     /// Writes "open epoch" lines to SHOT_DIR/stress.txt so a memory log can be read at opens 1, 10 and 20.
     func test4Stress() {
