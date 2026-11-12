@@ -1,5 +1,17 @@
 # Build notes
 
+## 0.1 (6) — 2026-11-12
+
+What to test:
+- Sign in. Continue with Apple, or sign up with an email and a password.
+- Log out. On Home, open Integrations. Under Account, tap Log out. The app wipes everything on the phone and goes back to the start.
+- Delete account. Under Account, tap Delete account. Confirm it. Your account and data are gone.
+- Your business. The app asks "What does your business do?". Answer in a few words.
+- Prices. Ask a price question for any kind of business, like "what should I charge for a logo?".
+- Projection. Ask "make me a projection for next 3 months". A chart shows, with a shaded range band.
+- Charts are quiet. Charts have no speaker button.
+- New icon. The app icon is now a raven.
+
 ## 0.1 (5) — 2026-11-12
 
 What to test:
