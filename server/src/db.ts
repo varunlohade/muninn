@@ -14,7 +14,13 @@ CREATE TABLE IF NOT EXISTS profiles (
   user_id TEXT PRIMARY KEY REFERENCES users(id), business_name TEXT NOT NULL, tone TEXT NOT NULL, currency TEXT NOT NULL, review_url TEXT);
 CREATE TABLE IF NOT EXISTS catalog_items (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
-  price_cents INTEGER NOT NULL, currency TEXT NOT NULL, created_at INTEGER NOT NULL);
+  price_cents INTEGER NOT NULL, currency TEXT NOT NULL, created_at INTEGER NOT NULL,
+  description TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '', in_stock INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0, photo_id TEXT);
+-- One photo per catalog item, encrypted with the owner's key. id is random, so a new photo gets a new id.
+CREATE TABLE IF NOT EXISTS catalog_photos (
+  item_id TEXT PRIMARY KEY REFERENCES catalog_items(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id),
+  id TEXT NOT NULL, mime TEXT NOT NULL, data_enc TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), status TEXT NOT NULL,
   amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, item TEXT NOT NULL,
@@ -62,6 +68,9 @@ CREATE INDEX IF NOT EXISTS catalog_user ON catalog_items(user_id);
 // review_url: left out keeps the stored link, null clears it.
 export type Profile = { business_name: string; tone: string; currency: string; review_url?: string | null };
 export type CatalogItem = { id: string; name: string; price_cents: number; currency: string };
+export type CatalogDetails = { description: string; category: string; in_stock: boolean };
+export type CatalogRow = CatalogItem & CatalogDetails & { sort_order: number; photo_id: string | null };
+export type CatalogPhoto = { id: string; mime: string; data_enc: string };
 export type InvoiceRow = {
   id: string; user_id: string; status: string; amount_cents: number; currency: string; item: string;
   client_name_enc: string | null; client_email_enc: string | null; pay_link: string | null;
@@ -118,6 +127,11 @@ export function openDb(path: string) {
   const connCols = db.prepare('PRAGMA table_info(paypal_connections)').all() as { name: string }[];
   for (const [col, type] of [['verified_enc', 'TEXT'], ['code_hash', 'TEXT'], ['code_expires_at', 'INTEGER']]) {
     if (connCols.length && !connCols.some((c) => c.name === col)) db.exec(`ALTER TABLE paypal_connections ADD COLUMN ${col} ${type}`);
+  }
+  const itemCols = db.prepare('PRAGMA table_info(catalog_items)').all() as { name: string }[];
+  for (const [col, type] of [['description', "TEXT NOT NULL DEFAULT ''"], ['category', "TEXT NOT NULL DEFAULT ''"],
+    ['in_stock', 'INTEGER NOT NULL DEFAULT 1'], ['sort_order', 'INTEGER NOT NULL DEFAULT 0'], ['photo_id', 'TEXT']]) {
+    if (itemCols.length && !itemCols.some((c) => c.name === col)) db.exec(`ALTER TABLE catalog_items ADD COLUMN ${col} ${type}`);
   }
   db.exec(SCHEMA);
   const now = () => Date.now();
@@ -184,21 +198,60 @@ export function openDb(path: string) {
     allProfiles(): (Profile & { user_id: string })[] {
       return q('SELECT user_id, business_name, tone, currency FROM profiles').all() as (Profile & { user_id: string })[];
     },
-    listItems(userId: string): CatalogItem[] {
-      return q('SELECT id, name, price_cents, currency FROM catalog_items WHERE user_id = ? ORDER BY created_at').all(userId) as CatalogItem[];
+    listItems(userId: string): CatalogRow[] {
+      const rows = q(`SELECT id, name, price_cents, currency, description, category, in_stock, sort_order, photo_id FROM catalog_items
+        WHERE user_id = ? ORDER BY sort_order, created_at`).all(userId) as (Omit<CatalogRow, 'in_stock'> & { in_stock: number })[];
+      return rows.map((r) => ({ ...r, in_stock: r.in_stock === 1 }));
     },
-    addItem(userId: string, it: Omit<CatalogItem, 'id'>): CatalogItem {
+    addItem(userId: string, it: Omit<CatalogItem, 'id'> & Partial<CatalogDetails>): CatalogRow {
       const id = randomUUID();
-      q('INSERT INTO catalog_items (id, user_id, name, price_cents, currency, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(id, userId, it.name, it.price_cents, it.currency, now());
-      return { id, ...it };
+      const d = { description: it.description ?? '', category: it.category ?? '', in_stock: it.in_stock ?? true };
+      const { next } = q('SELECT COALESCE(MAX(sort_order) + 1, 0) AS next FROM catalog_items WHERE user_id = ?').get(userId) as { next: number };
+      q(`INSERT INTO catalog_items (id, user_id, name, price_cents, currency, created_at, description, category, in_stock, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, userId, it.name, it.price_cents, it.currency, now(), d.description, d.category, d.in_stock ? 1 : 0, next);
+      return { id, name: it.name, price_cents: it.price_cents, currency: it.currency, ...d, sort_order: next, photo_id: null };
     },
-    updateItem(userId: string, id: string, it: Omit<CatalogItem, 'id'>): boolean {
-      return q('UPDATE catalog_items SET name = ?, price_cents = ?, currency = ? WHERE id = ? AND user_id = ?')
-        .run(it.name, it.price_cents, it.currency, id, userId).changes > 0;
+    // Details left out keep their stored values.
+    updateItem(userId: string, id: string, it: Omit<CatalogItem, 'id'> & Partial<CatalogDetails>): boolean {
+      return q(`UPDATE catalog_items SET name = ?, price_cents = ?, currency = ?, description = COALESCE(?, description),
+          category = COALESCE(?, category), in_stock = COALESCE(?, in_stock) WHERE id = ? AND user_id = ?`)
+        .run(it.name, it.price_cents, it.currency, it.description ?? null, it.category ?? null,
+          it.in_stock === undefined ? null : it.in_stock ? 1 : 0, id, userId).changes > 0;
     },
     deleteItem(userId: string, id: string): boolean {
       return q('DELETE FROM catalog_items WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
+    },
+    /** Sets the order to `ids`, which must be exactly the owner's item ids. */
+    reorderItems(userId: string, ids: string[]): 'ok' | 'not_found' | 'incomplete' {
+      const own = new Set((q('SELECT id FROM catalog_items WHERE user_id = ?').all(userId) as { id: string }[]).map((r) => r.id));
+      if (ids.some((id) => !own.has(id))) return 'not_found';
+      if (new Set(ids).size !== ids.length || ids.length !== own.size) return 'incomplete';
+      const set = q('UPDATE catalog_items SET sort_order = ? WHERE id = ? AND user_id = ?');
+      db.exec('BEGIN');
+      try {
+        ids.forEach((id, i) => set.run(i, id, userId));
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+      return 'ok';
+    },
+    putItemPhoto(userId: string, itemId: string, p: CatalogPhoto): boolean {
+      if (!q('SELECT 1 FROM catalog_items WHERE id = ? AND user_id = ?').get(itemId, userId)) return false;
+      q(`INSERT INTO catalog_photos (item_id, user_id, id, mime, data_enc, created_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(item_id) DO UPDATE SET id = excluded.id, mime = excluded.mime, data_enc = excluded.data_enc, created_at = excluded.created_at`)
+        .run(itemId, userId, p.id, p.mime, p.data_enc, now());
+      q('UPDATE catalog_items SET photo_id = ? WHERE id = ? AND user_id = ?').run(p.id, itemId, userId);
+      return true;
+    },
+    getItemPhoto(userId: string, itemId: string): CatalogPhoto | undefined {
+      return q('SELECT id, mime, data_enc FROM catalog_photos WHERE item_id = ? AND user_id = ?').get(itemId, userId) as CatalogPhoto | undefined;
+    },
+    deleteItemPhoto(userId: string, itemId: string): boolean {
+      q('UPDATE catalog_items SET photo_id = NULL WHERE id = ? AND user_id = ?').run(itemId, userId);
+      return q('DELETE FROM catalog_photos WHERE item_id = ? AND user_id = ?').run(itemId, userId).changes > 0;
     },
 
     insertInvoice(r: Omit<InvoiceRow, 'paid_at' | 'capture_id' | 'source' | 'seed_key' | 'pp_account'> & Partial<Pick<InvoiceRow, 'source' | 'seed_key' | 'pp_account'>>) {
