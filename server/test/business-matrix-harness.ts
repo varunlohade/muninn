@@ -47,7 +47,7 @@ export async function openMatrix(ai: Ai) {
     tokens.set(b.id, token);
     await call(token, 'PUT', '/v1/profile', { business_name: b.id, tone: 'friendly', currency: b.currency });
     await call(token, 'PUT', '/v1/profile/business', { description: b.description });
-    for (const it of b.items) db.addItem(userId, { name: it.name, price_cents: Math.round(it.price * 100), currency: b.currency });
+    for (const it of b.items) await call(token, 'POST', '/v1/catalog', { name: it.name, price: it.price, currency: b.currency });
     const first = b.items[0];
     const price = Math.max(first.price, 20);
     await call(token, 'POST', '/v1/actions/invoice', { amount: price, currency: b.currency, item: first.name, client_name: b.unpaid });

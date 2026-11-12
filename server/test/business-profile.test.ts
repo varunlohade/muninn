@@ -27,7 +27,7 @@ async function owner(description: string, items: { name: string; price: number }
   const a = s.device();
   const r = await s.call(a.token, 'PUT', '/v1/profile/business', { description });
   assert.equal(r.status, 200);
-  for (const it of items) s.db.addItem(a.userId, { name: it.name, price_cents: it.price * 100, currency: 'USD' });
+  for (const it of items) assert.equal((await s.call(a.token, 'POST', '/v1/catalog', it)).status, 200);
   const ask = async (text: string) => (await (await s.call(a.token, 'POST', '/v1/suggest', { text })).json() as any).chips;
   return { s, a, ask };
 }
@@ -71,7 +71,7 @@ test('business: the quantity counts only when its number is in the typed words',
   const s = setup({ cls: { intent: 'catalog_reply' }, ext: () => ({ client_name: null, client_email: null, amount: null, currency: null, item: 'App screen', quantity: 5 }) });
   const a = s.device();
   await s.call(a.token, 'PUT', '/v1/profile/business', { description: APP_DEV });
-  s.db.addItem(a.userId, { name: 'App screen', price_cents: 40000, currency: 'USD' });
+  await s.call(a.token, 'POST', '/v1/catalog', { name: 'App screen', price: 400 });
   const ask = async (text: string) => (await (await s.call(a.token, 'POST', '/v1/suggest', { text })).json() as any).chips[0];
   // The model said 5, but the words never did: one screen.
   assert.equal((await ask('what do you charge for screens?')).payload.text, 'App screen is $400.');
