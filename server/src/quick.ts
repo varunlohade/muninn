@@ -506,9 +506,13 @@ const PAY_EMAIL = String.raw`(?:\s+\S+@\S+)?`;
 // "... for tiles": the reason becomes the payout note. An email may sit before or after it.
 const PAY_TAIL = String.raw`${PAY_EMAIL}(?:\s+for\s+(?<reason>[^@]+?))?${PAY_EMAIL}[.!]?$`;
 // The whole sentence is the payout and nothing else, so a time, a date or an address word never reads as one.
+// "cool, sending palak $40", "ok I'll send ritika 20", "let me pay joe $50": a short lead-in before the verb.
+// Past tense ("sent", "paid") stays out: that is news about money already gone, not a payout to make.
+const PAY_LEAD = String.raw`(?:(?:cool|ok(?:ay)?|sure|great|alright|yes|yeah|yep|done|perfect|got it|no problem)[,!.]?\s+)?(?:please\s+)?(?:i'?ll\s+|i\s+will\s+|let\s+me\s+|i'?m\s+|i\s+am\s+)?`;
+const PAY_VERB = String.raw`(?:pay(?:ing)?|send(?:ing)?)`;
 const PAYOUT_SHAPES = [
-  new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_ROLE}${PAY_NAME}\s+${PAY_MONEY}${PAY_TAIL}`, 'iu'),
-  new RegExp(String.raw`^(?:please\s+)?(?:pay|send)\s+${PAY_MONEY}\s+to\s+${PAY_ROLE}${PAY_NAME}${PAY_TAIL}`, 'iu'),
+  new RegExp(String.raw`^${PAY_LEAD}${PAY_VERB}\s+${PAY_ROLE}${PAY_NAME}\s+${PAY_MONEY}${PAY_TAIL}`, 'iu'),
+  new RegExp(String.raw`^${PAY_LEAD}${PAY_VERB}\s+${PAY_MONEY}\s+to\s+${PAY_ROLE}${PAY_NAME}${PAY_TAIL}`, 'iu'),
 ];
 // A request for the client to pay, not a payment to someone.
 const NOT_PAYOUT = /\b(?:invoice|bill|link|reminder|receipt|quote|request)\b/i;
