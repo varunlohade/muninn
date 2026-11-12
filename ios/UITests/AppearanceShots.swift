@@ -69,14 +69,18 @@ final class AppearanceShots: XCTestCase {
 
         mark.press(forDuration: 1.3)
         let token = app.secureTextFields["token"]
-        XCTAssertTrue(token.waitForExistence(timeout: 5))
-        let server = app.textFields.firstMatch
-        server.tap()
-        server.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 60) + fake)
-        token.tap()
-        token.typeText("pkd_fake")
-        shot("02-onboarding-dev-pairing")
-        app.buttons["Pair"].tap()
+        if token.waitForExistence(timeout: 5) {
+            let server = app.textFields.firstMatch
+            server.tap()
+            server.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 60) + fake)
+            token.tap()
+            token.typeText("pkd_fake")
+            shot("02-onboarding-dev-pairing")
+            app.buttons["Pair"].tap()
+        } else {
+            // A Release build has no developer pairing: Get started makes the account on its default server.
+            id(app, "onboarding.start").tap()
+        }
         if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) {
             dismissPrompts(app)
             shot("04b-onboarding-paypal")

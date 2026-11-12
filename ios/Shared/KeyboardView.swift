@@ -173,10 +173,12 @@ struct SuggestionBar: View {
                 // No scroll view: the bar holds at most three, the first stays whole and later cards shorten their words.
                 // (Inside a keyboard, XCUITest and VoiceOver misplace cards in a horizontal scroll view.)
                 HStack(spacing: Theme.Space.xs) {
-                    PixelRaven(scale: 1.7).padding(.trailing, 2)
+                    // Three cards need the room; the raven sits out.
+                    if items.count < 3 { PixelRaven(scale: 1.7).padding(.trailing, 2) }
                     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                         TaskChip(item: item, palette: palette, action: item.action.map { a in { model.perform(a) } })
-                            .layoutPriority(Double(items.count - i))
+                            // Actions keep their room before plain lines such as "Waiting on $45".
+                            .layoutPriority(Double(items.count - i) + (item.action == nil ? 0 : 10))
                             .accessibilityIdentifier("chip.\(item.id)")
                             .transition(.opacity)
                     }

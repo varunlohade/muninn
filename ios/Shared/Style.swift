@@ -148,6 +148,7 @@ struct TaskCardLabel: View {
                 Text(title).font(Theme.Font.sans(14, 500)).foregroundStyle(titleColor).lineLimit(1)
                 if let detail { Text(detail).font(Theme.Font.sans(11.5)).foregroundStyle(Theme.Color.text2).lineLimit(1) }
             }
+            .frame(minWidth: 52, alignment: .leading)
         }
         .padding(.leading, 6).padding(.trailing, 14)
         .frame(height: height)

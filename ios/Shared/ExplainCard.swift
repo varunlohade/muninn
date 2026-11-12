@@ -10,18 +10,22 @@ struct ExplainCardView: View {
 
     var body: some View {
         VStack(spacing: M.keyGap) {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                twoTone("\u{201C}\(offer.subject)\u{201D}", offer.line, ink: Theme.Color.text2, ink2: Theme.Color.text1)
-                    .font(Theme.Font.sans(17, 500))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("explain.line")
-                ForEach(Array(details.enumerated()), id: \.offset) { _, line in
-                    Text(line).font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text2)
+            // A long answer scrolls inside the card, so Back and Insert always stay on screen.
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    twoTone("\u{201C}\(offer.subject)\u{201D}", offer.line, ink: Theme.Color.text2, ink2: Theme.Color.text1)
+                        .font(Theme.Font.sans(17, 500))
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("explain.line")
+                    ForEach(Array(details.enumerated()), id: \.offset) { _, line in
+                        Text(line).font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                Spacer(minLength: 0)
+                .padding(.horizontal, 14).padding(.vertical, Theme.Space.s)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(.horizontal, 14).padding(.vertical, Theme.Space.s)
+            .scrollIndicators(.hidden)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .cardSurface()
             .accessibilityElement(children: .contain)
