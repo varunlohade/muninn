@@ -1,5 +1,13 @@
 # Build notes
 
+## 0.1 (9) — 2026-11-12
+
+What to test:
+- Charts stay open. Type "make me a projection for next 3 months" and tap Draw it. The chart stays in the keyboard until you tap Send or close it.
+- Send money in plain words. Type "cool, sending Palak $40". The bar offers "Send $40 · Palak".
+- Connect PayPal opens PayPal's sandbox sign-in. Log in with a sandbox business account.
+- Log out wipes the phone fully before the start screen shows.
+
 ## 0.1 (8) — 2026-11-12
 
 What to test:
