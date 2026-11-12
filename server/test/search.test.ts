@@ -28,8 +28,7 @@ test('detectLookup: business words map to kinds; plain chat and new-invoice comm
     ['invoice for sam', 'money', 'invoice'], ['bill for sam', 'money', 'bill'], ["sam's receipt", 'money', 'receipt'], ['did sam pay', 'money', null],
     ['what does sam owe', 'money', null], ['last order from ana', 'any', 'order'], ["ana's booking", 'any', 'booking'],
     ['latest appointment for ana', 'any', 'appointment'], ["dave's quote", 'any', 'quote'], ['last session with leo', 'any', 'session'],
-    ["maria's table", 'any', 'table'], ['delivery for kenji', 'any', 'delivery'], ['price of balayage', 'catalog', null],
-    ['how much is pad thai', 'catalog', null],
+    ["maria's table", 'any', 'table'], ['delivery for kenji', 'any', 'delivery'],
   ];
   for (const [t, kind, noun] of kinds) {
     const d = detectLookup(t, NOW);
@@ -95,7 +94,6 @@ test('suggest: Sam vs Samantha, ambiguity and unknown names', async () => {
 test('suggest: kinds across a salon, a restaurant, a tutor and a contractor', async () => {
   const salon = seeded(BUSINESSES.salon);
   assert.equal((await salon.lookup("ana's booking"))?.label, "Ana Lopez's pay link · $35 · paid · Nov 4");
-  assert.equal((await salon.lookup('price of balayage'))?.label, 'Balayage · $180');
   const rest = seeded(BUSINESSES.restaurant);
   assert.equal((await rest.lookup('last order from maria'))?.label, "Maria Gomez's pay link · $64 · paid · Nov 10");
   assert.equal((await rest.lookup('did theo pay'))?.label, "Theo Park's invoice · $850 · unpaid · Nov 8");

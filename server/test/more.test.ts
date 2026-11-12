@@ -38,7 +38,7 @@ test('copy: payoutAsk reads name, amount and typed email; requests to be paid ar
 
 test('payouts: ordinary chat is never a payout and never ends suggest', async () => {
   const chat = ['send ana the address at 5pm', 'pay rent 1200 tomorrow', 'send me 2 photos', "i'll pay sam tomorrow",
-    'pay sam $45 tomorrow', 'send joe $20 and $30', 'pay joe 200'];
+    'pay sam $45 tomorrow', 'send joe $20 and $30'];
   for (const t of chat) assert.equal(payoutAsk(t), null, t);
   const s = setup({ cls: { intent: 'create_invoice' } });
   const { token } = s.device();

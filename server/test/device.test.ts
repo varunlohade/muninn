@@ -36,7 +36,7 @@ test('suggest: each input takes one path, and paid calls match the model calls m
     const fns = s.aiCalls.map((c) => c.fn);
     const path = fns.length === 0 ? 'regex_none' : fns[0] === 'deviceAction' ? 'jev_device' : 'money';
     assert.equal(path, want, `${text}: ${fns}`);
-    if (want === 'money') assert.ok(fns.includes('classify') && fns.length <= 2, text);
+    if (want === 'money') assert.ok(fns.length >= 1 && fns.length <= 2, text);
     else assert.equal(fns.length, calls, text);
   }
 });

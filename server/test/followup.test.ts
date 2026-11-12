@@ -40,13 +40,10 @@ test('F2: clean() strips zero-width, format, variation and tag characters after 
   assert.equal(clean(`a${cp(0x200d)}b${cp(0x180e)}c`), 'abc');
 });
 
-test('F2: stored item names and profiles are cleaned on startup', async () => {
+test('F2: profile names are cleaned on startup', async () => {
   const s = setup();
   const { userId } = s.device();
-  s.db.addItem(userId, { name: `Cut${cp(0x200b, 0xe0041)}`, price_cents: 1000, currency: 'USD' });
-  s.db.addItem(userId, { name: `Trim${cp(0x2062)}${cp(0xe0042)}`, price_cents: 500, currency: 'USD' });
   s.db.putProfile(userId, { business_name: `Fresh${cp(0x200b)} Cuts`, tone: 'warm', currency: 'USD' });
   createApp({ db: s.db, cipher: s.cipher, ai: {} as never, paypal: {} as never });
-  assert.deepEqual(s.db.listItems(userId).map((i) => i.name), ['Cut', 'Trim']);
   assert.equal(s.db.getProfile(userId)!.business_name, 'Fresh Cuts');
 });

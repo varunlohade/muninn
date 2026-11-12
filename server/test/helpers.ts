@@ -135,7 +135,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       return { kind: 'none', confidence: 0.92, ...opts.device };
     },
     async askRoute(text, group) { aiCalls.push({ fn: 'askRoute', args: [text, group] }); return { route: 'invoice', confidence: 0.92, ...opts.route }; },
-    async reply(...args) { aiCalls.push({ fn: 'reply', args }); return 'Haircut is $45. Want a slot tomorrow?'; },
+    async reply(...args) { aiCalls.push({ fn: 'reply', args }); return 'Happy to help. Want a slot tomorrow?'; },
     async brief(facts) {
       aiCalls.push({ fn: 'brief', args: [facts] });
       if (opts.brief instanceof Error) throw opts.brief;
