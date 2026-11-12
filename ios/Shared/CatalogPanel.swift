@@ -232,7 +232,7 @@ struct CatalogPanel: View {
         let photo = c.selection.photoItem(in: c.items) != nil
         return HStack(spacing: M.keyGap) {
             Button(action: model.toggleCatalogDescriptions) {
-                Image(systemName: c.descriptions ? "text.alignleft" : "minus").font(M.icon)
+                Image(systemName: "text.alignleft").font(M.icon)
                     .foregroundStyle(c.descriptions ? Color.white : palette.label)
                     .frame(width: 44, height: 40)
                     .background(c.descriptions ? palette.accent : palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
