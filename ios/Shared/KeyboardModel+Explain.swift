@@ -68,10 +68,10 @@ struct VisualState: Equatable {
     var note: String?
     /// A quieter second line under the note, such as "Image also copied".
     var hint: String?
-    /// Which send asked the page for its PNG. `prepare` is the export when the drawing finishes; it stays on the phone.
+    /// Which send asked the page for its PNG. Nothing is exported before Send.
     var sending: Send?
 
-    enum Send: Equatable { case image, link, prepare }
+    enum Send: Equatable { case image, link }
 }
 
 enum ExplainPanel: Equatable {
@@ -248,7 +248,6 @@ extension KeyboardModel {
     private func openVisual(subject: String, summary: String, scene: Data?, ask topic: String, chart: Bool = false) {
         explainPanel = .visual(VisualState(subject: subject, summary: summary, scene: scene, chart: chart))
         visualTask?.cancel()
-        sharePrepared = nil
         shareAttempt = nil
         if let scene { visualPage?.play(scene); return }
         visualTask = Task { [weak self] in
@@ -346,7 +345,6 @@ extension KeyboardModel {
         updateVisual { if case .drawing(_, let m) = $0.status { $0.status = .done(steps: m) } else { $0.status = .done(steps: 1) } }
         // The last line may still be speaking; it ends on its own, and the button goes back to "Play with voice".
         if narration != nil { narration = nil; visualPage?.setVoice(false); updateVisual { $0.voice = false } }
-        prepareShare()
     }
 
     /// "Play with voice": only this tap ever starts sound. It replays the drawing with each step's line spoken in time;
@@ -374,7 +372,7 @@ extension KeyboardModel {
     func visualFailed(_ message: String) {
         updateVisual { v in
             if case .loading = v.status { v.status = .failed("Could not draw that. Try again.") }
-            else if v.sending != .prepare { v.note = "That did not work. Try again."; v.hint = nil }
+            else { v.note = "That did not work. Try again."; v.hint = nil }
             v.sending = nil
         }
     }
@@ -429,30 +427,17 @@ extension KeyboardModel {
         visualPage?.exportPNG()
     }
 
-    /// When the drawing finishes, its PNG and JPEG preview are made on the phone, so Send only uploads.
-    private func prepareShare() {
-        guard hasFullAccess, case .visual(let v) = explainPanel, v.sending == nil else { return }
-        updateVisual { $0.sending = .prepare }
-        visualPage?.exportPNG()
-    }
-
     /// The page's PNG for the export that asked for it. Every send also keeps the drawing in "your drawings".
     func visualExported(_ png: Data) {
         guard case .visual(let v) = explainPanel, let kind = v.sending else { return }
-        if kind == .prepare {
-            updateVisual { $0.sending = nil }
-            if sharePrepared?.png != png { sharePrepared = (png, LinkPreview.jpeg(png)) }
-            return
-        }
         try? deps.store.saveDrawing(png, title: v.subject, scene: v.scene)
         deps.pasteboard.setPNG(png)
         if kind == .image {
             updateVisual { $0.sending = nil; $0.note = Self.pasteHint; $0.hint = nil }
             return
         }
-        // Send exports again, so a drawing changed with the pen after it finished gets a new preview.
-        if sharePrepared?.png != png { sharePrepared = (png, LinkPreview.jpeg(png)) }
-        let preview = sharePrepared?.preview
+        // Made only on Send, and not kept after it: the keyboard has little memory.
+        let preview = LinkPreview.jpeg(png)
         let attempt = UUID()
         shareAttempt = attempt
         updateVisual { $0.note = Self.sendingNote }

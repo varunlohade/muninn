@@ -174,8 +174,6 @@ final class KeyboardModel: ObservableObject {
     weak var visualPage: VisualPage?
     /// Keeps the voice and the drawing in step while "Play with voice" is on.
     var narration: NarrationSync?
-    /// The drawing's PNG and JPEG link preview, made when it finished drawing, so Send only has to upload them.
-    var sharePrepared: (png: Data, preview: Data?)?
     /// The Send waiting for its upload. A late answer for an older Send is dropped.
     var shareAttempt: UUID?
 
@@ -263,13 +261,11 @@ final class KeyboardModel: ObservableObject {
     }
 
     /// A memory warning: drop what reloads by itself. Typing keeps working; taps use plain key edges
-    /// until keyboardAppeared loads the language model again. An open drawing stays until Send or close;
-    /// only its ready-made PNG and preview go, and Send exports again.
+    /// until keyboardAppeared loads the language model again. An open drawing stays until Send or close.
     func releaseCaches() {
         Self.language = nil
         Self.loadingLanguage = false
         ExplainDictionary.shared.purge()
-        sharePrepared = nil
     }
 
     /// The key a touch means: the key under it or, for a letter tapped near its edge, the likeliest letter there.

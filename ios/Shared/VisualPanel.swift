@@ -292,6 +292,8 @@ struct VisualWebView: UIViewRepresentable {
                 model.visualStepDrawn(body["n"] as? Int ?? 0)
             case "done":
                 model.visualDone()
+                // Drop what WebKit holds in memory for the page; the drawing on screen stays.
+                web?.configuration.websiteDataStore.removeData(ofTypes: [WKWebsiteDataTypeMemoryCache], modifiedSince: .distantPast) {}
             case "png":
                 guard let b64 = body["data"] as? String, let png = Data(base64Encoded: b64) else { return model.visualFailed("bad image") }
                 log.notice("MUNINN_VISUAL png_bytes=\(png.count, privacy: .public)")

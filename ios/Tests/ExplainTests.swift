@@ -363,13 +363,10 @@ final class ExplainModelTests: XCTestCase {
         XCTAssertEqual(page.tools, [.draw, .eraser, .hand])
         XCTAssertEqual(page.undos, 1)
 
-        // The drawing finishes: its PNG and JPEG preview are made on the phone. Nothing goes up yet.
+        // The drawing finishes: nothing is exported or goes up before Send.
         model.visualDone()
-        XCTAssertEqual(page.exports, 1)
+        XCTAssertEqual(page.exports, 0, "no PNG is made before Send")
         let png = Self.png
-        model.visualExported(png)
-        XCTAssertEqual(model.sharePrepared?.png, png)
-        XCTAssertEqual(model.sharePrepared?.preview?.prefix(3), Data([0xFF, 0xD8, 0xFF]), "a JPEG preview")
         for _ in 0..<50 { await Task.yield() }
         XCTAssertEqual(api.shared.count, 0, "nothing leaves the phone before Send")
         XCTAssertEqual(store.drawings.count, 0)
@@ -379,7 +376,7 @@ final class ExplainModelTests: XCTestCase {
 
         // One tap: it uploads, then the caption and link replace the typed request. The image is copied at once.
         model.sendVisual(.link)
-        XCTAssertEqual(page.exports, 2)
+        XCTAssertEqual(page.exports, 1)
         model.visualExported(png)
         XCTAssertEqual(note, KeyboardModel.sendingNote)
         XCTAssertEqual(pasteboard.png, png)
@@ -387,7 +384,7 @@ final class ExplainModelTests: XCTestCase {
         XCTAssertEqual(host.text, "log function, explained: " + api.shareReply)
         XCTAssertEqual(api.shared.count, 1)
         XCTAssertEqual(api.shared[0].png, png)
-        XCTAssertEqual(api.shared[0].preview, model.sharePrepared?.preview, "the preview made ahead is the one sent")
+        XCTAssertEqual(api.shared[0].preview?.prefix(3), Data([0xFF, 0xD8, 0xFF]), "a JPEG preview")
         XCTAssertEqual(api.shared[0].title, "log function")
         XCTAssertEqual(store.drawings.map(\.title), ["log function"])
         guard case .visual(let sent)? = model.explainPanel else { return XCTFail("panel closed") }
@@ -401,7 +398,7 @@ final class ExplainModelTests: XCTestCase {
         XCTAssertTrue(menu.exporting)
         XCTAssertNil(menu.hint)
         model.sendVisual(.image)
-        XCTAssertEqual(page.exports, 3)
+        XCTAssertEqual(page.exports, 2)
         model.visualExported(png)
         guard case .visual(let copied)? = model.explainPanel else { return XCTFail("panel closed") }
         XCTAssertEqual(copied.note, KeyboardModel.pasteHint)
@@ -472,7 +469,7 @@ final class ExplainModelTests: XCTestCase {
         api.holdShares = true
         let page = drawnGraph()
         send()
-        XCTAssertEqual(page.exports, 2)
+        XCTAssertEqual(page.exports, 1)
         await until("upload") { api.shared.count == 1 }
         XCTAssertEqual(note, KeyboardModel.sendingNote)
         XCTAssertEqual(host.text, "graph y = x^2")
@@ -532,7 +529,7 @@ final class ExplainModelTests: XCTestCase {
 
     func testADrawingChangedWithThePenGetsANewPreview() async {
         drawnGraph()
-        let first = model.sharePrepared?.preview
+        let first = LinkPreview.jpeg(Self.png)
         let edited = Self.makePNG(width: 410, height: 250)
         send(edited)
         await until("link") { host.text.hasSuffix(api.shareReply) }
@@ -544,11 +541,9 @@ final class ExplainModelTests: XCTestCase {
     /// The PNG made when the drawing finishes can bring a memory warning. The drawing stays until Send or close.
     func testAMemoryWarningAfterTheDrawingKeepsThePanelOpen() {
         drawnGraph()
-        XCTAssertNotNil(model.sharePrepared)
         model.releaseCaches()
         guard case .visual(let v)? = model.explainPanel else { return XCTFail("panel closed on a memory warning") }
         XCTAssertEqual(v.status, .done(steps: 1))
-        XCTAssertNil(model.sharePrepared, "the ready-made PNG and preview are dropped; Send exports again")
         XCTAssertEqual(model.keyboardHeight, Theme.SystemKeyboard.visualHeight)
     }
 

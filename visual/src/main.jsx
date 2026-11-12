@@ -225,8 +225,8 @@ async function exportPng() {
     if (!elements.length) throw new Error('nothing to export')
     const blob = await exportToBlob({
       elements, files: api.getFiles(), mimeType: 'image/png', exportPadding: 24,
-      // 2x, so the image stays sharp when it is pasted into a chat.
-      getDimensions: (width, height) => ({ width: width * 2, height: height * 2, scale: 2 }),
+      // 1x: a 2x image is four times the memory, and the keyboard has little.
+      getDimensions: (width, height) => ({ width, height, scale: 1 }),
       appState: { ...api.getAppState(), exportBackground: true, viewBackgroundColor: '#ffffff', exportWithDarkMode: false },
     })
     const data = await new Promise((resolve, reject) => {
