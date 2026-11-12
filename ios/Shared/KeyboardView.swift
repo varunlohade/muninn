@@ -241,7 +241,7 @@ struct SuggestionBar: View {
     /// A confirm question takes the whole bar beside Cancel, so the amount and the recipient stay readable.
     private var confirming: Bool {
         switch model.bar {
-        case .confirm, .ask: return !model.notesOpen && !model.writeOpen
+        case .confirm, .ask, .recipient: return !model.notesOpen && !model.writeOpen
         default: return false
         }
     }

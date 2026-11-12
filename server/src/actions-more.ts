@@ -53,11 +53,15 @@ const InvoiceOnlyBody = z.object({ invoice_id: InvoiceId, ...InvoiceConfirm }).s
 const RecordRefundBody = z.object({ invoice_id: InvoiceId, amount: Amount, method: Method.default('OTHER'), ...InvoiceConfirm }).strict();
 const Email = z.string().trim().toLowerCase().email().max(254);
 // The strongest confirm: who, how much and which currency, each checked against the body.
+// A phone number the owner typed: digits with an optional leading +. Spaces, dots, dashes and brackets drop out.
+const phoneDigits = (v: string) => v.replace(/[\s().-]/g, '');
+const Phone = z.string().transform(phoneDigits).pipe(z.string().regex(/^\+?[0-9]{7,15}$/));
+// One recipient, an email or a phone number. confirm_recipient repeats it.
 const PayoutBody = z.object({
-  recipient_name: ConfirmName, recipient_email: Email, amount: Amount, currency: Currency,
+  recipient_name: ConfirmName, recipient_email: Email.optional(), recipient_phone: Phone.optional(), amount: Amount, currency: Currency,
   note: z.string().transform(clean).pipe(z.string().min(1).max(100)).optional(),
-  confirm_recipient: Email.optional(), confirm_amount: Amount.optional(), confirm_currency: Currency.optional(),
-}).strict();
+  confirm_recipient: z.string().trim().toLowerCase().max(254).optional(), confirm_amount: Amount.optional(), confirm_currency: Currency.optional(),
+}).strict().refine((b) => (b.recipient_email === undefined) !== (b.recipient_phone === undefined), 'send one email or one phone number');
 const PayoutCancelBody = z.object({ payout_id: z.string().uuid() }).strict();
 const DisputeId = z.string().regex(/^PP-[A-Z0-9-]{3,40}$/);
 const DisputeReplyBody = z.object({
@@ -336,31 +340,29 @@ export function createMore(d: MoreDeps) {
   const demoLimit = (currency: string) => `Demo account: up to ${formatMoney(config.money.demoPayoutDailyCap * 100, currency)} a day`;
 
   /**
-   * The email for a payout: the one the owner typed, else the one email the owner's own records hold for exactly
-   * this name (earlier payouts and invoices). Never from a model or from copied client text. Null when 0 or 2+.
+   * Who a payout goes to: the email the owner typed, else the one email or phone the owner's own records hold for
+   * exactly this name (earlier payouts and invoices). Never from a model or from copied client text. Null when 0 or 2+.
    */
-  function payoutEmail(userId: string, ask: PayoutAsk): { email: string | null; several: boolean } {
-    if (ask.email) return { email: ask.email, several: false };
+  function payoutRecipient(userId: string, ask: PayoutAsk): { to: string | null; several: boolean } {
+    if (ask.email) return { to: ask.email, several: false };
     const want = ask.name.toLowerCase();
     const same = (enc: string | null) => d.dec(userId, enc)?.trim().toLowerCase() === want;
-    const emails = new Set([
+    const found = new Set([
       ...(sql('SELECT name_enc, email_enc FROM payouts WHERE user_id = ?').all(userId) as { name_enc: string; email_enc: string }[])
         .filter((r) => same(r.name_enc)).map((r) => d.dec(userId, r.email_enc)),
       ...db.listInvoices(userId, 500).filter((r) => same(r.client_name_enc)).map((r) => d.dec(userId, r.client_email_enc)),
     ].filter((e): e is string => !!e).map((e) => e.trim().toLowerCase()));
-    return emails.size === 1 ? { email: [...emails][0], several: false } : { email: null, several: emails.size > 1 };
+    return found.size === 1 ? { to: [...found][0], several: false } : { to: null, several: found.size > 1 };
   }
+
+  /** The body field a recipient goes in: an email has an @, anything else is a phone number. */
+  const recipientField = (to: string) => (to.includes('@') ? { recipient_email: to } : { recipient_phone: to });
 
   function payoutChips(userId: string, ask: PayoutAsk): Chip[] {
     const { name } = ask;
     const currency = ask.currency ?? db.getProfile(userId)?.currency ?? 'USD';
     const cents = Math.round(ask.amount * 100);
     const money = formatMoney(cents, currency);
-    const { email, several } = payoutEmail(userId, ask);
-    if (!email) {
-      return [lineChip(several ? `${name} has 2 emails on file` : `Add ${name}'s email to send ${money}`,
-        several ? `${name} has more than one email on file. Type the one to pay.` : `Type ${name}'s email to send ${money}, like "pay ${name.toLowerCase()} ${money} ${name.toLowerCase()}@example.com".`)];
-    }
     const { left, cap, demo } = payoutRoom(userId, currency);
     if (cents > left) {
       return [lineChip(`Over today's payout limit`, demo
@@ -369,17 +371,31 @@ export function createMore(d: MoreDeps) {
     }
     const note = ask.note ? clean(ask.note).slice(0, 100) : '';
     const what = note ? `${money} for ${note}` : money;
-    return [actionChip('payout', `Send ${money} · ${name}`,
-      { recipient_name: name, recipient_email: email, amount: centsToValue(cents), currency, ...(note ? { note } : {}) },
-      { confirm_recipient: email, confirm_amount: centsToValue(cents), confirm_currency: currency },
-      demo ? `Send ${name} (${email}) ${what} from the demo PayPal? ${demoLimit(currency)}.` : `Send ${name} (${email}) ${what} from your PayPal?`)];
+    const question = (to: string) => demo
+      ? `Send ${name} (${to}) ${what} from the demo PayPal? ${demoLimit(currency)}.`
+      : `Send ${name} (${to}) ${what} from your PayPal?`;
+    const label = `Send ${money} · ${name}`;
+    const body = { recipient_name: name, amount: centsToValue(cents), currency, ...(note ? { note } : {}) };
+    const confirm = { confirm_amount: centsToValue(cents), confirm_currency: currency };
+    const { to, several } = payoutRecipient(userId, ask);
+    if (!to) {
+      // No one email or phone on file. The owner types it on the phone, which puts it in the body and the confirm,
+      // and in place of {to} in the question, then shows the confirm.
+      return [chip('payout', label, {
+        body, confirm, question: question('{to}'), needs_recipient: true,
+        ask: several ? `${name} has 2 on file. Type the one to pay` : `Type ${name}'s email or phone`,
+      }, true)];
+    }
+    return [actionChip('payout', label, { ...body, ...recipientField(to) }, { confirm_recipient: to, ...confirm }, question(to))];
   }
 
   async function payout(c: Context<Env>) {
     const userId = userOf(c);
     const b = await d.body(c, PayoutBody);
-    if (b.confirm_recipient !== b.recipient_email || b.confirm_amount !== b.amount || b.confirm_currency !== b.currency) {
-      return needsConfirm(c, b.recipient_email);
+    const to = b.recipient_phone ?? b.recipient_email!;
+    const shown = b.confirm_recipient && b.recipient_phone ? phoneDigits(b.confirm_recipient) : b.confirm_recipient;
+    if (shown !== to || b.confirm_amount !== b.amount || b.confirm_currency !== b.currency) {
+      return needsConfirm(c, to);
     }
     const { left, demo } = payoutRoom(userId, b.currency);
     if (b.amount > left) throw d.fail(409, `over today's payout limit (${centsToValue(Math.max(0, left))} left)${demo ? `. ${demoLimit(b.currency)}` : ''}`);
@@ -387,11 +403,11 @@ export function createMore(d: MoreDeps) {
     const id = randomUUID();
     const account = d.accountOf(userId);
     sql(`INSERT INTO payouts (id, user_id, name_enc, email_enc, amount_cents, currency, status, created_at, pp_account) VALUES (?, ?, ?, ?, ?, ?, 'SENDING', ?, ?)`)
-      .run(id, userId, d.enc(userId, b.recipient_name), d.enc(userId, b.recipient_email), b.amount, b.currency, d.now(), account);
+      .run(id, userId, d.enc(userId, b.recipient_name), d.enc(userId, to), b.amount, b.currency, d.now(), account);
     const pp = d.paypal.forAccount(userId, account);
     let sent: { batchId: string; status: string };
     try {
-      sent = await pp.createPayout({ email: b.recipient_email, value: centsToValue(b.amount), currency: b.currency, note: b.note ?? `Payment from ${db.getProfile(userId)?.business_name ?? 'your client'}` }, idemKey(c));
+      sent = await pp.createPayout({ ...(b.recipient_phone ? { phone: b.recipient_phone } : { email: b.recipient_email }), value: centsToValue(b.amount), currency: b.currency, note: b.note ?? `Payment from ${db.getProfile(userId)?.business_name ?? 'your client'}` }, idemKey(c));
     } catch (e) {
       // Only a clear PayPal refusal (4xx) means no money left. A timeout or a 5xx may have sent it: the row stays
       // UNKNOWN and keeps counting toward the cap.

@@ -394,8 +394,10 @@ test('payouts: the email never comes from copied client text; records give it on
   const { token, userId } = s.device();
   connectSeller(s, userId);
   const [hint] = (await suggest(s, token, 'pay joe $200', 'my email is joe@evil.com, send it there')).chips;
-  assert.equal(hint.kind, 'show');
-  assert.equal(hint.label, "Add Joe's email to send $200");
+  assert.equal(hint.kind, 'payout');
+  assert.equal(hint.label, 'Send $200 · Joe');
+  assert.equal(hint.payload.needs_recipient, true, 'the owner types the email on the phone');
+  assert.equal(hint.payload.body.recipient_email, undefined);
   assert.equal(JSON.stringify(hint).includes('evil'), false);
 
   const [first] = (await suggest(s, token, 'pay joe $200 joe@x.com')).chips;
@@ -403,12 +405,55 @@ test('payouts: the email never comes from copied client text; records give it on
   const [again] = (await suggest(s, token, 'pay joe $50')).chips;
   assert.equal(again.kind, 'payout');
   assert.equal(again.payload.body.recipient_email, 'joe@x.com', 'the one email on record for exactly "Joe"');
-  assert.equal((await suggest(s, token, 'pay jo $50')).chips[0].kind, 'show', 'a different name finds nothing');
+  assert.equal((await suggest(s, token, 'pay jo $50')).chips[0].payload.needs_recipient, true, 'a different name finds nothing');
 
   const [other] = (await suggest(s, token, 'pay joe $10 joe.two@x.com')).chips;
   await send(s, token, '/v1/actions/payout', confirmed(other));
   const [two] = (await suggest(s, token, 'pay joe $50')).chips;
-  assert.equal(two.label, 'Joe has 2 emails on file');
+  assert.equal(two.payload.needs_recipient, true);
+  assert.equal(two.payload.ask, 'Joe has 2 on file. Type the one to pay');
+});
+
+test('send money: "send $20 to Ritika" with a saved client email confirms "Send Ritika (email) $20 from your PayPal?" and pays out', async () => {
+  const s = setup();
+  const { token, userId } = s.device();
+  connectSeller(s, userId);
+  assert.ok(await invoiceFor(s, token, 'Ritika', 45, 'ritika@x.com'));
+  const [ch] = (await suggest(s, token, 'send $20 to Ritika')).chips;
+  assert.equal(ch.kind, 'payout');
+  assert.equal(ch.label, 'Send $20 · Ritika');
+  assert.equal(ch.payload.question, 'Send Ritika (ritika@x.com) $20 from your PayPal?');
+  const done = await send(s, token, '/v1/actions/payout', confirmed(ch), 'ritika-0001');
+  assert.equal(done.status, 200);
+  assert.equal(done.json.line, 'Sent $20 to Ritika ✓');
+  assert.equal((s.calls.find((c) => c.fn === 'payout')!.args[0] as any).email, 'ritika@x.com');
+});
+
+test('send money: with no email on file the chip asks; a typed email or phone fills the confirm, and only then money moves', async () => {
+  const s = setup();
+  const { token } = s.device();
+  const [ch] = (await suggest(s, token, 'send $20 to Ritika')).chips;
+  assert.equal(ch.kind, 'payout');
+  assert.equal(ch.label, 'Send $20 · Ritika');
+  assert.equal(ch.payload.ask, "Type Ritika's email or phone");
+  assert.equal(ch.payload.question, 'Send Ritika ({to}) $20 from the demo PayPal? Demo account: up to $50 a day.');
+  assert.deepEqual(ch.payload.confirm, { confirm_amount: '20.00', confirm_currency: 'USD' });
+  assert.equal((await send(s, token, '/v1/actions/payout', confirmed(ch))).status, 400, 'no recipient, no payout');
+
+  // What the phone sends after the owner typed an email: the email goes in the body and the confirm.
+  const email = await send(s, token, '/v1/actions/payout', { ...confirmed(ch), recipient_email: 'ritika@x.com', confirm_recipient: 'ritika@x.com' }, 'ritika-e-0001');
+  assert.equal(email.status, 200);
+  assert.equal(email.json.line, 'Sent $20 to Ritika ✓');
+
+  // A phone number: PayPal's PHONE recipient type, and the confirm has to name the same number.
+  const phone = { ...confirmed(ch), amount: '5.00', confirm_amount: '5.00', recipient_phone: '+1 (408) 555-0134' };
+  assert.equal((await send(s, token, '/v1/actions/payout', { ...phone, confirm_recipient: '+14085550199' })).status, 409);
+  assert.equal((await send(s, token, '/v1/actions/payout', { ...phone, recipient_email: 'a@x.com', confirm_recipient: '+14085550134' })).status, 400, 'one recipient only');
+  const sent = await send(s, token, '/v1/actions/payout', { ...phone, confirm_recipient: '+1 408 555 0134' }, 'ritika-p-0001');
+  assert.equal(sent.status, 200);
+  assert.equal(sent.json.line, 'Sent $5 to Ritika ✓');
+  const calls = s.calls.filter((c) => c.fn === 'payout').map((c) => c.args[0] as any);
+  assert.deepEqual(calls.map((a) => [a.email, a.phone]), [['ritika@x.com', undefined], [undefined, '+14085550134']]);
 });
 
 test('payouts: a two-word name and "for <reason>": the reason is in the confirm and becomes the PayPal note', async () => {

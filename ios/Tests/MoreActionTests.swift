@@ -156,6 +156,64 @@ final class MoreActionTests: XCTestCase {
         XCTAssertNil(store.pendingAction)
     }
 
+    /// "send $20 to Ritika" with no email on file, as the server builds it.
+    private var ritika: Chip {
+        Chip(kind: "payout", label: "Send $20 \u{00B7} Ritika", payload: [
+            "body": .object(["recipient_name": .string("Ritika"), "amount": .string("20.00"), "currency": .string("USD")]),
+            "confirm": .object(["confirm_amount": .string("20.00"), "confirm_currency": .string("USD")]),
+            "question": .string("Send Ritika ({to}) $20 from your PayPal?"),
+            "needs_recipient": .bool(true), "ask": .string("Type Ritika's email or phone"),
+        ], needs_confirm: true)
+    }
+
+    /// Taps real keys, switching to the number layout for @ and digits.
+    private func typeKeys(_ s: String) {
+        func keys() -> [KeyCap] { KeyboardGeometry.keys(layout: model.layout, width: 390, globe: false, currency: "$") }
+        for ch in s {
+            let c = String(ch)
+            if !keys().contains(where: { $0.kind == .char(c) }), let mode = keys().first(where: { $0.id == "mode" }) { model.activate(mode) }
+            guard let key = keys().first(where: { $0.kind == .char(c) }) else { return XCTFail("cannot type \(c)") }
+            model.activate(key)
+        }
+    }
+
+    func testSendMoneyWithNoEmailAsksForItInTheBarThenConfirmsAndSends() async {
+        host.text = "send $20 to Ritika"
+        model.tapChip(ritika)
+        XCTAssertEqual(titles(), ["Type Ritika's email or phone", "Cancel"], "no Use until it reads as an email or phone")
+        typeKeys("ritika@x.co")
+        XCTAssertEqual(host.text, "send $20 to Ritika", "the email never goes into the chat")
+        XCTAssertEqual(titles(), ["ritika@x.co", "Use", "Cancel"])
+        model.perform(.useRecipient)
+        XCTAssertEqual(api.calls, [], "nothing goes out before the confirm tap")
+        XCTAssertEqual(titles(), ["Send Ritika (ritika@x.co) $20 from your PayPal?", "Cancel"])
+        guard case .confirm(let next, let recipient) = model.bar else { return XCTFail("\(model.bar)") }
+        api.moreReply = MoreResponse(line: "Sent $20 to Ritika \u{2713}", undo: nil)
+        model.confirm(next, recipient: recipient)
+        await settled()
+        XCTAssertEqual(api.moreSent.first?.path, "payout")
+        XCTAssertEqual(api.moreSent.first?.body["recipient_email"], .string("ritika@x.co"))
+        XCTAssertEqual(api.moreSent.first?.body["confirm_recipient"], .string("ritika@x.co"))
+        XCTAssertEqual(api.moreSent.first?.body["confirm_amount"], .string("20.00"))
+        XCTAssertEqual(titles(), ["Sent $20 to Ritika \u{2713}"])
+    }
+
+    func testSendMoneyTakesATypedPhoneAndCancelSendsNothing() {
+        model.tapChip(ritika)
+        model.perform(.cancelConfirm)
+        XCTAssertEqual(model.bar, .idle)
+        XCTAssertEqual(PayoutRecipient.parse("+1 (408) 555-0134"), "+14085550134")
+        XCTAssertEqual(PayoutRecipient.parse("Ritika@X.com "), "ritika@x.com")
+        for bad in ["ritika", "ritika@", "12", "@x.com"] { XCTAssertNil(PayoutRecipient.parse(bad), bad) }
+        let filled = PayoutRecipient.filled(ritika, with: "+14085550134")
+        XCTAssertFalse(PayoutRecipient.needed(filled))
+        XCTAssertEqual(BarItems.confirmTitle(filled, recipient: "+14085550134"), "Send Ritika (+14085550134) $20 from your PayPal?")
+        guard case .object(let body)? = filled.payload["body"] else { return XCTFail("no body") }
+        XCTAssertEqual(body["recipient_phone"], .string("+14085550134"))
+        XCTAssertNil(body["recipient_email"])
+        XCTAssertEqual(api.calls, [])
+    }
+
     func testBalanceReadsOnTapAndStaysInTheBar() async {
         host.text = "how much do I have"
         api.readReply = MoreResponse(line: "PayPal balance $1,240.50", undo: nil)

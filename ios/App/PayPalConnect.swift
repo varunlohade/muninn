@@ -17,7 +17,13 @@ final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPres
     private var decision: CheckedContinuation<Bool, Never>?
     private var web: ASWebAuthenticationSession?
 
+    /// The server said it cannot connect an own PayPal (503). Connect stays hidden until the next app start.
+    @Published private(set) var unavailable = false
+
     var connected: Bool { status?.connected == true }
+
+    /// Connect shows only once the status is in and the server can connect an own PayPal.
+    var canConnect: Bool { status != nil && !connected && !unavailable && status?.connect_ready != false }
 
     func refresh() async {
         if let s = try? await APIClient.shared().paypalStatus() { status = s }
@@ -41,6 +47,10 @@ final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPres
             }
         } catch let e as ASWebAuthenticationSessionError where e.code == .canceledLogin {
             // A cancel is the owner's choice, so it shows no error.
+        } catch APIError.http(503, _) {
+            // The server cannot connect an own PayPal yet. Say so once, and hide Connect.
+            unavailable = true
+            note = Self.offLine
         } catch {
             note = plainLine(error)
         }
@@ -121,6 +131,12 @@ final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPres
         }
     }
 
+    /// The one line while the server cannot connect an own PayPal. The server's 503 says the same.
+    nonisolated static let offLine = "Your own PayPal is not open yet. Money runs on the demo PayPal sandbox account."
+
+    /// The PayPal sandbox site: sign in with a sandbox account to see the demo money arrive.
+    nonisolated static let sandboxURL = URL(string: "https://www.sandbox.paypal.com")!
+
     /// Disconnect only forgets the account here. The grant lives on in PayPal until the owner revokes it there.
     nonisolated static let disconnectNote = "New invoices go to the demo account until you connect again. To fully remove access, also revoke Muninn in your PayPal settings."
 
@@ -137,13 +153,16 @@ struct ConnectPayPalCard: View {
     @ObservedObject private var paypal = PayPalConnector.shared
 
     var body: some View {
-        if let s = paypal.status, !s.connected {
+        // Only while Connect can work, or to show its one line once. A server that cannot connect shows no card.
+        if !paypal.connected, paypal.canConnect || paypal.note != nil {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 PixelBanner(first: "Get paid in any chat.", rest: "Every invoice gets a pay link.") {
-                    Button(paypal.busy ? "One moment\u{2026}" : "Connect PayPal") { Task { await paypal.connect() } }
-                        .buttonStyle(TactileButton(kind: .light, small: true, wide: false))
-                        .disabled(paypal.busy)
-                        .accessibilityIdentifier("home.paypal.connect")
+                    if paypal.canConnect {
+                        Button(paypal.busy ? "One moment\u{2026}" : "Connect PayPal") { Task { await paypal.connect() } }
+                            .buttonStyle(TactileButton(kind: .light, small: true, wide: false))
+                            .disabled(paypal.busy)
+                            .accessibilityIdentifier("home.paypal.connect")
+                    }
                 }
                 if let note = paypal.note {
                     Text(note).font(Theme.Font.label).foregroundStyle(Theme.Color.due).fixedSize(horizontal: false, vertical: true)
@@ -161,6 +180,7 @@ struct ConnectPayPalCard: View {
 struct PayPalIntegrationRow: View {
     @ObservedObject private var paypal = PayPalConnector.shared
     @State private var confirmDisconnect = false
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         Card {
@@ -170,14 +190,28 @@ struct PayPalIntegrationRow: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                         Text("PayPal").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
-                        Text(PayPalConnector.summary(paypal.status)).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
-                            .fixedSize(horizontal: false, vertical: true)
+                        if paypal.connected {
+                            Text(PayPalConnector.summary(paypal.status)).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("paypal.summary")
+                        } else {
+                            // The demo account lives on PayPal's sandbox site; a tap opens it in Safari.
+                            Button { openURL(PayPalConnector.sandboxURL) } label: {
+                                HStack(spacing: 3) {
+                                    Text(PayPalConnector.summary(paypal.status))
+                                    Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
+                                }
+                                .font(Theme.Font.label).foregroundStyle(Theme.Color.booked)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Open the PayPal sandbox site")
                             .accessibilityIdentifier("paypal.summary")
+                        }
                     }
                     Spacer(minLength: 0)
                     if paypal.connected {
                         StatusPill(text: "Connected", tone: .paid)
-                    } else if paypal.status != nil {
+                    } else if paypal.canConnect {
                         AskChip(title: paypal.busy ? "One moment\u{2026}" : "Connect", detail: nil) { Task { await paypal.connect() } }
                             .disabled(paypal.busy)
                             .accessibilityIdentifier("paypal.connect")
@@ -185,6 +219,9 @@ struct PayPalIntegrationRow: View {
                 }
                 if let note = paypal.note {
                     Text(note).font(Theme.Font.label).foregroundStyle(Theme.Color.due).fixedSize(horizontal: false, vertical: true)
+                } else if paypal.status != nil, !paypal.connected, !paypal.canConnect {
+                    Text(PayPalConnector.offLine).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("paypal.off")
                 }
                 if paypal.connected {
                     AskChip(title: "Disconnect", detail: nil) { confirmDisconnect = true }

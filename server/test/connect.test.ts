@@ -78,8 +78,18 @@ test('connect: 503 when the server has no public URL or partner id, 401 without 
   const p = fakePartner();
   const s = setup({ partner: p.partner });
   const a = s.device();
+  assert.equal((await (await s.call(a.token, 'GET', '/v1/paypal/status')).json() as any).connect_ready, true);
   config.paypal.publicUrl = '';
   assert.equal((await s.call(a.token, 'POST', '/v1/paypal/connect')).status, 503);
+  config.paypal.publicUrl = 'https://muninn.test';
+  config.paypal.partnerMerchantId = '';
+  // The live server had no partner id: the app read a 503 as "Something went wrong". Now status says so first, in one plain line.
+  const off = await s.call(a.token, 'POST', '/v1/paypal/connect');
+  assert.equal(off.status, 503);
+  assert.equal((await off.json() as any).error, 'Your own PayPal is not open yet. Money runs on the demo PayPal sandbox account.');
+  const st = await (await s.call(a.token, 'GET', '/v1/paypal/status')).json() as any;
+  assert.equal(st.connect_ready, false);
+  assert.equal(st.demo, true);
   assert.equal((await s.call(null, 'POST', '/v1/paypal/connect')).status, 401);
   assert.equal(p.calls.length, 0);
 });
@@ -100,7 +110,7 @@ test('return: PayPal confirms the merchant, the app gets a one-time code, and th
   assert.deepEqual(await done.json(), { result: 'connected', account: 's•••@shop.test' });
   assert.equal((await finish(s, a.token, code)).status, 404, 'the code works once');
   const st = await (await s.call(a.token, 'GET', '/v1/paypal/status')).json() as any;
-  assert.deepEqual(st, { connected: true, demo: false, pending: false, email_confirmed: true, payments_receivable: true, account: 's•••@shop.test' });
+  assert.deepEqual(st, { connected: true, demo: false, connect_ready: true, pending: false, email_confirmed: true, payments_receivable: true, account: 's•••@shop.test' });
   // Stored encrypted: the merchant id and email are not in the row as plain text.
   const row = s.db.getPayPalConnection(a.userId)!;
   assert.ok(!JSON.stringify(row).includes('SELLER12345') && !JSON.stringify(row).includes('seller@shop.test'));
@@ -221,7 +231,7 @@ test('demo fallback: a user with no PayPal connected runs on the demo merchant, 
   const s = setup({ partner: fakePartner().partner });
   const a = s.device();
   const st = await (await s.call(a.token, 'GET', '/v1/paypal/status')).json() as any;
-  assert.deepEqual(st, { connected: false, demo: true, pending: false, email_confirmed: false, payments_receivable: false, account: null });
+  assert.deepEqual(st, { connected: false, demo: true, connect_ready: true, pending: false, email_confirmed: false, payments_receivable: false, account: null });
   const inv = await (await s.call(a.token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', client_name: 'Sam' })).json() as any;
   assert.equal(inv.demo, true);
   assert.equal(s.db.getInvoice(a.userId, inv.id)!.pp_account, null);

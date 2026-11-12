@@ -191,7 +191,11 @@ struct DisputesResponse: Decodable { let disputes: [Dispute] }
 struct Integration: Decodable, Identifiable, Equatable { let id: String; let name: String; let description: String?; let status: String }
 struct IntegrationsResponse: Decodable { let integrations: [Integration] }
 /// The owner's own PayPal. `demo` is true while money runs on the shared sandbox demo account. `account` is masked, like "s•••@shop.com".
-struct PayPalStatus: Decodable, Equatable { let connected: Bool; let demo: Bool; let pending: Bool; let email_confirmed: Bool; let payments_receivable: Bool; let account: String? }
+/// `connect_ready` is false while the server cannot connect an own PayPal; an older server leaves it out.
+struct PayPalStatus: Decodable, Equatable {
+    let connected: Bool; let demo: Bool; let pending: Bool; let email_confirmed: Bool; let payments_receivable: Bool; let account: String?
+    var connect_ready: Bool? = nil
+}
 /// The PayPal sign-up link, and the URL scheme the server sends the browser back to.
 struct PayPalConnectStart: Decodable { let action_url: String; let return_scheme: String }
 /// The PayPal account that came back, masked, before the owner says "Use this account".

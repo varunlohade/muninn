@@ -59,6 +59,8 @@ enum BarState: Equatable {
     case retry(Chip, confirmed: String?)
     /// Done, with Undo beside it: "Paused ✓ · Undo". `undo` runs the reverse.
     case undoable(String, undo: Chip)
+    /// A payout with no email or phone on file. The keys type into `typed`, not into the chat, until Use or Cancel.
+    case recipient(Chip, typed: String)
 }
 
 /// The one-tap rewrites in the Rewrite panel. The raw value is the server's tone name.
@@ -373,6 +375,7 @@ final class KeyboardModel: ObservableObject {
     func activate(_ key: KeyCap) {
         host?.playClick()
         if key.kind == .delete {
+            if case .recipient = bar { return deleteDown() }
             if revertCorrection() { wordTaps = [] } else { host?.deleteBackward(); _ = wordTaps.popLast() }
             correction = nil
             unlearned = nil
@@ -394,6 +397,21 @@ final class KeyboardModel: ObservableObject {
 
     /// `tap`: what the decoder made of the touch that typed it.
     private func commit(_ key: KeyCap, tap: (result: TouchDecoder.Result, point: CGPoint)? = nil) {
+        if case .recipient(let chip, let typed) = bar {
+            switch key.kind {
+            case .char(let c):
+                bar = .recipient(chip, typed: typed + display(c))
+                if shift == .once && layout == .letters { shift = .off }
+                return
+            case .ret:
+                useRecipient()
+                return
+            case .space:
+                return
+            default:
+                break
+            }
+        }
         correction = nil
         learnLastTap()
         switch key.kind {
@@ -511,6 +529,10 @@ final class KeyboardModel: ObservableObject {
 
     /// Delete fires on touch down, repeats after 0.5 s, then speeds up to whole words.
     private func deleteDown() {
+        if case .recipient(let chip, let typed) = bar {
+            bar = .recipient(chip, typed: String(typed.dropLast()))
+            return
+        }
         if revertCorrection() { wordTaps = [] } else { host?.deleteBackward(); _ = wordTaps.popLast() }
         correction = nil
         unlearned = nil
@@ -681,6 +703,7 @@ final class KeyboardModel: ObservableObject {
         if case .working = bar { return }
         if case .confirm = bar { return }
         if case .ask = bar { return }
+        if case .recipient = bar { return }
         let text = typed
         // An explain question or a chart is answered on the phone or by /v1/explain, so it never also goes to /v1/suggest.
         let explaining = updateExplain(text)
@@ -1180,6 +1203,7 @@ final class KeyboardModel: ObservableObject {
         case .confirm(let chip, let recipient): confirm(chip, recipient: recipient)
         case .retry(let chip, let confirmed): run(chip, confirmed: confirmed)
         case .cancelConfirm: cancelConfirm()
+        case .useRecipient: useRecipient()
         case .undo: undoWrite()
         case .openCalm: openCalmOffer()
         case .smart(let chip): tapSmart(chip)
@@ -1260,6 +1284,12 @@ final class KeyboardModel: ObservableObject {
             place(text, gap: " ", readAt: host?.contextBeforeInput ?? "")
             return
         }
+        if PayoutRecipient.needed(chip) {
+            // An email or phone starts lowercase, whatever the chat's capital rule says.
+            if shift == .once { shift = .off }
+            bar = .recipient(chip, typed: "")
+            return
+        }
         if BarItems.asksFirst(chip) {
             bar = .confirm(chip, recipient: BarItems.recipient(chip))
             return
@@ -1269,10 +1299,18 @@ final class KeyboardModel: ObservableObject {
 
     func confirm(_ chip: Chip, recipient: String) { run(chip, confirmed: recipient) }
 
+    /// Use: the typed email or phone fills the payout, then the usual confirm shows it before any money moves.
+    func useRecipient() {
+        guard case .recipient(let chip, let typed) = bar, let to = PayoutRecipient.parse(typed) else { return }
+        let filled = PayoutRecipient.filled(chip, with: to)
+        bar = .confirm(filled, recipient: to)
+    }
+
     /// Cancel turns the chip away: it stays off the bar until the text changes.
     func cancelConfirm() {
         if case .confirm(let chip, _) = bar { suggest.dismiss(chip, on: typed) }
         if case .ask(let chip, _) = bar { suggest.dismiss(chip, on: typed) }
+        if case .recipient(let chip, _) = bar { suggest.dismiss(chip, on: typed) }
         bar = .idle
         lastSent = ""
     }
