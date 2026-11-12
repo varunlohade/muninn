@@ -83,5 +83,11 @@ final class KeyboardViewController: UIInputViewController, TextHost {
     func deleteBackward() { textDocumentProxy.deleteBackward() }
     func adjustCursor(by offset: Int) { textDocumentProxy.adjustTextPosition(byCharacterOffset: offset) }
     func nextKeyboard() { advanceToNextInputMode() }
-    func playClick() { UIDevice.current.playInputClick() }
+    /// A keyboard can click and tap the phone only with Full Access. The click also follows the Keyboard Clicks setting.
+    func playClick() {
+        guard hasFullAccess else { return }
+        UIDevice.current.playInputClick()
+        haptic.impactOccurred()
+    }
+    private let haptic = UIImpactFeedbackGenerator(style: .light)
 }
