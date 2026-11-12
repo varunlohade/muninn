@@ -24,6 +24,10 @@ enum BarItems {
         case catalog(CatalogItem?)
         /// A word from the prediction row: it replaces the word being typed.
         case predict(String)
+        /// The meaning or answer goes into the message; a chart opens its drawing.
+        case explain
+        /// Opens the card with more about the meaning or answer.
+        case explainMore
     }
 
     struct Item: Equatable, Identifiable {
@@ -63,6 +67,9 @@ enum BarItems {
         var moneyTrigger: String?
         /// "Share catalog" or "Share Beard trim", from typed words like "send catalog" or "do you have beard trim".
         var catalog: Item?
+        /// "btw" → "by the way" (and "Explain more"), or a chart's "Draw it": the answer to what the last sentence asks.
+        /// It comes before every other chip.
+        var explain: [Item] = []
         var ready = ReadyChips.Input()
         /// The word row while a word is typed. It shows only when no chip does.
         var predictions: [Predictions.Slot] = []
@@ -72,6 +79,8 @@ enum BarItems {
     static func build(_ s: State) -> [Item] {
         // The word row works on the phone alone. The setup line waits for an empty field.
         if !s.hasFullAccess || !s.paired {
+            // A dictionary meaning works offline, so it shows even before Full Access or pairing.
+            if !s.explain.isEmpty { return s.explain }
             if !s.predictions.isEmpty { return predictionItems(s.predictions) }
             guard s.fieldEmpty else { return [] }
             return [Item(id: "info", title: s.hasFullAccess ? "Open \(AppConfig.displayName) to pair" : "Allow Full Access in Settings for \(AppConfig.keyboardName)", tone: .secondary)]
@@ -98,11 +107,13 @@ enum BarItems {
         switch s.bar {
         case .idle:
             // A chip about the typed words gets the room; the day's chips wait for an empty field.
+            out += s.explain
             if let c = s.catalog { out.append(c) }
             out += smart
-            if smart.isEmpty, s.copiedAvailable { out.append(Item(id: "copied", title: "Use copied message", action: .useCopied)) }
-            if smart.isEmpty, let a = s.toBill { out.append(Item(id: "bill", title: "Invoice \(a.who)", action: .bill(a))) }
-            if smart.isEmpty, let a = s.nextUp { out.append(Item(id: "next", title: "Next: \(a.who) \(a.time)", tone: .secondary)) }
+            let aboutTyping = !smart.isEmpty || !s.explain.isEmpty
+            if !aboutTyping, s.copiedAvailable { out.append(Item(id: "copied", title: "Use copied message", action: .useCopied)) }
+            if !aboutTyping, let a = s.toBill { out.append(Item(id: "bill", title: "Invoice \(a.who)", action: .bill(a))) }
+            if !aboutTyping, let a = s.nextUp { out.append(Item(id: "next", title: "Next: \(a.who) \(a.time)", tone: .secondary)) }
             out = Array(out.prefix(3))
             if out.isEmpty { out = predictionItems(s.predictions) }
         case .chips(let chips, let fromCopied):

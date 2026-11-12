@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { config, ASK_GROUPS, ASK_ROUTES, INTENTS, type AskGroup, type AskRoute, type Intent, type Tone } from './config.ts';
 import { clean } from './text.ts';
 import { log } from './log.ts';
+import { EXPLAIN_SYSTEM, ExplanationSchema, SceneSchema, VISUAL_SYSTEM, type Explanation, type Scene } from './explain.ts';
 
 export type Classification = { intent: Intent; confidence: number; ms: number };
 export type Extraction = {
@@ -23,6 +24,10 @@ export type Ai = {
   refine(text: string, tone: Tone): Promise<string>;
   /** draft: what the owner wrote. client: a message the owner copied from the client. At least one is not empty. */
   toneCheck(draft: string, client: string): Promise<ToneCheck>;
+  /** A question such as "explain net 30": a one-line answer and a few short lines. */
+  explain(text: string): Promise<Explanation>;
+  /** A topic drawn as 2-4 steps of shapes, already clamped to the board. */
+  visual(topic: string): Promise<Scene>;
 };
 export type ToneCheck = { tone: 'upset' | 'blunt' | 'ok'; calm: string | null };
 export const DEVICE_ACTIONS = ['event', 'reminder', 'note', 'followup', 'none'] as const;
@@ -214,6 +219,17 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
     return hedge(attempt(config.llm.primary), attempt(config.llm.fallback), config.llm.writeHedgeMs);
   }
 
+  // Explain: one call to the primary model; the fallback runs only if it fails or its answer fails the schema. No hedge, so one paid call in the common case.
+  async function once<T>(purpose: string, system: string, text: string, maxTokens: number, schema: { parse(v: unknown): T }): Promise<T> {
+    const messages = [{ role: 'system', content: system }, { role: 'user', content: text }];
+    const attempt = async (m: Model) => schema.parse(parseModelJson(await chatOnce(m, messages, maxTokens, purpose, undefined, config.llm.explainTimeoutMs)));
+    try {
+      return await attempt(config.llm.primary);
+    } catch {
+      return attempt(config.llm.fallback);
+    }
+  }
+
   // One jev choice question: which criterion (0-based index) fits the context best.
   async function choose(context: string, question: string, criteria: string[]): Promise<{ index: number; confidence: number }> {
     const body = {
@@ -250,6 +266,9 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
         'Reply with one JSON object only: {"calm": string}.', input, CalmSchema);
       return ToneSchema.parse({ tone, calm });
     },
+
+    explain: (text) => once('explain', EXPLAIN_SYSTEM, text, 400, ExplanationSchema),
+    visual: (topic) => once('visual', VISUAL_SYSTEM, topic, 2500, SceneSchema),
 
     async classify(text) {
       const t = performance.now();

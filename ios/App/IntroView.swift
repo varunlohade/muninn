@@ -56,6 +56,8 @@ final class DemoStore: KeyboardStore {
     let actionShortcuts = ActionShortcut.defaults
     var pendingAction: PendingAction?
     var touchOffsets: [Double] = []
+    func saveDrawing(_ png: Data, title: String, scene: Data?) throws {}
+    func recordLearned(_ l: Learned) {}
 }
 
 /// The intro never looks at the real pasteboard.
@@ -63,6 +65,7 @@ final class DemoPasteboard: Pasteboard {
     let hasStrings = false
     let changeCount = 0
     let string: String? = nil
+    func setPNG(_ png: Data) {}
 }
 
 /// One intro scene. To add a feature, add one value to `all`.

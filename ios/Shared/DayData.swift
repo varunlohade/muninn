@@ -92,3 +92,23 @@ enum Shortcuts {
         return ("\(whole).\(cents)", currency)
     }
 }
+
+/// A visual explanation the owner exported from the keyboard. The PNG (and the scene, for a replay) sit next to the list in the App Group.
+struct Drawing: Codable, Identifiable, Equatable {
+    let id: UUID
+    let title: String
+    let created: Date
+    let file: String
+    /// The scene JSON file, so the drawing can be replayed.
+    var sceneFile: String? = nil
+}
+
+/// Something the keyboard explained when the owner tapped it: a word ("btw"), an answer or a chart.
+struct Learned: Codable, Equatable, Identifiable {
+    enum Kind: String, Codable { case word, answer, chart }
+    var id: String { "\(kind.rawValue)|\(subject)" }
+    let subject: String
+    let line: String
+    let kind: Kind
+    let date: Date
+}

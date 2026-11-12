@@ -29,6 +29,11 @@ export const config = {
   maxTextChars: 2000,
   maxContextChars: 1000,
   maxWriteChars: 1500,
+  maxExplainChars: 200,
+  // "Send as link": a drawing PNG kept for 30 days at an unguessable URL. PUBLIC_URL is the address people open,
+  // else PUBLIC_BASE_URL (the one PayPal Connect uses), else the request's own origin.
+  sharedImage: { maxBytes: 1024 * 1024, ttlMs: 30 * 86_400_000 },
+  publicUrl: (env.PUBLIC_URL ?? env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, ''),
 
   apple: {
     // The app bundle id. Apple puts it in the identity token as aud.
@@ -72,6 +77,8 @@ export const config = {
     // Rewrites are longer than extraction, so they get more time before the backup model starts.
     writeTimeoutMs: 6000,
     writeHedgeMs: 1500,
+    // A drawn scene is a few thousand tokens of JSON.
+    explainTimeoutMs: 15_000,
     primary: { model: 'meta-llama/llama-3.3-70b-instruct', provider: { order: ['groq'], allow_fallbacks: true } },
     fallback: { model: 'google/gemini-2.5-flash' },
   },
@@ -92,6 +99,12 @@ export const config = {
     suggest: { limit: 60, windowMs: 60_000 },
     actions: { limit: 20, windowMs: 60_000 },
     write: { limit: 30, windowMs: 60_000 },
+    // Explain and draw are paid calls the owner asks for, so a few a minute and a cap per day.
+    explain: { limit: 10, windowMs: 60_000 },
+    explainDaily: { limit: 100, windowMs: 86_400_000 },
+    shareUpload: { limit: 20, windowMs: 3_600_000 },
+    // Opening a shared link needs no token, so it is limited per address.
+    shareView: { limit: 120, windowMs: 60_000 },
     other: { limit: 120, windowMs: 60_000 },
     auth: { limit: 10, windowMs: 60_000 },
     // A device account needs no proof of who asks, so one address gets few of them.

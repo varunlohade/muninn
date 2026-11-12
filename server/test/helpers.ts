@@ -6,11 +6,14 @@ import type { Ai, Classification, DeviceAction, Extraction, ToneCheck } from '..
 import type { AskGroup, AskRoute } from '../src/config.ts';
 import { createCipher, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
+import { ExplanationSchema, SceneSchema } from '../src/explain.ts';
+import logExplain from './fixtures/log-explain.json' with { type: 'json' };
+import logScene from './fixtures/log-scene.json' with { type: 'json' };
 import type { Balance, PayPal, PayPalDispute, PayPalDisputeDetail, PayPalPartner, PayPalTxn } from '../src/paypal.ts';
 
 export const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
-export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number } | Error; route?: { route?: AskRoute; confidence?: number }; device?: { kind?: DeviceAction; confidence?: number } | Error; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void; partner?: PayPalPartner } = {}) {
+export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number } | Error; route?: { route?: AskRoute; confidence?: number }; device?: { kind?: DeviceAction; confidence?: number } | Error; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; explain?: unknown; visual?: unknown; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void; partner?: PayPalPartner } = {}) {
   const db = openDb(':memory:');
   const cipher = createCipher(randomBytes(32));
   const calls: { fn: string; args: unknown[] }[] = [];
@@ -110,6 +113,10 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     if (opts.write instanceof Error) throw opts.write;
     return opts.write ?? text;
   };
+  const model = (v: unknown, fallback: unknown) => {
+    if (v instanceof Error) throw v;
+    return v ?? fallback;
+  };
   const ai: Ai = {
     async classify(text) { aiCalls.push({ fn: 'classify', args: [text] }); await sleep(opts.delayMs); return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
     async extract(text, catalog) { aiCalls.push({ fn: 'extract', args: [text, catalog] }); await sleep(opts.delayMs); return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...opts.ext }; },
@@ -133,6 +140,9 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     async fix(...args) { aiCalls.push({ fn: 'fix', args }); return rewrite(args[0]); },
     async refine(...args) { aiCalls.push({ fn: 'refine', args }); return rewrite(args[0]); },
     async toneCheck(...args) { aiCalls.push({ fn: 'toneCheck', args }); return opts.tone ?? { tone: 'ok', calm: null }; },
+    // explain and visual take the model's raw JSON (an Error to fail) and pass it through the real schemas, as createAi does.
+    async explain(...args) { aiCalls.push({ fn: 'explain', args }); return ExplanationSchema.parse(model(opts.explain, logExplain)); },
+    async visual(...args) { aiCalls.push({ fn: 'visual', args }); return SceneSchema.parse(model(opts.visual, logScene)); },
   };
   // Each forAccount call: which account an action on an existing object ran on.
   const accounts: { userId: string; account: string | null }[] = [];

@@ -93,6 +93,44 @@ enum SharedStore {
         set { save(newValue, file: "pending-action.json") }
     }
 
+    // MARK: drawings: visual explanations the keyboard exported. PNGs in drawings/, the list in drawings.json.
+
+    static var drawings: [Drawing] {
+        get { load([Drawing].self, file: "drawings.json") ?? [] }
+        set { save(newValue, file: "drawings.json") }
+    }
+
+    static func drawingURL(_ d: Drawing) -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppConfig.appGroupID)?
+            .appendingPathComponent("drawings", isDirectory: true).appendingPathComponent(d.file)
+    }
+
+    static func drawingSceneURL(_ d: Drawing) -> URL? {
+        d.sceneFile.flatMap { f in drawingURL(d)?.deletingLastPathComponent().appendingPathComponent(f) }
+    }
+
+    /// Newest first, at most 30: the oldest files go when a new one comes.
+    static func saveDrawing(_ png: Data, title: String, scene: Data?) throws {
+        let base = UUID().uuidString
+        let d = Drawing(id: UUID(), title: title, created: Date(), file: base + ".png", sceneFile: scene == nil ? nil : base + ".json")
+        guard let url = drawingURL(d) else { throw CocoaError(.fileNoSuchFile) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try png.write(to: url, options: [.atomic, .completeFileProtection])
+        if let scene, let sceneURL = drawingSceneURL(d) { try scene.write(to: sceneURL, options: [.atomic, .completeFileProtection]) }
+        var all = [d] + drawings
+        for old in all.dropFirst(30) {
+            for u in [drawingURL(old), drawingSceneURL(old)].compactMap({ $0 }) { try? FileManager.default.removeItem(at: u) }
+        }
+        all = Array(all.prefix(30))
+        drawings = all
+    }
+
+    /// What the owner looked up in the keyboard, newest first, kept for 30 days.
+    static var learned: [Learned] {
+        get { load([Learned].self, file: "learned.json") ?? [] }
+        set { save(Array(newValue.filter { $0.date > Date().addingTimeInterval(-30 * 86_400) }.prefix(200)), file: "learned.json") }
+    }
+
     private static func baseQuery(_ account: String = account) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,

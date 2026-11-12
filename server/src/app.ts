@@ -2,7 +2,7 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { config, INTERVALS, TONES, type AskGroup, type Interval, type AskRoute, type Intent, type Tone } from './config.ts';
 import { randomToken, sha256, type Cipher } from './crypto.ts';
@@ -110,6 +110,10 @@ const AskBody = z.object({ text: z.string().trim().max(config.maxTextChars) }).s
 const FixBody = z.object({ text: WriteText }).strict();
 const RefineBody = z.object({ text: WriteText, tone: z.enum(TONES) }).strict();
 const OptionalWriteText = z.string().transform(clean).pipe(z.string().max(config.maxWriteChars)).optional();
+// Explain: a short question or topic the phone's regex already called an explain request. Never stored or logged.
+const ExplainText = CleanText(config.maxExplainChars);
+const ExplainBody = z.object({ text: ExplainText }).strict();
+const VisualBody = z.object({ topic: ExplainText }).strict();
 const ToneBody = z.object({ text: OptionalWriteText, context: OptionalWriteText }).strict()
   .refine((b) => b.text || b.context, { message: 'text or context is required' });
 const InvoiceBody = z.object({
@@ -210,12 +214,13 @@ export function createApp(deps: Deps) {
 
   app.use('*', secureHeaders());
   app.use('*', cors({ origin: (origin) => (config.corsOrigins.includes(origin) ? origin : null), allowMethods: ['GET', 'POST', 'PUT', 'DELETE'] }));
-  // A catalog photo upload is the one /v1 body that may be bigger than the JSON limit.
+  // A catalog photo upload and a drawing PNG are the /v1 bodies that may be bigger than the JSON limit.
   const tooLarge = (c: Context<Env>) => c.json({ error: 'body too large' }, 413);
   const jsonLimit = bodyLimit({ maxSize: config.bodyLimitBytes, onError: tooLarge });
   const photoLimit = bodyLimit({ maxSize: PHOTO_MAX_BYTES, onError: (c) => c.json({ error: 'photo is over 1 MB' }, 413) });
   const isPhotoUpload = (c: Context<Env>) => c.req.method === 'PUT' && /^\/v1\/catalog\/[^/]+\/photo$/.test(c.req.path);
-  app.use('/v1/*', (c, next) => (isPhotoUpload(c) ? photoLimit(c, next) : jsonLimit(c, next)));
+  const drawingLimit = bodyLimit({ maxSize: config.sharedImage.maxBytes, onError: (c) => c.json({ error: 'image too large' }, 413) });
+  app.use('/v1/*', (c, next) => (isPhotoUpload(c) ? photoLimit(c, next) : c.req.path === '/v1/drawings' ? drawingLimit(c, next) : jsonLimit(c, next)));
   app.use('/webhooks/*', bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'body too large' }, 413) }));
 
   app.onError((err, c) => {
@@ -230,6 +235,19 @@ export function createApp(deps: Deps) {
   });
 
   app.get('/health', (c) => c.json({ ok: true }));
+
+  // ---- a shared drawing. No token: whoever has the link sees the image and nothing else. An unknown or expired id is a plain 404.
+  app.get('/d/:file', rateLimiter('shareView', clientIp), (c) => {
+    const m = /^([A-Za-z0-9_-]{22})\.png$/.exec(c.req.param('file'));
+    const png = m ? db.sharedImage(m[1], now()) : undefined;
+    if (!png) return c.text('not found', 404);
+    return c.body(new Uint8Array(png), 200, {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'public, max-age=86400',
+      'Content-Security-Policy': "default-src 'none'",
+      'X-Content-Type-Options': 'nosniff',
+    });
+  });
 
   // ---- Sign in with Apple: the one /v1 route with no device token. It sits before the token check on purpose.
   // Every failure is a plain 401, so a caller learns nothing about which check failed.
@@ -278,6 +296,8 @@ export function createApp(deps: Deps) {
   app.use('/v1/actions/*', rateLimiter('actions', byUser));
   app.use('/v1/write/*', rateLimiter('write', byUser));
   app.use('/v1/disputes/:id/message', rateLimiter('actions', byUser));
+  // One pattern covers /v1/explain and /v1/explain/visual, so both share the same buckets.
+  app.use('/v1/explain/*', rateLimiter('explain', byUser), rateLimiter('explainDaily', byUser));
   app.use('/v1/*', rateLimiter('other', byUser));
 
   // ---- "Save your details": attaches an Apple account to the signed-in device account. The Apple token is checked exactly as in /v1/auth/apple.
@@ -1229,5 +1249,45 @@ export function createApp(deps: Deps) {
   });
 
   more.mount(app);
+  // ---- "Send as link": the keyboard uploads a drawing PNG and types the short link into the chat.
+  const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  app.post('/v1/drawings', rateLimiter('shareUpload', byUser), async (c) => {
+    if (c.req.header('content-type') !== 'image/png') return c.json({ error: 'send a PNG image' }, 400);
+    const png = new Uint8Array(await c.req.arrayBuffer());
+    if (png.length < PNG_MAGIC.length || PNG_MAGIC.some((b, i) => png[i] !== b)) return c.json({ error: 'send a PNG image' }, 400);
+    if (png.length > config.sharedImage.maxBytes) return c.json({ error: 'image too large' }, 413);
+    const at = now();
+    db.purgeSharedImages(at);
+    // 128 random bits: the link cannot be guessed, and ids say nothing about the user or the time.
+    const id = randomBytes(16).toString('base64url');
+    const expiresAt = at + config.sharedImage.ttlMs;
+    db.addSharedImage(id, c.get('userId'), png, at, expiresAt);
+    log('share_image', { user_id: c.get('userId'), bytes: png.length });
+    const base = config.publicUrl || new URL(c.req.url).origin;
+    return c.json({ url: `${base}/d/${id}.png`, expires_at: new Date(expiresAt).toISOString() });
+  });
+
+  // ---- explain: the phone sends only text its own regex read as an explain request, so plain chat never reaches here.
+  // Only sizes and timings are logged, never the question or the answer.
+  const explaining = async <T extends object>(c: Context<Env>, kind: string, chars: number, run: () => Promise<T>) => {
+    const t = performance.now();
+    try {
+      const out = await run();
+      log('explain', { user_id: c.get('userId'), kind, chars, ms: Math.round(performance.now() - t), ok: true, paid_calls: 1 });
+      return c.json(out);
+    } catch (e) {
+      log('explain', { user_id: c.get('userId'), kind, chars, ms: Math.round(performance.now() - t), ok: false, err: (e as Error).name });
+      return c.json({ error: 'explain is not available right now' }, 502);
+    }
+  };
+  app.post('/v1/explain', async (c) => {
+    const { text } = await body(c, ExplainBody);
+    return explaining(c, 'explain', text.length, () => ai.explain(text));
+  });
+  app.post('/v1/explain/visual', async (c) => {
+    const { topic } = await body(c, VisualBody);
+    return explaining(c, 'visual', topic.length, () => ai.visual(topic));
+  });
+
   return app;
 }

@@ -1,6 +1,7 @@
 // A local stand-in Muninn server for the iOS app and UI tests: fake AI, fake PayPal, in-memory DB, no network.
 // usage: npm run fake   (PORT=0 picks a free port; the first line printed names it)
-// Debug routes: GET /_log, POST /_reset, POST /_paid/:id (invoice, order or subscription id), POST /_next {"cls": {...}, "ext": {...}, "group": {...}, "route": {...}},
+// Debug routes: GET /_log, POST /_reset, POST /_paid/:id (invoice, order or subscription id), POST /_next {"cls": {...}, "ext": {...}, "group": {...}, "route": {...}, "explain": {...}, "visual": {...}},
+// explain and visual take raw model JSON; with none, they answer with the log-function fixtures in test/fixtures.
 // POST /_paypal-extras (an active repeat bill for Ana Diaz and an open dispute from Maya Lopez, for the PayPal action shots)
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -23,7 +24,7 @@ const FAKE_TOKEN = 'pkd_fake';
 const INNER_TOKEN = 'pkd_fake_local_only_device_token';
 const DAY = 86_400_000;
 
-type Next = { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number }; route?: { route?: AskRoute; confidence?: number } };
+type Next = { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number }; route?: { route?: AskRoute; confidence?: number }; explain?: unknown; visual?: unknown };
 type LogEntry = { method: string; path: string; status: number; body: unknown };
 
 function build() {
@@ -38,6 +39,8 @@ function build() {
     get ext() { return take('ext'); },
     get group() { return take('group'); },
     get route() { return take('route'); },
+    get explain() { return take('explain'); },
+    get visual() { return take('visual'); },
     apple: async () => { throw new Error('no Sign in with Apple on the fake server'); },
   });
   const { db, cipher } = env;
@@ -79,6 +82,8 @@ fake.post('/_next', async (c) => {
   if (b.ext) state.next.ext = b.ext;
   if (b.group) state.next.group = b.group;
   if (b.route) state.next.route = b.route;
+  if (b.explain) state.next.explain = b.explain;
+  if (b.visual) state.next.visual = b.visual;
   return c.json({ ok: true, next: state.next });
 });
 // Plays the PayPal webhook the real server would get when the client pays.
