@@ -1,5 +1,11 @@
 # Build notes
 
+## 0.1 (10) — 2026-11-13
+
+What to test:
+- Command becomes a message. Type "invoice sam $45 for the haircut" and tap the invoice chip. Your words become "Hi Sam, here's the invoice for the haircut ($45):" plus the link.
+- Chat stays yours. Type "done with the 2 screens, that's $50" and tap Pay link. Your words stay, and the link goes after them.
+
 ## 0.1 (9) — 2026-11-12
 
 What to test:
