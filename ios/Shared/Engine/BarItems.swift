@@ -20,6 +20,8 @@ enum BarItems {
         case whoPaid
         case today
         case notes
+        /// A word from the prediction row: it replaces the word being typed.
+        case predict(String)
     }
 
     struct Item: Equatable, Identifiable {
@@ -58,6 +60,8 @@ enum BarItems {
         /// The typed words a money chip came from, for a server that sends no trigger: "$45 for the haircut".
         var moneyTrigger: String?
         var ready = ReadyChips.Input()
+        /// The word row while a word is typed. It shows only when no chip does.
+        var predictions: [Predictions.Slot] = []
         var now = Date()
     }
 
@@ -91,6 +95,9 @@ enum BarItems {
             if smart.isEmpty, let a = s.toBill { out.append(Item(id: "bill", title: "Invoice \(a.who)", action: .bill(a))) }
             if smart.isEmpty, let a = s.nextUp { out.append(Item(id: "next", title: "Next: \(a.who) \(a.time)", tone: .secondary)) }
             out = Array(out.prefix(3))
+            if out.isEmpty {
+                out = s.predictions.enumerated().map { Item(id: "predict.\($0.offset)", title: $0.element.title, action: .predict($0.element.word)) }
+            }
         case .chips(let chips, let fromCopied):
             for chip in chips.prefix(max(1, 3 - out.count)) {
                 out.append(Item(id: chip.kind, title: title(chip), detail: detail(chip, fromCopied: fromCopied), action: .chip(chip),

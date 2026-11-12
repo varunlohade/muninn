@@ -145,6 +145,8 @@ final class KeyboardModel: ObservableObject {
     @Published var calloutKeyID: String?
     /// The space bar is held: the finger moves the cursor and the key labels fade, like iOS.
     @Published var trackpad = false
+    /// The word row while a word is typed: as typed, what space would fix it to, completions.
+    @Published var predictions: [Predictions.Slot] = []
     @Published var returnStyle = ReturnStyle(.default)
     @Published var hasFullAccess = false
     @Published var paired = false
@@ -409,17 +411,44 @@ final class KeyboardModel: ObservableObject {
 
     static let wordEnders: Set<String> = [",", ".", "!", "?", ";", ":"]
 
+    /// What space would put in place of the word being typed, or nil.
+    private func pendingCorrection() -> (typed: String, fixed: String)? {
+        guard let host, host.autocorrection != .no else { return nil }
+        let taps = wordTaps.contains(where: \.isEmpty) ? nil : wordTaps
+        let decode: ((String) -> String?)? = Self.language.map { m in { TouchDecoder.correctWord($0, taps: taps, model: m) } }
+        return FixCheck.autocorrect(host.contextBeforeInput ?? "", names: appointments.compactMap(\.clientName), kept: keptWords, decode: decode)
+    }
+
     /// Fixes a clear typo in the word just typed, before space, return or punctuation goes in.
     private func autocorrect() -> (typed: String, fixed: String)? {
-        guard let host, host.autocorrection != .no else { return nil }
-        let language = Self.language
-        let taps = wordTaps.contains(where: \.isEmpty) ? nil : wordTaps
-        let decode: ((String) -> String?)? = language.map { m in { TouchDecoder.correctWord($0, taps: taps, model: m) } }
-        guard let c = FixCheck.autocorrect(host.contextBeforeInput ?? "", names: appointments.compactMap(\.clientName), kept: keptWords, decode: decode)
-        else { return nil }
+        guard let host, let c = pendingCorrection() else { return nil }
         for _ in 0..<c.typed.count { host.deleteBackward() }
         host.insert(c.fixed)
         return c
+    }
+
+    private func updatePredictions() {
+        guard let typed = Predictions.typedWord(host?.contextBeforeInput ?? "") else {
+            if !predictions.isEmpty { predictions = [] }
+            return
+        }
+        let lower = typed.lowercased()
+        let completions = Self.language?.completions(lower, limit: 3)
+            ?? UITextChecker().completions(forPartialWordRange: NSRange(location: 0, length: (lower as NSString).length), in: lower, language: "en_US") ?? []
+        predictions = Predictions.slots(typed: typed, correction: pendingCorrection()?.fixed, completions: completions, learned: keptWords)
+    }
+
+    /// A tap on the word row: that word replaces the one being typed, then a space. The typed word, tapped, is kept from then on.
+    func usePrediction(_ word: String) {
+        guard let host, let typed = Predictions.typedWord(host.contextBeforeInput ?? "") else { return }
+        host.playClick()
+        for _ in 0..<typed.count { host.deleteBackward() }
+        host.insert(word + " ")
+        if word == typed { keptWords.insert(typed.lowercased()) }
+        correction = nil
+        unlearned = nil
+        wordTaps = []
+        afterEdit()
     }
 
     /// Backspace right after an autocorrect puts the typed word back, and it stays as typed from then on.
@@ -609,6 +638,7 @@ final class KeyboardModel: ObservableObject {
         refreshAccess()
         updateAutoShift()
         updateFixable()
+        updatePredictions()
         if let u = undo, !(host?.contextBeforeInput ?? "").hasSuffix(u.replacement) { undo = nil }
         guard paired, suggestsWhileTyping else { return }
         if case .working = bar { return }
@@ -1093,7 +1123,7 @@ final class KeyboardModel: ObservableObject {
                                     added: added?.label, fieldEmpty: fieldEmpty, moneyTrigger: SmartDetect.moneyTrigger(typed),
                                     ready: .init(copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp, today: appointments,
                                                  unpaidCount: unpaidCount, watch: watch),
-                                    now: deps.now()))
+                                    predictions: predictions, now: deps.now()))
     }
 
     func perform(_ action: BarItems.Action) {
@@ -1111,6 +1141,7 @@ final class KeyboardModel: ObservableObject {
         case .whoPaid: openWhoPaid()
         case .today: showToday()
         case .notes: toggleNotes()
+        case .predict(let word): usePrediction(word)
         }
     }
 

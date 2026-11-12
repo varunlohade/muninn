@@ -74,6 +74,28 @@ final class LanguageModel: @unchecked Sendable {
         return lo < sorted.count && sorted[lo].hasPrefix(prefix)
     }
 
+    /// The commonest words that start with `prefix` and are longer than it, commonest first.
+    func completions(_ prefix: String, limit: Int) -> [String] {
+        var lo = 0, hi = sorted.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if sorted[mid] < prefix { lo = mid + 1 } else { hi = mid }
+        }
+        var best: [(String, Float)] = []
+        var i = lo
+        while i < sorted.count, sorted[i].hasPrefix(prefix) {
+            let w = sorted[i], f = logFreq[w]!
+            i += 1
+            guard w.count > prefix.count else { continue }
+            if best.count < limit || f > best[best.count - 1].1 {
+                best.append((w, f))
+                best.sort { $0.1 > $1.1 }
+                if best.count > limit { best.removeLast() }
+            }
+        }
+        return best.map(\.0)
+    }
+
     /// ln P(letter | the letters of the word so far). `word` is the current word up to the cursor, lowercased.
     func logP(_ letter: Character, after word: String) -> Double {
         guard let c = Self.index(letter) else { return log(1e-4) }
