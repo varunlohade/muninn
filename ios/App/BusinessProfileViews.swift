@@ -6,7 +6,7 @@ struct BusinessQuestion: View {
     static let examples = ["Barber shop", "Freelance app developer", "Bakery"]
 
     var body: some View {
-        VStack(spacing: Theme.Space.s) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: Theme.Space.xs) { chips(Self.examples) }
                 VStack(spacing: Theme.Space.xs) {
@@ -32,18 +32,19 @@ struct BusinessQuestion: View {
 /// The Settings row that opens "Your business".
 struct BusinessRow: View {
     var body: some View {
-        Card {
-            HStack(spacing: Theme.Space.s) {
-                IconCircle(systemImage: "storefront")
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text("Your business").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
-                    Text("What you sell, so \"how much?\" reads right.").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
-                        .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.system(size: 13)).foregroundStyle(Theme.Color.text3)
+        HStack(spacing: Theme.Space.s) {
+            IconTile(icon: .tag, fill: Color(hex: 0xF4D35E))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Your business").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                Text("What you sell, so \"how much?\" reads right.").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                    .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
             }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.Color.text3)
         }
+        .padding(.leading, 10).padding(.trailing, 14).padding(.vertical, 10)
+        .frame(minHeight: Theme.Metric.rowHeight)
+        .rowSurface()
     }
 }
 

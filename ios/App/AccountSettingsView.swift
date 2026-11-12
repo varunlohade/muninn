@@ -16,14 +16,14 @@ struct AccountSection: View {
             Card {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     Text("Signed in with").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
-                    ForEach(methods, id: \.self) { m in
-                        Text(m).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
+                    ForEach(Array(methods.enumerated()), id: \.offset) { i, m in
+                        if i > 0 { DashedLine() }
+                        Text(m).font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1)
                     }
                     .accessibilityIdentifier("account.method")
                     if let info, info.email == nil {
                         Button("Add an email") { addEmail = true }
-                            .font(Theme.Font.label).foregroundStyle(Theme.Color.text1)
-                            .frame(minHeight: Theme.Metric.iconButton)
+                            .buttonStyle(QuietButton(small: true, wide: false))
                             .accessibilityIdentifier("account.addEmail")
                     }
                 }
@@ -37,24 +37,26 @@ struct AccountSection: View {
                     .accessibilityIdentifier("account.error")
             }
             Button(busy ? "One moment\u{2026}" : "Log out") { Task { busy = true; await session.logout(); busy = false } }
-                .buttonStyle(PrimaryButton())
+                .buttonStyle(QuietButton())
                 .disabled(busy)
                 .padding(.horizontal, Theme.Metric.cardInset)
                 .accessibilityIdentifier("account.logout")
             if confirmDelete {
                 Card {
                     VStack(alignment: .leading, spacing: Theme.Space.s) {
-                        Text("Delete your account?").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Delete your account?").font(Theme.Font.sans(17, 500)).foregroundStyle(Theme.Color.text1)
+                            Spacer()
+                            StatusPill(text: "Needs your OK", tone: .due)
+                        }
                         Text("Your clients, invoices, catalog and settings go for good. PayPal keeps its own records.")
                             .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: Theme.Space.s) {
                             Button("Cancel") { confirmDelete = false }
-                                .font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
-                                .frame(maxWidth: .infinity, minHeight: Theme.Metric.secondaryButton)
+                                .buttonStyle(QuietButton())
                                 .accessibilityIdentifier("account.delete.cancel")
                             Button("Delete", role: .destructive) { Task { await delete() } }
-                                .font(Theme.Font.cardTitle)
-                                .frame(maxWidth: .infinity, minHeight: Theme.Metric.secondaryButton)
+                                .buttonStyle(TactileButton(kind: .dark))
                                 .disabled(busy)
                                 .accessibilityIdentifier("account.delete.confirm")
                         }
@@ -63,7 +65,8 @@ struct AccountSection: View {
                 .padding(.horizontal, Theme.Metric.cardInset)
             } else {
                 Button("Delete account", role: .destructive) { error = nil; confirmDelete = true }
-                    .font(Theme.Font.label).frame(minHeight: Theme.Metric.iconButton).padding(.horizontal, Theme.Metric.margin)
+                    .font(Theme.Font.sans(14, 500)).foregroundStyle(Theme.Color.due)
+                    .frame(minHeight: Theme.Metric.iconButton).padding(.horizontal, Theme.Metric.margin)
                     .accessibilityIdentifier("account.delete")
             }
         }

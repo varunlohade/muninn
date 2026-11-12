@@ -52,9 +52,12 @@ struct OnboardingView: View {
     var body: some View {
         Group {
             if step == .intro {
-                // There is no sign-in: an earlier account comes back with "Continue with Apple" on Home, so both go on.
+                // "I already have an account" goes straight to sign-in; Home offers the keyboard setup afterwards.
                 HeroView(addKeyboard: { Task { await advance(from: .intro) } },
-                         haveAccount: { Task { await advance(from: .intro) } })
+                         haveAccount: {
+                             UserDefaults.standard.set(true, forKey: Self.introSeenKey)
+                             withAnimation(stepMotion) { step = .start }
+                         })
                     .transition(.opacity)
             } else {
                 steps.transition(.opacity)
