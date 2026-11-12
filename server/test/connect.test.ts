@@ -110,6 +110,47 @@ test('return: PayPal confirms the merchant, the app gets a one-time code, and th
   assert.equal((await s.call(null, 'GET', returnQuery(tracking, 'SELLER12345'))).headers.get('location'), 'muninn://paypal-connected?result=failed');
 });
 
+test('finish: Sign in with PayPal fills the business name from PayPal once, and never over one the owner set', async () => {
+  const p = fakePartner({ status: { legalName: 'Fade Lab LLC' } });
+  const s = setup({ partner: p.partner });
+  const signIn = async (token: string, merchant: string) => {
+    const { tracking } = await startConnect(s, token, p.calls);
+    p.onboard(tracking, merchant);
+    assert.equal((await finish(s, token, await returnCode(s, tracking, merchant))).status, 200);
+  };
+  const a = s.device();
+  await signIn(a.token, 'SELLER11111');
+  assert.equal(s.db.getProfile(a.userId)?.business_name, 'Fade Lab LLC');
+  const b = s.device();
+  await s.call(b.token, 'PUT', '/v1/profile', { business_name: 'Rae Hair', tone: 'warm' });
+  await signIn(b.token, 'SELLER22222');
+  assert.equal(s.db.getProfile(b.userId)?.business_name, 'Rae Hair');
+});
+
+test('finish: the currency comes from PayPal, and a still-default name is filled in', async () => {
+  const p = fakePartner({ status: { legalName: 'Fade Lab GmbH', currency: 'EUR' } });
+  const s = setup({ partner: p.partner });
+  const a = s.device();
+  // The business question saved first leaves the default name "my shop".
+  await s.call(a.token, 'PUT', '/v1/profile/business', { description: 'Barber shop' });
+  assert.equal(s.db.getProfile(a.userId)?.business_name, 'my shop');
+  const { tracking } = await startConnect(s, a.token, p.calls);
+  p.onboard(tracking, 'SELLER33333');
+  assert.equal((await finish(s, a.token, await returnCode(s, tracking, 'SELLER33333'))).status, 200);
+  const prof = s.db.getProfile(a.userId);
+  assert.deepEqual([prof?.business_name, prof?.currency], ['Fade Lab GmbH', 'EUR']);
+  assert.equal((await (await s.call(a.token, 'GET', '/v1/profile')).json() as any).profile.description, 'Barber shop');
+
+  // A currency Muninn does not support keeps USD.
+  const q = fakePartner({ status: { legalName: 'Yen Cuts', currency: 'JPY' } });
+  const t = setup({ partner: q.partner });
+  const b = t.device();
+  const started = await startConnect(t, b.token, q.calls);
+  q.onboard(started.tracking, 'SELLER44444');
+  await finish(t, b.token, await returnCode(t, started.tracking, 'SELLER44444'));
+  assert.deepEqual([t.db.getProfile(b.userId)?.business_name, t.db.getProfile(b.userId)?.currency], ['Yen Cuts', 'USD']);
+});
+
 test('return: an unknown or expired tracking id, a merchant PayPal does not confirm, or a declined consent never connects', async () => {
   let t = Date.now();
   const p = fakePartner();
@@ -321,7 +362,7 @@ test('provider partner: one referral asks for every feature; merchant status rea
     assert.equal(await partner.merchantIdForTracking('mu1'), 'SELLER12345');
     assert.ok(sent.some((x) => x.path === '/v1/customer/partners/PARTNER123/merchant-integrations?tracking_id=mu1'));
     assert.deepEqual(await partner.merchantStatus('SELLER12345'), {
-      merchantId: 'SELLER12345', trackingId: 'mu1', paymentsReceivable: true, emailConfirmed: false, primaryEmail: 'seller@shop.test', permissionsGranted: true,
+      merchantId: 'SELLER12345', trackingId: 'mu1', paymentsReceivable: true, emailConfirmed: false, primaryEmail: 'seller@shop.test', permissionsGranted: true, legalName: null, currency: null,
     });
     assert.equal(await partner.merchantStatus('OTHER000001'), null);
   } finally {

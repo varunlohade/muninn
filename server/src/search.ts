@@ -35,6 +35,101 @@ export function matchName(query: string, names: string[]): { match: Match; names
   return typo.length === 1 ? { match: 'did_you_mean', names: typo } : { match: 'none', names: [] };
 }
 
+// Words that say how an item is sold, not what it is: "Translation (per word)", "Wedding package", "Coaching session".
+const SOLD_AS = new Set([
+  'a', 'an', 'the', 'of', 'for', 'with', 'and', 'my', 'your', 'one', 'per', 'each', 'ea', 'x', 'by', 'in', 'on', 'to', 'up', 'from', 'some', 'any',
+  'price', 'prices', 'rate', 'rates', 'fee', 'fees', 'cost', 'quote', 'charge', 'total',
+  'package', 'pkg', 'pack', 'bundle', 'service', 'plan', 'basic', 'standard', 'regular', 'full', 'single', 'unit', 'item', 'piece', 'pc',
+  'session', 'hour', 'hourly', 'hr', 'h', 'min', 'minute', 'day', 'daily', 'half', 'week', 'weekly', 'month', 'monthly', 'mo', 'year', 'yearly', 'annual',
+  'hrs', 'mins', 'pcs', 'wk', 'yr', 'lbs', 'pp', 'night', 'nightly', 'inch', 'cm', 'ft', 'sq', 'yard', 'yd', 'serve', 'serves', 'box', 'set', 'pair', 'size', 'word', 'page', 'visit', 'job', 'order', 'dozen', 'doz', 'kg', 'lb', 'sqft', 'seat', 'user', 'person', 'head',
+]);
+
+const GLUE = new Set(['a', 'an', 'the', 'of', 'for', 'with', 'and', 'per', 'x', 'by', 'in', 'on', 'to']);
+
+/** "Photographers" → "photograph", "cleaning" → "clean", "cakes" → "cake": enough to compare two words. */
+function stem(w: string): string {
+  let s = w;
+  if (s.length > 4 && s.endsWith('ies')) s = `${s.slice(0, -3)}y`;
+  else if (s.length > 4 && /(?:s|x|z|ch|sh)es$/.test(s)) s = s.slice(0, -2);
+  else if (s.length > 3 && s.endsWith('s') && !s.endsWith('ss')) s = s.slice(0, -1);
+  for (const end of ['ing', 'er', 'ed', 'y']) {
+    if (s.length - end.length >= 4 && s.endsWith(end)) return s.slice(0, -end.length);
+  }
+  return s;
+}
+
+const words = (s: string) => s.toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '').match(/\p{L}+/gu) ?? [];
+const content = (s: string) => words(s).filter((w) => w.length > 1 && !SOLD_AS.has(w) && !SOLD_AS.has(stem(w))).map(stem);
+const sameWord = (a: string, b: string) => a === b || (Math.min(a.length, b.length) >= 5 && editDistance(a, b) <= 1);
+
+/** The words that say what an item is. "(per hour)", "(8 inch)", "(flat tire)" only add to them, so they are not needed. */
+function itemWords(name: string): { need: string[]; all: string[] } {
+  const all = content(name);
+  const outside = content(name.replace(/\([^)]*\)/g, ' '));
+  return { need: outside.length ? outside : all, all };
+}
+
+/**
+ * The one catalog name that `phrase` (the model's item, "wedding photography") names, or null.
+ * Each word of the phrase must be in the item or in the business description (`about`), or be a word for how it
+ * is sold. Best: the phrase has every main word of the item. Else the one item that has the phrase's words
+ * ("shave" for "Hot towel shave"). So "window cleaning" never becomes "Deep clean": a different item keeps its
+ * own name, and the owner adds its price.
+ */
+export function catalogItemFor(phrase: string | null | undefined, names: string[], about = ''): string | null {
+  const said = content(phrase ?? '');
+  if (!said.length) return null;
+  const known = new Set(content(about));
+  const read = names.map((n) => ({ n, ...itemWords(n) })).filter((x) => x.all.length);
+  const inItem = (x: { all: string[] }, p: string) => x.all.some((w) => sameWord(p, w));
+  const fair = read.filter((x) => said.every((p) => inItem(x, p) || known.has(p)) && said.some((p) => inItem(x, p)));
+  const full = fair.filter((x) => x.need.every((w) => said.some((p) => sameWord(p, w))));
+  // "Haircut" and "Kids haircut" both fit "kids haircut": the one that uses the most words wins, a tie gives none.
+  const best = Math.max(0, ...full.map((x) => x.need.length));
+  const top = full.filter((x) => x.need.length === best);
+  if (top.length !== 1) return top.length ? null : fair.length === 1 ? fair[0].n : null;
+  // With other items that fit too, the phrase must say what sets this one apart: "deep cleaning" picks "Deep clean",
+  // but "cleaning" does not pick "Standard clean" over "Deep clean".
+  // A phrase with every word of the name ("translation" for "Translation (per word)") picks it too.
+  const others = fair.filter((x) => x !== top[0]);
+  const apart = said.some((p) => inItem(top[0], p) && !others.some((o) => inItem(o, p)));
+  const typed = words(phrase ?? '').map(stem);
+  const whole = words(top[0].n.replace(/\([^)]*\)/g, ' ')).filter((w) => !GLUE.has(w)).every((w) => typed.some((p) => sameWord(p, stem(w))));
+  return !others.length || apart || whole ? top[0].n : null;
+}
+
+/**
+ * The catalog name written in `text` with every word of the name (outside brackets), or null. "and 2 extra hours?"
+ * names "Extra hour". When two names fit, the one with more words wins ("kids haircut" names "Kids haircut", not "Haircut").
+ */
+export function namesItem(text: string, names: string[]): string | null {
+  const said = words(text).map(stem);
+  const hits = names
+    .map((n) => ({ n, need: words(n.replace(/\([^)]*\)/g, ' ')).filter((w) => !GLUE.has(w)).map(stem) }))
+    .filter((x) => x.need.length && x.need.every((w) => said.some((p) => sameWord(p, w))))
+    .sort((a, b) => b.need.length - a.need.length);
+  return hits.length && (hits.length === 1 || hits[0].need.length > hits[1].need.length) ? hits[0].n : null;
+}
+
+/** True when `text` has a main word of one of these item names ("walks" for "Dog walk (30 min)"). */
+export function mentionsItemWord(text: string, names: string[]): boolean {
+  const said = content(text);
+  return names.some((n) => itemWords(n).need.some((w) => said.some((p) => sameWord(p, w))));
+}
+
+/**
+ * True when `phrase` is the kind of thing the business sells but not one item: "cleaning" for a cleaner with a deep
+ * clean and a standard clean. Two or more catalog items share its words, and its other words are the business's own.
+ * Then the price question gets the whole catalog, not "Add a price".
+ */
+export function vagueItem(phrase: string | null | undefined, names: string[], about = ''): boolean {
+  const said = content(phrase ?? '');
+  if (!said.length) return false;
+  const known = new Set(content(about));
+  const has = (n: string, p: string) => content(n).some((w) => sameWord(p, w));
+  return names.filter((n) => said.some((p) => has(n, p))).length >= 2 && said.every((p) => known.has(p) || names.some((n) => has(n, p)));
+}
+
 /**
  * How much a lookup is worth showing, 0 to 1: the phrase (a full lookup phrase 0.6, unsure 0.3) plus the name
  * (exact 0.4, did-you-mean 0.25, several 0.2, unknown 0). 0.8 or more shows with no model call; 0.5 to 0.8 asks jev.

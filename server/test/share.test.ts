@@ -76,7 +76,10 @@ test('share: ids are random and cannot be listed or guessed', async () => {
   const chars = new Set([...ids].join(''));
   assert.ok(chars.size > 30, 'ids use the whole base64url alphabet, not a counter');
   const one = [...ids][0];
-  for (const path of ['/d/', '/d', '/v1/drawings', `/d/${one}`, `/d/${one.slice(0, -1)}A.png`, `/d/${one}.png.json`, `/d/..%2F${one}.png`]) {
+  // A guess one character off: a middle character swapped for a different base64url character, so it never equals the real id.
+  const mid = one.length >> 1;
+  const near = one.slice(0, mid) + (one[mid] === 'A' ? 'B' : 'A') + one.slice(mid + 1);
+  for (const path of ['/d/', '/d', '/v1/drawings', `/d/${one}`, `/d/${near}.png`, `/d/${one}.png.json`, `/d/..%2F${one}.png`]) {
     const res = await view(path);
     assert.ok([401, 404].includes(res.status), `${path}: ${res.status}`);
   }

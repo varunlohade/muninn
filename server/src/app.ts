@@ -14,17 +14,19 @@ import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './mo
 import { log } from './log.ts';
 import { clean } from './text.ts';
 import {
-  askQuick, deviceSignal, deviceTitle, deviceTrigger, intervalOf, lastSentence, mentions, moneyTrigger, nameIn, noteText, onlyKnownWords, quick, repeatEnds,
+  askQuick, commandIntent, deviceSignal, deviceTitle, deviceTrigger, intervalOf, lastSentence, mentions, moneyTrigger, nameIn, noteText, onlyKnownWords, quick, repeatEnds,
   typedEmails, withoutInterval, detectLookup, type Quick,
 } from './quick.ts';
-import { ASK_AT, SHOW_AT, chipLabel, createSearch, importance, invoiceState, orderState } from './search.ts';
+import { ASK_AT, SHOW_AT, catalogItemFor, chipLabel, createSearch, importance, invoiceState, mentionsItemWord, namesItem, orderState } from './search.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { createSlack, SlackWebhookUrl } from './slack.ts';
 import { RANGES, createBusiness } from './business.ts';
 import { createAppleVerifier, type AppleVerifier } from './apple.ts';
-import { createPayPalConnect } from './connect.ts';
+import { DEFAULT_BUSINESS_NAME, createPayPalConnect } from './connect.ts';
 import { createMore } from './actions-more.ts';
+import { buildChart, monthStart, zoneOr } from './chart.ts';
+import { PasswordBusyError, dummyHash, hashPassword, needsRehash, passwordProblem, verifyPassword } from './password.ts';
 
 export type Deps = {
   db: Db; cipher: Cipher; ai: Ai; paypal: PayPalProvider; now?: () => number;
@@ -32,11 +34,11 @@ export type Deps = {
   /** Runs once for each user that Sign in with Apple creates. The demo server seeds the demo business here. */
   onNewUser?: (userId: string) => void;
 };
-export type Env = { Variables: { userId: string; idemSkip?: boolean } };
+export type Env = { Variables: { userId: string; tokenHash: string; idemSkip?: boolean } };
 export type Chip = { kind: string; label: string; payload: Record<string, unknown>; needs_confirm: boolean; trigger?: string };
 
 const DAY = 86_400_000;
-const DEFAULT_PROFILE = { business_name: 'my shop', tone: 'friendly and short', currency: 'USD' };
+const DEFAULT_PROFILE = { business_name: DEFAULT_BUSINESS_NAME, tone: 'friendly and short', currency: 'USD' };
 
 class HttpError extends Error {
   status: 400 | 401 | 404 | 409 | 413 | 428 | 429;
@@ -46,13 +48,19 @@ class HttpError extends Error {
   }
 }
 
-function createLimiter({ limit, windowMs }: { limit: number; windowMs: number }) {
+// Fixed windows per key. The map keeps keys in the order their windows started, so the first key is always the oldest:
+// a full map drops expired keys from the front, then the oldest live key. It never clears everyone's counts.
+export function createLimiter({ limit, windowMs, maxKeys = 10_000 }: { limit: number; windowMs: number; maxKeys?: number }) {
   const hits = new Map<string, { n: number; reset: number }>();
   const entry = (key: string) => {
     const now = Date.now();
     let h = hits.get(key);
     if (!h || h.reset <= now) {
-      if (hits.size > 10_000) hits.clear();
+      hits.delete(key);
+      for (const [k, v] of hits) {
+        if (hits.size < maxKeys && v.reset > now) break;
+        hits.delete(k);
+      }
       h = { n: 0, reset: now + windowMs };
       hits.set(key, h);
     }
@@ -77,17 +85,30 @@ function rateLimiter(bucket: keyof typeof config.rateLimit, keyOf: (c: Context<E
   };
 }
 
+/** The limit key for an address: IPv4 as is, IPv6 by its /64 (one home or phone usually owns a whole /64). */
+export function ipKey(ip: string): string {
+  const v = ip.trim().replace(/%.*$/, '').toLowerCase();
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v);
+  if (mapped) return mapped[1];
+  if (!v.includes(':')) return v;
+  const [head, tail] = v.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+  return `${groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':')}::/64`;
+}
+
 function clientIp(c: Context<Env>): string {
   if (config.trustProxy && config.clientIpHeader) {
     const ip = c.req.header(config.clientIpHeader)?.trim();
-    if (ip) return ip;
+    if (ip) return ipKey(ip);
   }
   if (config.trustProxy) {
     const hops = (c.req.header('x-forwarded-for') ?? '').split(',').map((h) => h.trim()).filter(Boolean);
-    if (hops.length) return hops[hops.length - 1];
+    if (hops.length) return ipKey(hops[hops.length - 1]);
   }
   try {
-    return getConnInfo(c).remote.address ?? 'direct';
+    return ipKey(getConnInfo(c).remote.address ?? 'direct');
   } catch {
     return 'direct';
   }
@@ -146,6 +167,7 @@ const ReviewUrl = z.string().trim().max(500).refine((v) => REVIEW_LINK.some((r) 
 const ProfileBody = z.object({
   business_name: CleanText(80), tone: CleanText(200), currency: Currency.default('USD'), review_url: ReviewUrl.nullable().optional(),
 }).strict();
+const BusinessBody = z.object({ description: CleanText(300) }).strict();
 const ItemDetails = {
   description: z.string().transform(clean).pipe(z.string().max(140)),
   category: z.string().transform(clean).pipe(z.string().max(40)),
@@ -164,8 +186,16 @@ const ReorderBody = z.object({ ids: z.array(z.string().min(1).max(64)).max(500) 
 const DisputeId = z.string().regex(/^PP-[A-Z0-9-]{3,40}$/);
 const AppleAuthBody = z.object({ identity_token: z.string().min(20).max(4096), nonce: z.string().min(16).max(128) }).strict();
 const DeviceAuthBody = z.object({ device_id: z.string().uuid() }).strict();
+// The email is trimmed and lowercased before it is hashed or stored. The password rules run only where a password is set.
+const EmailAuthBody = z.object({ email: z.string().trim().toLowerCase().pipe(z.email().max(254)), password: z.string().min(1).max(1024) }).strict();
 const SlackBody = z.object({ webhook_url: SlackWebhookUrl.nullable() }).strict();
 const DisputeMessageBody = z.object({ message: CleanText(2000) }).strict();
+// Full months of history and estimated months ahead, as the chart chip's payload asks.
+// tz: the owner's IANA time zone for calendar months; a missing or unknown zone means UTC.
+const ChartQuery = z.object({
+  back: z.coerce.number().int().min(2).max(12).default(6), ahead: z.coerce.number().int().min(1).max(6).default(3),
+  tz: z.string().max(64).optional(),
+});
 
 export function createApp(deps: Deps) {
   const { db, cipher, ai, paypal } = deps;
@@ -202,9 +232,13 @@ export function createApp(deps: Deps) {
     return schema.parse(raw);
   };
   const profileOf = (userId: string) => db.getProfile(userId) ?? DEFAULT_PROFILE;
+  /** What the business does, in the owner's words, or '' when the owner has not said. */
+  const businessOf = (userId: string) => dec(userId, db.getDescriptionEnc(userId)) ?? '';
+  const replyProfile = (userId: string) => ({ ...profileOf(userId), description: businessOf(userId) });
   const catalogText = (items: CatalogItem[]) => items.map((i) => `${i.name} ${formatMoney(i.price_cents, i.currency)}`).join('; ');
   const requestIdFor = (userId: string, key: string) => sha256(`${userId}:${key}`).slice(0, 36);
-  const connect = createPayPalConnect({ db, cipher, paypal, now });
+  // A connect or disconnect changes whose PayPal sales the chart reads.
+  const connect = createPayPalConnect({ db, cipher, paypal, now, onChange: (userId) => biz.forgetHistory(userId) });
   const integrations = createIntegrations(db, cipher, now, connect.label);
   const slack = createSlack(db, cipher, now);
   const biz = createBusiness({ db, ai, paypal, integrations, dec, now, isConnected: (userId) => !connect.isDemo(userId) });
@@ -226,6 +260,11 @@ export function createApp(deps: Deps) {
   app.onError((err, c) => {
     if (err instanceof z.ZodError) return c.json({ error: 'invalid request', issues: err.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`) }, 400);
     if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
+    if (err instanceof PasswordBusyError) {
+      log('password_busy', { path: c.req.path });
+      c.header('Retry-After', '5');
+      return c.json({ error: 'busy, try again in a few seconds' }, 503);
+    }
     if (err instanceof PayPalError) {
       log('paypal_error', { path: c.req.path, err: err.message });
       return c.json({ error: 'PayPal request failed', detail: err.message }, 502);
@@ -249,22 +288,48 @@ export function createApp(deps: Deps) {
     });
   });
 
+  // ---- new accounts: a cap per hour across the server, and a smaller budget for the demo seed.
+  // Past the seed budget a new user simply starts empty.
+  const newAccounts = createLimiter(config.rateLimit.newAccounts);
+  const seedBudget = createLimiter(config.rateLimit.demoSeed);
+  const TOO_MANY_ACCOUNTS = { error: 'too many new accounts right now, try again later' };
+  const welcome = (userId: string) => {
+    if (!deps.onNewUser) return;
+    if (seedBudget.hit('all')) return log('demo_seed_skipped', { user_id: userId, reason: 'budget' });
+    deps.onNewUser(userId);
+  };
+
   // ---- Sign in with Apple: the one /v1 route with no device token. It sits before the token check on purpose.
   // Every failure is a plain 401, so a caller learns nothing about which check failed.
   const verifyApple = deps.apple ?? createAppleVerifier({ now });
+  // A single-use nonce. The app sends SHA-256(nonce) to Apple and the raw nonce back to us within 10 minutes.
+  app.get('/v1/auth/apple/nonce', rateLimiter('auth', clientIp), (c) => {
+    const nonce = randomBytes(32).toString('base64url');
+    db.addAppleNonce(sha256(nonce), now() + config.apple.nonceTtlMs, now());
+    return c.json({ nonce, expires_in_s: config.apple.nonceTtlMs / 1000 });
+  });
+  // Checks the token, then uses up the nonce. A nonce we never gave out passes only when config.apple.requireServerNonce is off.
+  const appleSub = async (raw: unknown) => {
+    const b = AppleAuthBody.parse(raw);
+    const { sub } = await verifyApple(b.identity_token, b.nonce);
+    const nonce = db.useAppleNonce(sha256(b.nonce), now());
+    if (nonce === 'spent' || (nonce === 'unknown' && config.apple.requireServerNonce)) throw new Error(`nonce ${nonce}`);
+    return sub;
+  };
   app.post('/v1/auth/apple', rateLimiter('auth', clientIp), async (c) => {
     let sub: string;
     try {
-      const b = AppleAuthBody.parse(await c.req.json());
-      sub = (await verifyApple(b.identity_token, b.nonce)).sub;
+      sub = await appleSub(await c.req.json());
     } catch (e) {
       log('apple_auth_rejected', { reason: e instanceof z.ZodError ? 'bad body' : (e as Error).message });
       return c.json({ error: 'unauthorized' }, 401);
     }
-    const { userId, created } = db.userForAppleSub(cipher.lookupHash('apple-sub', sub));
+    const subHash = cipher.lookupHash('apple-sub', sub);
+    if (!db.hasAppleSub(subHash) && newAccounts.hit('all')) return c.json(TOO_MANY_ACCOUNTS, 429);
+    const { userId, created } = db.userForAppleSub(subHash);
     const token = randomToken('pkd');
     db.addDevice(userId, sha256(token), 'apple');
-    if (created) deps.onNewUser?.(userId);
+    if (created) welcome(userId);
     log('apple_auth', { user_id: userId, created });
     return c.json({ device_token: token });
   });
@@ -273,26 +338,125 @@ export function createApp(deps: Deps) {
   // Every call makes a new user. device_id is never looked up, so nobody gets another user's token by sending their id.
   app.post('/v1/auth/device', rateLimiter('deviceAuth', clientIp), async (c) => {
     if (!DeviceAuthBody.safeParse(await c.req.json().catch(() => null)).success) return c.json({ error: 'device_id must be a UUID' }, 400);
+    if (newAccounts.hit('all')) return c.json(TOO_MANY_ACCOUNTS, 429);
     const userId = db.createUser();
     const token = randomToken('pkd');
     db.addDevice(userId, sha256(token), 'device');
-    deps.onNewUser?.(userId);
+    welcome(userId);
     log('device_auth', { user_id: userId });
     return c.json({ device_token: token });
+  });
+
+  // ---- email + password: sign-up and login sit before the token check on purpose.
+  // TODO: no email verification yet. Anyone can sign up with an address they do not own. Add a verify link before launch.
+  // Login answers the same 401 for an unknown email and a wrong password, after the same scrypt work.
+  const WRONG = { error: 'wrong email or password' };
+  const LOCKED = { error: 'too many tries, wait a few minutes and try again' };
+  const emailKey = (email: string) => cipher.lookupHash('email', email);
+  // Counts this try BEFORE any password check, so parallel guesses cannot slip past the limits:
+  // per (email, client address) 5 tries then a 15-minute wait; per email 20 an hour, then a growing delay.
+  // Applies to any email, with or without an account. Returns the 429 to send, or the keys to release on success.
+  const ea = config.emailAuth;
+  const tryEmail = (c: Context<Env>, key: string): { blocked: Response } | { pair: string; key: string } => {
+    const pair = cipher.lookupHash('email-ip', `${key}:${clientIp(c)}`);
+    const until = db.reserveAuthAttempt([
+      { key: pair, max: ea.perIpMax, windowMs: ea.perIpWindowMs, lockFor: () => ea.perIpLockMs },
+      { key, max: ea.perEmailMax, windowMs: ea.perEmailWindowMs, lockFor: (n) => Math.min(1000 * 2 ** (n - ea.perEmailMax), ea.maxDelayMs) },
+    ], now());
+    if (!until) return { pair, key };
+    c.header('Retry-After', String(Math.max(1, Math.ceil((until - now()) / 1000))));
+    return { blocked: c.json(LOCKED, 429) };
+  };
+  // A right password (or no password check at all) gives the try back: the address is cleared, the email count drops by one.
+  const release = (t: { pair: string; key: string }) => db.releaseAuthAttempt([t.pair], [t.key]);
+  // A hash that never ran (the queue was full) gives the try back, then the 503 goes out.
+  const unlessBusy = async <T>(t: { pair: string; key: string }, work: Promise<T>): Promise<T> => {
+    try {
+      return await work;
+    } catch (e) {
+      if (e instanceof PasswordBusyError) db.releaseAuthAttempt([], [t.pair, t.key]);
+      throw e;
+    }
+  };
+  // True only for a real hash and the right password. A good login redoes a hash made with older scrypt settings;
+  // when hashing is busy that waits for the next login.
+  const passwordOk = async (t: { pair: string; key: string }, user: { id: string; password_hash: string | null } | undefined, password: string) => {
+    const hash = user?.password_hash;
+    const ok = (await unlessBusy(t, (async () => verifyPassword(password, hash ?? (await dummyHash())))())) && !!hash;
+    if (ok) {
+      release(t);
+      if (needsRehash(hash)) {
+        try {
+          db.setPasswordHash(user.id, await hashPassword(password));
+        } catch (e) {
+          if (!(e instanceof PasswordBusyError)) throw e;
+        }
+      }
+    }
+    return ok;
+  };
+  // Every sign-in makes a new random token; only its hash is stored, and it expires after config.session.ttlMs.
+  const newSession = (userId: string, label: string) => {
+    const token = randomToken('pkd');
+    db.addDevice(userId, sha256(token), label);
+    return token;
+  };
+
+  app.post('/v1/auth/email/signup', rateLimiter('emailAuth', clientIp), async (c) => {
+    const b = EmailAuthBody.safeParse(await c.req.json().catch(() => null));
+    if (!b.success) return c.json({ error: 'a valid email and a password are required' }, 400);
+    const problem = passwordProblem(b.data.password);
+    if (problem) return c.json({ error: problem }, 400);
+    const key = emailKey(b.data.email);
+    const t = tryEmail(c, key);
+    if ('blocked' in t) return t.blocked;
+    if (!db.userForEmail(key) && newAccounts.hit('all')) {
+      release(t);
+      return c.json(TOO_MANY_ACCOUNTS, 429);
+    }
+    const { userId, created } = db.createEmailUser(key, (id) => cipher.encrypt(id, b.data.email), await unlessBusy(t, hashPassword(b.data.password)));
+    // The email has an account already. The right password signs in, so a second tap never makes a second account.
+    if (!created && !(await passwordOk(t, db.userForEmail(key), b.data.password))) {
+      log('email_signup_rejected', { reason: 'taken' });
+      return c.json({ error: 'this email already has an account, log in instead' }, 409);
+    }
+    if (created) {
+      release(t);
+      welcome(userId);
+    }
+    log('email_signup', { user_id: userId, created });
+    return c.json({ device_token: newSession(userId, 'email'), created });
+  });
+
+  app.post('/v1/auth/email/login', rateLimiter('emailAuth', clientIp), async (c) => {
+    const b = EmailAuthBody.safeParse(await c.req.json().catch(() => null));
+    if (!b.success) return c.json(WRONG, 401);
+    const t = tryEmail(c, emailKey(b.data.email));
+    if ('blocked' in t) return t.blocked;
+    const user = db.userForEmail(t.key);
+    if (!(await passwordOk(t, user, b.data.password)) || !user) {
+      log('email_login_rejected', {});
+      return c.json(WRONG, 401);
+    }
+    log('email_login', { user_id: user.id });
+    return c.json({ device_token: newSession(user.id, 'email') });
   });
 
   // ---- auth: every other /v1 route resolves the user from the device token, never from the body
   app.use('/v1/*', async (c, next) => {
     const m = /^Bearer (pkd_[A-Za-z0-9_-]{20,100})$/.exec(c.req.header('authorization') ?? '');
-    const userId = m ? db.userForTokenHash(sha256(m[1])) : undefined;
+    const tokenHash = m ? sha256(m[1]) : '';
+    const userId = m ? db.userForTokenHash(tokenHash) : undefined;
     if (!userId) return c.json({ error: 'unauthorized' }, 401);
     c.set('userId', userId);
+    c.set('tokenHash', tokenHash);
     await next();
   });
   const byUser = (c: Context<Env>) => c.get('userId');
   app.use('/v1/suggest', rateLimiter('suggest', byUser));
   app.use('/v1/reply', rateLimiter('suggest', byUser));
   app.use('/v1/ask', rateLimiter('suggest', byUser));
+  app.use('/v1/chart', rateLimiter('suggest', byUser));
   app.use('/v1/actions/*', rateLimiter('actions', byUser));
   app.use('/v1/write/*', rateLimiter('write', byUser));
   app.use('/v1/disputes/:id/message', rateLimiter('actions', byUser));
@@ -306,8 +470,7 @@ export function createApp(deps: Deps) {
     const userId = c.get('userId');
     let sub: string;
     try {
-      const b = AppleAuthBody.parse(await c.req.json());
-      sub = (await verifyApple(b.identity_token, b.nonce)).sub;
+      sub = await appleSub(await c.req.json());
     } catch (e) {
       log('apple_link_rejected', { user_id: userId, reason: e instanceof z.ZodError ? 'bad body' : (e as Error).message });
       return c.json({ error: 'unauthorized' }, 401);
@@ -324,14 +487,68 @@ export function createApp(deps: Deps) {
     return c.json({ linked: true, recovered: true, device_token: token });
   });
 
+  // ---- add an email and password to the signed-in account (device or Apple), the email twin of /v1/auth/apple/link.
+  // If the email already has an account and the password is right, the caller gets a token for that account instead.
+  // The password rules run before the email is looked up, so the answer to a weak password says nothing about the email.
+  app.post('/v1/auth/email/link', rateLimiter('emailAuth', clientIp), rateLimiter('emailAuth', byUser), async (c) => {
+    const userId = c.get('userId');
+    const b = EmailAuthBody.safeParse(await c.req.json().catch(() => null));
+    if (!b.success) return c.json({ error: 'a valid email and a password are required' }, 400);
+    const problem = passwordProblem(b.data.password);
+    if (problem) return c.json({ error: problem }, 400);
+    const t = tryEmail(c, emailKey(b.data.email));
+    if ('blocked' in t) return t.blocked;
+    const held = db.userForEmail(t.key);
+    if (held) {
+      if (!(await passwordOk(t, held, b.data.password))) return c.json(WRONG, 401);
+      if (held.id === userId) return c.json({ linked: true, recovered: false });
+      log('email_link', { user_id: held.id, recovered: true, from_user_id: userId });
+      return c.json({ linked: true, recovered: true, device_token: newSession(held.id, 'email') });
+    }
+    release(t);
+    if (!db.linkEmail(userId, t.key, cipher.encrypt(userId, b.data.email), await hashPassword(b.data.password))) {
+      return c.json({ error: 'this account already has an email' }, 409);
+    }
+    log('email_link', { user_id: userId, recovered: false });
+    return c.json({ linked: true, recovered: false });
+  });
+
+  // ---- logout: the token stops working at once. ?all=1 ends every session of this user.
+  app.post('/v1/auth/logout', (c) => {
+    const userId = c.get('userId');
+    const all = c.req.query('all') === '1';
+    let ended = 1;
+    if (all) ended = db.removeDevicesForUser(userId);
+    else db.removeDevice(c.get('tokenHash'));
+    log('logout', { user_id: userId, all, ended });
+    return c.json({ logged_out: true, sessions_ended: ended });
+  });
+
+  // ---- the account: how the user signs in, and deleting it (App Store rule 5.1.1(v)).
+  app.get('/v1/account', (c) => {
+    const userId = c.get('userId');
+    const a = db.account(userId);
+    return c.json({ email: dec(userId, a?.email_enc ?? null), apple: !!a?.apple, password: !!a?.password });
+  });
+  app.delete('/v1/account', (c) => {
+    if (c.req.header('x-user-action') !== 'tap') return c.json({ error: 'account delete runs only from an explicit user tap' }, 428);
+    const userId = c.get('userId');
+    db.deleteAccount(userId);
+    biz.forgetHistory(userId);
+    log('account_deleted', { user_id: userId });
+    return c.json({ deleted: true });
+  });
+
   // ---- actions are default-deny: an explicit tap header plus an idempotency key
+  // A stored answer can name a client, so it is encrypted with the user's key. Rows from before that are plain JSON.
+  const storedAnswer = (userId: string, response: string) => JSON.parse(response.startsWith('{') ? response : cipher.decrypt(userId, response));
   const tapGate: MiddlewareHandler<Env> = async (c, next) => {
     // Lookup only: the stored answer for this key and body, or 404. It never runs the action, so it needs no tap.
     if (c.req.header('idempotency-lookup') === '1') {
       const prior = db.getIdem(c.get('userId'), c.req.header('idempotency-key') ?? '');
       if (!prior || prior.route !== c.req.path || prior.body_hash !== sha256(await c.req.text())) return c.json({ error: 'not found' }, 404);
       if (prior.status !== 'done' || !prior.response) return c.json({ error: 'request with this Idempotency-Key is in progress' }, 409);
-      return c.json(JSON.parse(prior.response), 200);
+      return c.json(storedAnswer(c.get('userId'), prior.response), 200);
     }
     if (c.req.header('x-user-action') !== 'tap') return c.json({ error: 'actions run only from an explicit user tap' }, 428);
     const key = c.req.header('idempotency-key') ?? '';
@@ -342,13 +559,13 @@ export function createApp(deps: Deps) {
     if (prior) {
       if (prior.route !== c.req.path || prior.body_hash !== sha256(raw)) return c.json({ error: 'Idempotency-Key reused with a different request' }, 409);
       if (prior.status !== 'done' || !prior.response) return c.json({ error: 'request with this Idempotency-Key is in progress' }, 409);
-      return c.json(JSON.parse(prior.response), 200);
+      return c.json(storedAnswer(userId, prior.response), 200);
     }
     let stored = false;
     try {
       await next();
       if (c.res.status === 200 && !c.get('idemSkip')) {
-        db.completeIdem(userId, key, await c.res.clone().text());
+        db.completeIdem(userId, key, cipher.encrypt(userId, await c.res.clone().text()));
         stored = true;
       }
     } finally {
@@ -377,7 +594,8 @@ export function createApp(deps: Deps) {
     const done = (found: Chip[], intent: string, confidence: number) => {
       const chips = [...pay, ...found];
       timings.total_ms = Math.round(performance.now() - t0);
-      const paid_calls = lookupPaid + (path === 'regex_none' || path === 'regex_lookup' ? 0 : path === 'jev_only' || path === 'jev_device' ? 1 : path === 'jev_lookup' ? 0 : 2);
+      const paid_calls = lookupPaid + (path === 'regex_none' || path === 'regex_lookup' || path === 'regex_intent' ? 0
+        : path === 'jev_only' || path === 'jev_device' || path === 'extract_only' ? 1 : path === 'jev_lookup' ? 0 : 2);
       log('suggest', { user_id: userId, path, paid_calls, parallel, intent, confidence, chips: chips.length, ...timings });
       return c.json({ chips, intent, confidence, timings });
     };
@@ -412,7 +630,9 @@ export function createApp(deps: Deps) {
     if (pay.length) return done([], 'payout', 1);
 
     const q = quick(text, context ?? '');
-    if (q.none) {
+    const items = db.listItems(userId);
+    // A message that names a catalog item ("and 2 extra hours?") is a money signal even with no money word.
+    if (q.none && !namesItem(`${text} ${context ?? ''}`, items.map((i) => i.name))) {
       // No money signal. Plain chat stops here with no call; an action-ish sentence gets one jev question.
       if (context || !deviceSignal(text)) return done([], 'none', 1);
       path = 'jev_device';
@@ -428,13 +648,13 @@ export function createApp(deps: Deps) {
       return done(deviceChips(picked.kind, sentence), picked.kind, picked.confidence);
     }
 
-    const items = db.listItems(userId);
     const profile = profileOf(userId);
+    const business = businessOf(userId);
     const seen = `${text} ${context ?? ''}`;
     const known = regexFields(userId, q, text, seen, items);
     const extract = () => {
       path = 'jev+extract';
-      return ai.extract(prompt, catalogText(items)).then(
+      return ai.extract(prompt, catalogText(items), business).then(
         (ext) => { timings.extract_ms = Math.round(performance.now() - t0); return ext; },
         (e) => { timings.extract_ms = Math.round(performance.now() - t0); log('extract_failed', { err: (e as Error).message }); return null; },
       );
@@ -444,9 +664,20 @@ export function createApp(deps: Deps) {
     let extracting = Object.values(known).some(Boolean) ? null : extract();
     parallel = !!extracting;
     path = extracting ? 'jev+extract' : 'jev_only';
+    const filled = { text, context: context ?? '', q, known, items, currency: profile.currency, business };
+
+    // An owner command that names its action needs no jev question: "bill Kowalski ..." is an invoice, and
+    // "remind Emma ..." is a reminder when one known unpaid client is named.
+    const command = context ? null : commandIntent(text);
+    if (command === 'create_invoice' || (command === 'send_reminder' && known.send_reminder && reminderAboutMoney(userId, text))) {
+      const chips = await moneyChips(userId, command, filled, extracting, extract);
+      path = timings.extract_ms !== undefined ? 'extract_only' : 'regex_intent';
+      parallel = false;
+      return done(chips ?? [], command, 1);
+    }
     let cls;
     try {
-      cls = await ai.classify(prompt);
+      cls = await ai.classify(prompt, business);
     } catch (e) {
       timings.classify_ms = Math.round(performance.now() - t0);
       log('classify_failed', { err: (e as Error).message });
@@ -455,7 +686,7 @@ export function createApp(deps: Deps) {
     timings.classify_ms = cls.ms;
     if (cls.intent === 'none' || cls.confidence < config.jev.minConfidence) return done([], cls.intent, cls.confidence);
 
-    const chips = await moneyChips(userId, cls.intent, { text, context: context ?? '', q, known, items, currency: profile.currency }, extracting, extract);
+    const chips = await moneyChips(userId, cls.intent, filled, extracting, extract);
     return done(chips ?? [], cls.intent, cls.confidence);
   });
 
@@ -484,13 +715,14 @@ export function createApp(deps: Deps) {
     }
   }
 
-  type Filled = { text: string; context: string; q: Quick; known: ReturnType<typeof regexFields>; items: CatalogItem[]; currency: string };
+  type Filled = { text: string; context: string; q: Quick; known: ReturnType<typeof regexFields>; items: CatalogItem[]; currency: string; business: string };
   /**
    * The chips for an intent that is already picked. `extracting` is an extract call that already runs, or null;
    * `extract` starts one, and it runs only when the regex and the owner's records cannot fill the intent.
    * Null when the extract call was needed and failed.
    */
   async function moneyChips(userId: string, intent: string, f: Filled, extracting: Promise<Extraction | null> | null, extract: () => Promise<Extraction | null>): Promise<Chip[] | null> {
+    if (intent === 'catalog_reply') return priceChips(f, await (extracting ?? extract()));
     const { q } = f;
     let ext: Extraction | null = null;
     // Unsure: the regex and the model read different amounts, only the model read one, or it came only from client text.
@@ -522,8 +754,43 @@ export function createApp(deps: Deps) {
     return buildChips(userId, intent, ext, f.text, f.context, f.items, f.currency, unsure).map((ch) => (trigger ? { ...ch, trigger } : ch));
   }
 
-  const catalogMatch = (items: CatalogItem[], seen: string, extItem?: string | null) =>
-    items.find((i) => seen.includes(i.name.toLowerCase()) || (extItem && extItem.toLowerCase().includes(i.name.toLowerCase())));
+  /**
+   * A client asks a price. The price comes only from the owner's catalog, never from the model: a catalog item
+   * inserts its price (times the asked quantity), a named item with no price offers "Add a price",
+   * and no named item offers the whole catalog.
+   */
+  function priceChips(f: Filled, ext: Extraction | null): Chip[] {
+    const match = catalogMatch(f.items, `${f.text} ${f.context}`, ext?.item, f.business);
+    if (match) {
+      // The model only reads the quantity; it counts only when that number is in the words the owner or client typed.
+      const qty = ext?.quantity && ext.quantity > 1 && saysNumber(`${f.text} ${f.context}`, ext.quantity) ? ext.quantity : 1;
+      const each = formatMoney(match.price_cents, match.currency);
+      const total = formatMoney(match.price_cents * qty, match.currency);
+      const text = qty > 1 ? `${qty} × ${match.name}: ${total} (${each} each).` : `${match.name} is ${each}.`;
+      return [chip('insert', qty > 1 ? `${qty} × ${match.name} · ${total}` : `${match.name} · ${each}`,
+        { text, item: match.name, quantity: qty, amount: centsToValue(match.price_cents * qty), currency: match.currency })];
+    }
+    const item = cleanOrNull(ext?.item, 60);
+    if (item) return [chip('add_price', `Add a price · ${item}`, { item })];
+    return f.items.length ? [chip('reply', 'Reply with prices', {})] : [chip('add_price', 'Add a price', { item: null })];
+  }
+
+  const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+  /** True when `n` is written in the text, as digits ("5 screens", "1,500 words") or as a word ("five screens"). */
+  const saysNumber = (text: string, n: number) =>
+    new RegExp(`(?<![\\d.,])${n}(?!\\d|[.,]\\d)`).test(text.replace(/(?<=\d),(?=\d{3}(?!\d))/g, ''))
+    || (NUMBER_WORDS[n] !== undefined && new RegExp(`\\b${NUMBER_WORDS[n]}\\b`, 'i').test(text));
+
+  /**
+   * The catalog item a message means. The model's item goes through catalogItemFor, which never takes a shorter name
+   * inside a longer phrase ("kids haircut" is not "Haircut"). With no model item, the name the text writes out in full.
+   */
+  const catalogMatch = (items: CatalogItem[], seen: string, extItem?: string | null, about = '') => {
+    const names = items.map((i) => i.name);
+    const exact = extItem && names.find((n) => n.toLowerCase() === extItem.trim().toLowerCase());
+    const name = exact || (extItem ? catalogItemFor(extItem, names, about) : namesItem(seen, names));
+    return name ? items.find((i) => i.name === name) : undefined;
+  };
 
   /**
    * For each intent that needs fields: the fields when the regex and the owner's own records give all of them
@@ -536,7 +803,7 @@ export function createApp(deps: Deps) {
     [...db.listInvoices(userId), ...db.listOrders(userId)].map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n);
 
   function regexFields(userId: string, q: Quick, text: string, seen: string, items: CatalogItem[]) {
-    const hasItem = !!catalogMatch(items, seen.toLowerCase());
+    const hasItem = !!catalogMatch(items, seen);
     const invoices = db.listInvoices(userId);
     const orders = db.listOrders(userId);
     const clients = clientNames(userId);
@@ -557,6 +824,12 @@ export function createApp(deps: Deps) {
       refund: refundName && (amount || !/\d/.test(seen)) ? { ...base, client_name: refundName } : null,
     };
   }
+
+  // "remind Emma to bring the leash" is no payment reminder: the fast path needs a money word, a price,
+  // or a word of an unpaid invoice's item ("remind Emma about last week's walks" for a dog walk).
+  const MONEY_WORD = /\b(pay|paid|payment|payments|invoice|invoices|bill|bills|owe|owes|owed|owing|due|overdue|balance)\b|[$€£]|\d/i;
+  const reminderAboutMoney = (userId: string, text: string) =>
+    MONEY_WORD.test(text) || mentionsItemWord(text, db.listInvoices(userId).filter((r) => !r.paid_at && r.status !== 'CANCELLED').map((r) => r.item));
 
   const chip = (kind: string, label: string, payload: Record<string, unknown>, needsConfirm = false): Chip =>
     ({ kind, label: clean(label), payload, needs_confirm: needsConfirm });
@@ -588,7 +861,7 @@ export function createApp(deps: Deps) {
     // Copied client text may only help match the catalog.
     const lower = text.toLowerCase();
     const seen = `${lower} ${context.toLowerCase()}`;
-    const match = catalogMatch(items, seen, ext?.item);
+    const match = catalogMatch(items, seen, ext?.item, businessOf(userId));
     // A typed currency wins; a typed amount with a bare $ is in the profile currency; only a catalog price keeps the item's.
     const typedCurrency = (config.money.currencies as readonly string[]).includes(ext?.currency ?? '') ? ext!.currency! : null;
     const currency = typedCurrency ?? (ext?.amount != null ? defaultCurrency : match?.currency ?? defaultCurrency);
@@ -670,7 +943,7 @@ export function createApp(deps: Deps) {
       if (!model) return [];
       ext = { ...model, client_email: q.email ?? model.client_email, amount: q.amount ?? model.amount, currency: q.amount !== null ? q.currency : model.currency };
     }
-    const match = catalogMatch(items, text.toLowerCase(), ext.item);
+    const match = catalogMatch(items, text, ext.item, businessOf(userId));
     const cents = ext.amount != null ? amountToCents(ext.amount) : match?.price_cents ?? null;
     if (cents === null) return [];
     const defaultCurrency = profileOf(userId).currency;
@@ -872,6 +1145,18 @@ export function createApp(deps: Deps) {
 
   app.get('/v1/summary', async (c) => c.json(await biz.summary(c.get('userId'))));
 
+  // ---- chart: money in by month from the owner's PayPal history, plus a marked estimate. Read-only: it never moves money.
+  app.get('/v1/chart', async (c) => {
+    const userId = c.get('userId');
+    const q = ChartQuery.parse({ back: c.req.query('back'), ahead: c.req.query('ahead'), tz: c.req.query('tz') });
+    const tz = zoneOr(q.tz);
+    const at = now();
+    const set = await biz.history(userId, monthStart(at, -q.back, tz), tz);
+    const chart = buildChart(set.rows, { at, back: q.back, ahead: q.ahead, currency: profileOf(userId).currency, tz });
+    log('chart', { user_id: userId, back: q.back, ahead: q.ahead, source: set.source, rows: set.rows.length, estimate: chart.enough_history });
+    return c.json({ ...chart, source: set.source, note: set.note });
+  });
+
   // ---- integrations and the business view, all through the user's own PayPal connection
   app.route('/', connect.routes);
   app.get('/v1/integrations', (c) => c.json({ integrations: integrations.list(c.get('userId')) }));
@@ -916,7 +1201,7 @@ export function createApp(deps: Deps) {
     const userId = c.get('userId');
     const { text } = await body(c, TextBody);
     const t = performance.now();
-    const reply = await ai.reply(text, profileOf(userId), catalogText(db.listItems(userId)));
+    const reply = await ai.reply(text, replyProfile(userId), catalogText(db.listItems(userId)));
     const ms = Math.round(performance.now() - t);
     log('reply', { user_id: userId, ms });
     return c.json({ reply, ms });
@@ -1010,7 +1295,7 @@ export function createApp(deps: Deps) {
     const items = db.listItems(userId);
     const extract = () => {
       paid++;
-      return ai.extract(text, catalogText(items)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
+      return ai.extract(text, catalogText(items), businessOf(userId)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
     };
     if (route === 'subscribe') {
       if (repeatEnds(text)) return none(confidence, "Repeat billing with an end date isn't ready yet. Send one invoice at a time for now.");
@@ -1021,7 +1306,7 @@ export function createApp(deps: Deps) {
     const intent = ROUTE_INTENT[route];
     if (intent) {
       const q = quick(text);
-      const filled = { text, context: '', q, known: regexFields(userId, q, text, text, items), items, currency: profileOf(userId).currency };
+      const filled = { text, context: '', q, known: regexFields(userId, q, text, text, items), items, currency: profileOf(userId).currency, business: businessOf(userId) };
       return done(route, confidence, { chips: (await moneyChips(userId, intent, filled, null, extract)) ?? [] });
     }
 
@@ -1052,7 +1337,7 @@ export function createApp(deps: Deps) {
           if (out.tone !== 'ok') paid++;
           return done(route, confidence, out);
         }
-        return done(route, confidence, { reply: await ai.reply(d, profileOf(userId), catalogText(db.listItems(userId))) });
+        return done(route, confidence, { reply: await ai.reply(d, replyProfile(userId), catalogText(db.listItems(userId))) });
       } catch (e) {
         // A model error can quote the text, so only its type is logged.
         return none(confidence, 'Writing help is not available right now. Try again.', (e as Error).name);
@@ -1075,11 +1360,22 @@ export function createApp(deps: Deps) {
   });
 
   // ---- profile and catalog
-  app.get('/v1/profile', (c) => c.json({ profile: db.getProfile(c.get('userId')) ?? null }));
+  const profileOut = (userId: string) => {
+    const p = db.getProfile(userId);
+    return p ? { ...p, description: businessOf(userId) || null } : null;
+  };
+  app.get('/v1/profile', (c) => c.json({ profile: profileOut(c.get('userId')) }));
+  // "What does your business do?": the keyboard reads price questions as questions about this business.
+  app.put('/v1/profile/business', async (c) => {
+    const userId = c.get('userId');
+    const { description } = await body(c, BusinessBody);
+    db.setDescriptionEnc(userId, enc(userId, description), DEFAULT_PROFILE);
+    return c.json({ profile: profileOut(userId) });
+  });
   app.put('/v1/profile', async (c) => {
     const p = await body(c, ProfileBody);
     db.putProfile(c.get('userId'), p);
-    return c.json({ profile: db.getProfile(c.get('userId')) });
+    return c.json({ profile: profileOut(c.get('userId')) });
   });
   const itemOut = (i: CatalogRow) => ({
     id: i.id, name: i.name, price: centsToValue(i.price_cents), currency: i.currency,
