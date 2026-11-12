@@ -1,5 +1,15 @@
 # Build notes
 
+## 0.1 (8) — 2026-11-12
+
+What to test:
+- Splash. The app opens on a short splash, then shows Home with its data loaded.
+- Keyboard setup. Settings takes two switches: Keyboards › Muninn Keyboard, then Allow Full Access. Back in the app, the step moves on by itself. "It's done" moves on if it does not.
+- Plain words. In Messages, type "done with the 2 screens, that's $50" or "sam owes me 50 for the app screens". The bar offers a pay link or invoice for $50, for the two screens. You do not need the word "invoice".
+- Send money. Type "send $20 to Ritika". Tap "Send $20 · Ritika". Type her email in the bar. Confirm. The demo account sends up to $50 a day.
+- Catalog is gone.
+- PayPal row. In Settings, "Demo PayPal (sandbox)" opens the PayPal sandbox site.
+
 ## 0.1 (7) — 2026-11-12
 
 What to test:
