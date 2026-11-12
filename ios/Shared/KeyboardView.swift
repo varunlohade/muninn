@@ -51,8 +51,11 @@ struct KeyboardView: View {
             } else {
                 SystemKeysView(model: model)
             }
+            // The bar never reports more than the keyboard's width, so a crowded bar can never shift the keys.
             SuggestionBar(model: model, palette: p)
+                .frame(maxWidth: .infinity)
                 .frame(height: M.barHeight)
+                .clipped()
         }
         .frame(height: model.keyboardHeight)
     }
