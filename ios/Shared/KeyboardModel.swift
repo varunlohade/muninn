@@ -250,8 +250,22 @@ final class KeyboardModel: ObservableObject {
         loadingLanguage = true
         Task.detached(priority: .utility) {
             let model = LanguageModel.bundled()
-            await MainActor.run { KeyboardModel.language = model }
+            await MainActor.run {
+                // A memory warning during the load cleared the flag: drop this model too.
+                if loadingLanguage { KeyboardModel.language = model }
+                loadingLanguage = false
+            }
         }
+    }
+
+    /// A memory warning: drop what reloads by itself. Typing keeps working; taps use plain key edges
+    /// until keyboardAppeared loads the language model again.
+    func releaseCaches() {
+        Self.language = nil
+        Self.loadingLanguage = false
+        CatalogThumbs.shared.removeAll()
+        ExplainDictionary.shared.purge()
+        closeExplain()
     }
 
     /// The key a touch means: the key under it or, for a letter tapped near its edge, the likeliest letter there.
@@ -449,8 +463,9 @@ final class KeyboardModel: ObservableObject {
             return
         }
         let lower = typed.lowercased()
+        // While the language model loads, no completions: the system checker would cost memory for a second.
         let completions = Self.language?.completions(lower, limit: 3)
-            ?? UITextChecker().completions(forPartialWordRange: NSRange(location: 0, length: (lower as NSString).length), in: lower, language: "en_US") ?? []
+            ?? (Self.loadingLanguage ? [] : FixCheck.checker.completions(forPartialWordRange: NSRange(location: 0, length: (lower as NSString).length), in: lower, language: "en_US") ?? [])
         predictions = Predictions.slots(typed: typed, correction: pendingCorrection()?.fixed, completions: completions, learned: keptWords)
     }
 
@@ -603,8 +618,9 @@ final class KeyboardModel: ObservableObject {
         unpaidCount = deps.store.unpaidCount
     }
 
-    func keyboardDisappeared() {
-        saveAdaptation()
+    /// `saveTouches` is false after a log out, so the old user's touch offsets are not written back.
+    func keyboardDisappeared(saveTouches: Bool = true) {
+        if saveTouches { saveAdaptation() }
         spaceHold?.cancel()
         trackpadTouch = nil
         trackpad = false
@@ -612,6 +628,7 @@ final class KeyboardModel: ObservableObject {
         catalog.open = false
         whoPaid = nil
         closeExplain()
+        CatalogThumbs.shared.removeAll()
         resetWriting()
         pollTask?.cancel()
         actionTask?.cancel()

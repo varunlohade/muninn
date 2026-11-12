@@ -122,6 +122,8 @@ final class FakeAPI: AskAPI {
     func refine(_ text: String, tone: String) async throws -> WriteResponse { calls.append("refine"); return writeReply }
     func toneCheck(draft: String, client: String?) async throws -> ToneResponse { calls.append("tone"); return toneReply }
     func payments() async throws -> [Payment] { calls.append("payments"); try fail(); return paymentsReply }
+    var chartReply = ChartData(title: "Money in by month (USD)", currency: "USD", months: [], caption: "", enough_history: false, source: "paypal")
+    func chart(back: Int, ahead: Int) async throws -> ChartData { calls.append("chart:\(back):\(ahead)"); try fail(); return chartReply }
 
     var explainReply = ExplainResponse(short: "A log is the power you need.", body: "log10(100) = 2", visual_ok: true)
     var visualReply = Data(#"{"title":"Logs","canvas":{"w":800,"h":500},"steps":[]}"#.utf8)

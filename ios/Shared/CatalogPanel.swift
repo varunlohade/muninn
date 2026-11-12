@@ -126,8 +126,15 @@ extension KeyboardModel {
 /// Small decoded photos for the panel. A keyboard has little memory, so photos are never decoded at full size.
 final class CatalogThumbs {
     static let shared = CatalogThumbs()
-    private let cache = NSCache<NSString, UIImage>()
+    private let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 40
+        return c
+    }()
     static let maxPixel = 120
+
+    /// Log out (the photos belong to the last user), a memory warning, or the keyboard going away.
+    func removeAll() { cache.removeAllObjects() }
 
     func image(id: String, cache store: CatalogCache) -> UIImage? {
         if let hit = cache.object(forKey: id as NSString) { return hit }

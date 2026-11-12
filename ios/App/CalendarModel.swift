@@ -27,6 +27,13 @@ final class CalendarModel: ObservableObject {
         }
     }
 
+    /// Log out: the matched clients and today's list belong to the last user.
+    func reset() {
+        clients = []
+        payments = []
+        today = []
+    }
+
     func connect() async {
         if status == .notDetermined { _ = try? await store.requestFullAccessToEvents() }
         if remindersStatus == .notDetermined { _ = try? await store.requestFullAccessToReminders() }

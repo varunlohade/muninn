@@ -15,36 +15,47 @@ final class LanguageModel: @unchecked Sendable {
     /// The words in order, for prefix search.
     let sorted: [String]
 
-    private var counts: [[Float]] = []
-    private var totals: [[Float]] = []
+    private let counts: [[Float]]
+    private let totals: [[Float]]
     /// How strongly a short context backs off to a shorter one (Dirichlet smoothing).
     private let smoothing: Float = 4
 
     /// `text`: lines of "word<TAB>f"; lines starting with # are skipped.
+    /// One pass over the bytes: each word is counted as it is read, so no copy of the lines is held.
     init(text: String) {
         var freq: [String: Float] = [:]
-        var weighted: [(String, Float)] = []
-        for line in text.split(separator: "\n") where !line.hasPrefix("#") {
-            let parts = line.split(separator: "\t")
-            guard parts.count == 2, let f = Float(parts[1]) else { continue }
-            let w = String(parts[0])
+        freq.reserveCapacity(60_000)
+        let n = Self.size, k = Self.next
+        var counts = [n * n * n * k, n * n * k, n * k, k].map { [Float](repeating: 0, count: $0) }
+        var totals = [n * n * n, n * n, n, 1].map { [Float](repeating: 0, count: $0) }
+        let bytes = text.utf8
+        var start = bytes.startIndex
+        while start < bytes.endIndex {
+            // A line ends at "\n", but not at the "\n" of "\r\n": that pair is one Character, as in split(separator: "\n").
+            var end = start
+            while end < bytes.endIndex, !(bytes[end] == 10 && (end == start || bytes[bytes.index(before: end)] != 13)) {
+                end = bytes.index(after: end)
+            }
+            let line = text[start..<end]
+            start = end < bytes.endIndex ? bytes.index(after: end) : end
+            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+            let parts = line.utf8.split(separator: 9)
+            guard parts.count == 2, let f = Float(Substring(parts[1])) else { continue }
+            let w = String(Substring(parts[0]))
             freq[w] = (f - 255) / 8.59 * Float(M_LN2)
             // Half the log slope: common words count more, but "the" does not drown the rest.
-            weighted.append((w, 1 + pow(2, (f - 100) / 17.18)))
-        }
-        logFreq = freq
-        sorted = freq.keys.sorted()
-        let n = Self.size, k = Self.next
-        counts = [n * n * n * k, n * n * k, n * k, k].map { [Float](repeating: 0, count: $0) }
-        totals = [n * n * n, n * n, n, 1].map { [Float](repeating: 0, count: $0) }
-        for (w, weight) in weighted {
+            let weight = 1 + pow(2, (f - 100) / 17.18)
             var h = [Self.start, Self.start, Self.start]
             for ch in w {
                 guard let c = Self.index(ch) else { break }
-                add(h, c, weight)
+                Self.add(&counts, &totals, h, c, weight)
                 h = [h[1], h[2], c]
             }
         }
+        logFreq = freq
+        sorted = freq.keys.sorted()
+        self.counts = counts
+        self.totals = totals
     }
 
     /// The bundled English model, or nil when the data file is missing.
@@ -115,8 +126,8 @@ final class LanguageModel: @unchecked Sendable {
         return Double(log(p))
     }
 
-    private func add(_ h: [Int], _ c: Int, _ w: Float) {
-        let n = Self.size, k = Self.next
+    private static func add(_ counts: inout [[Float]], _ totals: inout [[Float]], _ h: [Int], _ c: Int, _ w: Float) {
+        let n = size, k = next
         let ctx = [h[0] * n * n + h[1] * n + h[2], h[1] * n + h[2], h[2], 0]
         for order in 0..<4 {
             counts[order][ctx[order] * k + c] += w

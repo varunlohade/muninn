@@ -153,4 +153,46 @@ final class ExplainShots: XCTestCase {
         shot("06-sales-chart")
         element(messages, "explain.close").tap()
     }
+
+    /// The projection from PayPal months. Load the history first: `curl -X POST $FAKE_URL/_chart-history`.
+    func test3Projection() {
+        let field = openField()
+        let chip = element(messages, "chip.explain")
+        enter("show revenue next 3 months", in: field)
+        XCTAssertTrue(chip.waitForExistence(timeout: 4), "no projection chip")
+        chip.tap()
+        waitDrawn("projection")
+        XCTAssertFalse(element(messages, "visual.voice").exists, "a chart has no read-aloud button")
+        XCTAssertTrue(element(messages, "visual.replay").exists)
+        shot("07-projection")
+        element(messages, "explain.close").tap()
+    }
+
+    /// Opens and closes the projection chart 20 times, typing between opens. Each open must draw (no blank panel, no error line).
+    /// Writes "open epoch" lines to SHOT_DIR/stress.txt so a memory log can be read at opens 1, 10 and 20.
+    func test4Stress() {
+        let field = openField()
+        let chip = element(messages, "chip.explain")
+        var marks = ""
+        for i in 1...20 {
+            if i == 1 { enter("show revenue next 3 months", in: field) }
+            XCTAssertTrue(chip.waitForExistence(timeout: 4), "no projection chip at open \(i)")
+            chip.tap()
+            waitDrawn("projection \(i)")
+            XCTAssertTrue(element(messages, "visual.canvas").exists, "no canvas at open \(i)")
+            XCTAssertFalse(element(messages, "visual.status").exists, "panel shows a status line at open \(i)")
+            marks += "\(i) \(Date().timeIntervalSince1970)\n"
+            if [1, 10, 20].contains(i) { shot("stress-\(i)") }
+            element(messages, "explain.close").tap()
+            element(messages, "space").tap()
+            for c in "hello" {
+                let key = messages.descendants(matching: .any).matching(NSPredicate(format: "identifier LIKE[c] %@", "k.*.\(c)")).firstMatch
+                XCTAssertTrue(key.waitForExistence(timeout: 3), "no key \(c) at open \(i): \(messages.debugDescription.suffix(2500))")
+                key.tap()
+            }
+            // Delete " hello" so the sentence is the chart question again and its chip comes back.
+            for _ in 0..<6 { element(messages, "delete").tap() }
+        }
+        if let dir = env["SHOT_DIR"] { try? marks.write(toFile: dir + "/stress.txt", atomically: true, encoding: .utf8) }
+    }
 }

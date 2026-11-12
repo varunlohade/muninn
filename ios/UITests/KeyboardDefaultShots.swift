@@ -88,6 +88,8 @@ final class KeyboardDefaultShots: XCTestCase {
         XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 8), app.debugDescription)
         id(app, "onboarding.start").tap()
         if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
+        // The business question follows the PayPal step; these runs leave it for later.
+        if id(app, "onboarding.business.later").waitForExistence(timeout: 5) { id(app, "onboarding.business.later").tap() }
         XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 20), app.debugDescription)
         dismissPrompts(app)
     }
