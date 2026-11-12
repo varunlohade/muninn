@@ -158,9 +158,6 @@ struct HomeView: View {
         HStack(spacing: Theme.Space.xs) {
             Wordmark(size: 32)
             Spacer()
-            NavigationLink { CatalogView() } label: { IconCircle(systemImage: "tag", size: 36) }
-                .accessibilityLabel("Catalog")
-                .accessibilityIdentifier("nav.catalog")
             NavigationLink { ShortcutsView() } label: { IconCircle(systemImage: "bolt", size: 36) }
                 .accessibilityLabel("Shortcuts")
                 .accessibilityIdentifier("nav.shortcuts")

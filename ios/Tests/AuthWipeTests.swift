@@ -53,7 +53,7 @@ final class AuthWipeTests: XCTestCase {
         SharedStore.lastPasteboardChange = 42
         SharedStore.keyboardLastSeen = Date()
 
-        // App Group files: day data, notes, shortcuts, the pending call, learned words, drawings, the catalog and its photo.
+        // App Group files: day data, notes, shortcuts, the pending call, learned words, drawings.
         let now = Date()
         SharedStore.appointments = [Appointment(start: now, end: now.addingTimeInterval(3600), title: "Color", clientName: client)]
         SharedStore.notes = [Note(text: "\(client) pays cash")]
@@ -62,10 +62,6 @@ final class AuthWipeTests: XCTestCase {
                                                   confirmed: client, before: "", key: "k", expires: now.addingTimeInterval(60))
         SharedStore.learned = [Learned(subject: client, line: "a client", kind: .word, date: now)]
         try SharedStore.saveDrawing(png, title: "\(client) sales", scene: Data("{}".utf8))
-        CatalogCache.live.save([CatalogItem(id: "i1", name: "Haircut for \(client)", price: "45.00", currency: "USD", description: "",
-                                            category: "", in_stock: true, sort_order: 0, photo_id: "p1")])
-        CatalogCache.live.savePhoto(png, id: "p1")
-        XCTAssertNotNil(CatalogThumbs.shared.image(id: "p1", cache: .live), "thumb decoded and cached in memory")
         XCTAssertFalse(groupFiles().isEmpty)
 
         // The app's own defaults: brief cache, seen payments, the intro flag.
@@ -119,9 +115,6 @@ final class AuthWipeTests: XCTestCase {
         XCTAssertEqual(SharedStore.drawings, [])
         XCTAssertEqual(SharedStore.actionShortcuts, ActionShortcut.defaults)
         XCTAssertEqual(SharedStore.notes, Note.demo)
-        XCTAssertTrue(CatalogCache.live.items.isEmpty)
-        XCTAssertFalse(CatalogCache.live.hasPhoto("p1"))
-        XCTAssertNil(CatalogThumbs.shared.image(id: "p1", cache: .live), "no decoded photo left in memory")
         // App defaults and files.
         for key in ["brief_cache", "brief_cache.at", "known_paid_ids", "intro_seen"] { XCTAssertNil(UserDefaults.standard.object(forKey: key), key) }
         for f in files { XCTAssertFalse(FileManager.default.fileExists(atPath: f.path), f.lastPathComponent) }

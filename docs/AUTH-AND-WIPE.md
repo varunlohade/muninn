@@ -31,9 +31,9 @@ Code: `ios/App/AccountSession.swift` (`logout`, `deleteAccount`, `wipeAndSignOut
 | --- | --- | --- |
 | Keychain | shared group `<prefix>com.orseliyas.muninn.shared` and the app's own | Every item of every class: the device token, the install id (`device_id`), and anything else. |
 | App Group defaults | suite `group.com.orseliyas.muninn` | Every key: `server_url`, `apple_linked`, `unpaid_count`, `key_haptics`, `touch_offsets`, `pasteboard_change_count`, `keyboard_last_seen`. Then `wipe_generation` is written back, one higher. |
-| App Group files | group container | Every file and folder except `Library/Preferences` (the defaults file) and iOS's `.com.apple.mobile_container_manager.metadata.plist`: `appointments.json` (day data), `notes.json`, `shortcuts.json`, `pending-action.json`, `learned.json` (learned words), `drawings.json` and `drawings/` (PNG and scene JSON), `catalog/` (`items.json` and photos), `Library/Caches`. |
+| App Group files | group container | Every file and folder except `Library/Preferences` (the defaults file) and iOS's `.com.apple.mobile_container_manager.metadata.plist`: `appointments.json` (day data), `notes.json`, `shortcuts.json`, `pending-action.json`, `learned.json` (learned words), `drawings.json` and `drawings/` (PNG and scene JSON), `Library/Caches`. |
 | App defaults | `UserDefaults.standard` | The whole domain: `brief_cache`, `brief_cache.at`, `known_paid_ids`, `intro_seen`. |
-| App files | app sandbox | Everything in Documents, Application Support, Caches and tmp (this holds the intro's sample catalog). |
+| App files | app sandbox | Everything in Documents, Application Support, Caches and tmp. |
 | URL cache | `URLCache.shared` | All responses. |
 | Cookies | `HTTPCookieStorage.shared` and the App Group cookie storage | All cookies. |
 | Credentials | `URLCredentialStorage.shared` | All saved credentials. |
@@ -52,7 +52,7 @@ The keyboard is a separate process, so the app cannot clear its memory. Instead:
 
 - The wipe raises `wipe_generation` in the App Group defaults.
 - The keyboard notes the count when it starts. On each `viewWillAppear` it reads the count again.
-- If the count moved, the keyboard throws away its `KeyboardModel` (clients, who-owes list, chips, lookup, explain cache, catalog panel, pending suggest tasks) and builds a new one. It also runs `LocalWipe.process()` for its own URL cache, cookies, credentials, web data and decoded photos.
+- If the count moved, the keyboard throws away its `KeyboardModel` (clients, who-owes list, chips, lookup, explain cache, pending suggest tasks) and builds a new one. It also runs `LocalWipe.process()` for its own URL cache, cookies, credentials, and web data.
 - Every server call reads the token from the Keychain at the time of the call, so after log out the keyboard has no token and says "Open Muninn to pair".
 
 ## Tests

@@ -180,9 +180,6 @@ enum ChipActions {
             return .line(try await call { try await api.moreRead("plans/" + id) }.line)
         case "payments":
             return .line(KeyboardModel.lateLine(try await call { try await api.payments() }))
-        case "add_price":
-            // A price is never made up: the owner adds it once in the catalog.
-            return .line("No price yet. Add it in \(AppConfig.displayName) \u{203A} Catalog.")
         case "reply":
             guard let source, !source.isEmpty else { throw APIError.message("Copy the client's message first") }
             return .insert(try await call { try await api.reply(source) }.reply)

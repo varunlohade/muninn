@@ -31,7 +31,6 @@ struct KeyboardView: View {
         ZStack(alignment: .top) {
             // The keys stay on the system grey. Every panel, and the bar above it, sits on paper.
             if model.panelOpen { Theme.Color.bg } else { p.bed }
-            if model.catalog.open && model.explainPanel == nil && !model.notesOpen && !model.writeOpen { DottedGrid() }
             if let panel = model.explainPanel {
                 Group {
                     switch panel {
@@ -44,8 +43,6 @@ struct KeyboardView: View {
                 NotesPanel(model: model, palette: p).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
             } else if model.writeOpen {
                 WritePanelView(model: model, palette: p).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
-            } else if model.catalog.open {
-                CatalogPanel(model: model, palette: p).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
             } else if let c = model.confirmPanel {
                 ConfirmPanel(model: model, chip: c.chip, recipient: c.recipient).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
             } else {
@@ -126,7 +123,7 @@ struct WhoPaidStrip: View {
 }
 
 /// Sits where iOS shows predictive text, at the same height and type: one line per slot, thin dividers, no cards.
-/// Each slot fits its words ("Invoice Sam $45"); the action slot is accent-coloured. Rewrite, Notes and Catalog wait behind "…".
+/// Each slot fits its words ("Invoice Sam $45"); the action slot is accent-coloured. Rewrite and Notes wait behind "…".
 struct SuggestionBar: View {
     @ObservedObject var model: KeyboardModel
     let palette: Theme.SystemKeyboard.Palette
@@ -153,8 +150,6 @@ struct SuggestionBar: View {
             } else if model.writeOpen {
                 panelTitle("Rewrite")
                 Spacer()
-            } else if model.catalog.open {
-                catalogHeader
             } else if let c = model.confirmPanel {
                 Text(ConfirmPanel.title(c.chip, recipient: c.recipient, question: confirmQuestion(items)))
                     .font(Theme.Font.sans(19)).tracking(-0.2).foregroundStyle(Theme.Color.text1)
@@ -179,7 +174,7 @@ struct SuggestionBar: View {
                 QuickRow(model: model, items: items, palette: palette)
             }
             if quickMode {
-                // QuickType bar: Fix is a plain slot, and Rewrite, Notes and Catalog wait behind "…".
+                // QuickType bar: Fix is a plain slot, and Rewrite and Notes wait behind "…".
                 if showsFix, let plan = model.fixPlan, !showTools {
                     Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
                     Button(action: model.fix) {
@@ -194,16 +189,12 @@ struct SuggestionBar: View {
                 barButton(showTools ? "xmark" : "ellipsis", id: "bar.more", label: showTools ? "Close" : "More") { showTools.toggle() }
             } else {
                 // A panel is open: its own way back to the keys.
-                if model.paired && !model.notesOpen && !model.catalog.open && !confirming && !explaining {
+                if model.paired && !model.notesOpen && !confirming && !explaining {
                     barButton(model.writeOpen ? "keyboard" : "wand.and.stars", id: "write.toggle", label: model.writeOpen ? "Keyboard" : "Rewrite", action: model.toggleWrite)
                 }
                 // Notes live in the App Group, which the keyboard reaches only with Full Access.
-                if model.hasFullAccess && !model.writeOpen && !model.catalog.open && !confirming && !explaining {
+                if model.hasFullAccess && !model.writeOpen && !confirming && !explaining {
                     barButton(model.notesOpen ? "keyboard" : "note.text", id: "notes.toggle", label: model.notesOpen ? "Keyboard" : "Notes", action: model.toggleNotes)
-                }
-                // The catalog cache lives in the App Group, which needs Full Access too. Open, the panel's back button closes it.
-                if model.paired && !model.writeOpen && !model.notesOpen && !model.catalog.open && !confirming && !explaining {
-                    barButton("tag", id: "catalog.toggle", label: "Catalog", action: model.toggleCatalog)
                 }
             }
         }
@@ -214,10 +205,10 @@ struct SuggestionBar: View {
 
     /// The bar is showing its slots or the word row (not a panel head or a confirm).
     private var quickMode: Bool {
-        model.explainPanel == nil && !model.notesOpen && !model.writeOpen && !model.catalog.open && model.confirmPanel == nil && !explaining
+        model.explainPanel == nil && !model.notesOpen && !model.writeOpen && model.confirmPanel == nil && !explaining
     }
 
-    /// Behind "…": Rewrite, Notes and Catalog as plain slots.
+    /// Behind "…": Rewrite and Notes as plain slots.
     private var toolsRow: some View {
         HStack(spacing: 0) {
             ForEach(Array(tools.enumerated()), id: \.offset) { i, t in
@@ -237,36 +228,7 @@ struct SuggestionBar: View {
         var out: [(title: String, id: String, run: () -> Void)] = []
         if model.paired { out.append(("Rewrite", "write.toggle", model.toggleWrite)) }
         if model.hasFullAccess { out.append(("Notes", "notes.toggle", model.toggleNotes)) }
-        if model.paired { out.append(("Catalog", "catalog.toggle", model.toggleCatalog)) }
         return out
-    }
-
-    /// The catalog's head, per M1-4: back, the name and count, then Share.
-    private var catalogHeader: some View {
-        let c = model.catalog
-        return HStack(spacing: Theme.Space.xs) {
-            Button(action: model.toggleCatalog) {
-                Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
-            }
-            .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
-            .frame(width: 40)
-            .accessibilityLabel("Keyboard")
-            .accessibilityIdentifier("catalog.toggle")
-            Text("Catalog").font(Theme.Font.sans(16, 500)).foregroundStyle(Theme.Color.text1)
-            if c.selection.count > 0 {
-                Text("\(c.selection.count) selected").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
-                    .accessibilityIdentifier("catalog.count")
-            }
-            Spacer(minLength: 0)
-            if !c.items.isEmpty {
-                Button(c.selection.count > 1 ? "Share \(c.selection.count)" : "Share", action: model.insertCatalog)
-                    .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
-                    .disabled(c.selection.count == 0)
-                    .accessibilityLabel(c.selection.count > 1 ? "Insert \(c.selection.count)" : "Insert")
-                    .accessibilityIdentifier("catalog.insert")
-            }
-        }
-        .padding(.horizontal, Theme.Space.s)
     }
 
     private func panelTitle(_ text: String) -> some View {
@@ -284,7 +246,7 @@ struct SuggestionBar: View {
         }
     }
 
-    /// An explain answer or panel takes the bar; Rewrite, Notes, Catalog and Fix wait.
+    /// An explain answer or panel takes the bar; Rewrite, Notes and Fix wait.
     private var explaining: Bool { model.explainPanel != nil || model.explainOffer != nil }
 
     /// The panel's header: the quoted word or the chart's name.
@@ -305,7 +267,7 @@ struct SuggestionBar: View {
 
     /// Fix sits beside the chips, so it never takes a chip's place.
     private var showsFix: Bool {
-        guard model.fixable, !explaining, model.undo == nil, !model.notesOpen, !model.writeOpen, !model.catalog.open else { return false }
+        guard model.fixable, !explaining, model.undo == nil, !model.notesOpen, !model.writeOpen else { return false }
         switch model.bar {
         case .idle, .chips: return true
         default: return false
@@ -557,12 +519,12 @@ struct WritePanelView: View {
 }
 
 extension KeyboardModel {
-    /// A panel replaces the keys: explain, notes, rewrite, catalog or the confirm.
-    var panelOpen: Bool { explainPanel != nil || notesOpen || writeOpen || catalog.open || confirmPanel != nil }
+    /// A panel replaces the keys: explain, notes, rewrite or the confirm.
+    var panelOpen: Bool { explainPanel != nil || notesOpen || writeOpen || confirmPanel != nil }
 
     /// The invoice, reminder or repeat bill waiting for the owner's OK, shown as a panel in place of the keys.
     var confirmPanel: (chip: Chip, recipient: String)? {
-        guard explainPanel == nil, !notesOpen, !writeOpen, !catalog.open, case .confirm(let chip, let recipient) = bar else { return nil }
+        guard explainPanel == nil, !notesOpen, !writeOpen, case .confirm(let chip, let recipient) = bar else { return nil }
         return (chip, recipient)
     }
 }

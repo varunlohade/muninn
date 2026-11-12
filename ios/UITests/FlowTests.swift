@@ -9,7 +9,7 @@ final class FlowTests: XCTestCase {
 
     override func setUp() { continueAfterFailure = false }
 
-    /// Rewrite, Notes and Catalog sit behind the bar's "…" slot; this opens it first when the button is hidden.
+    /// Rewrite and Notes sit behind the bar's "…" slot; this opens it first when the button is hidden.
     private func tapTool(_ app: XCUIApplication, _ identifier: String) {
         let tool = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", identifier)).firstMatch
         let more = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", "bar.more")).firstMatch

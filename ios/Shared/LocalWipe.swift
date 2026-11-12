@@ -37,7 +37,6 @@ enum LocalWipe {
         for (space, all) in creds.allCredentials { for c in all.values { creds.remove(c, for: space) } }
         let web = WKWebsiteDataStore.default()
         await web.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
-        CatalogThumbs.shared.removeAll()
     }
 
     /// Every Keychain item this app can reach: the device token, the install id, and anything else.

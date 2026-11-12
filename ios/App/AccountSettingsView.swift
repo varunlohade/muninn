@@ -49,7 +49,7 @@ struct AccountSection: View {
                             Spacer()
                             StatusPill(text: "Needs your OK", tone: .due)
                         }
-                        Text("Your clients, invoices, catalog and settings go for good. PayPal keeps its own records.")
+                        Text("Your clients, invoices and settings go for good. PayPal keeps its own records.")
                             .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: Theme.Space.s) {
                             Button("Cancel") { confirmDelete = false }

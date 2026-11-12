@@ -20,8 +20,6 @@ enum BarItems {
         case whoPaid
         case today
         case notes
-        /// Opens the catalog panel, with this item picked when there is one.
-        case catalog(CatalogItem?)
         /// A word from the prediction row: it replaces the word being typed.
         case predict(String)
         /// The meaning or answer goes into the message; a chart opens its drawing.
@@ -65,8 +63,6 @@ enum BarItems {
         var fieldEmpty = false
         /// The typed words a money chip came from, for a server that sends no trigger: "$45 for the haircut".
         var moneyTrigger: String?
-        /// "Share catalog" or "Share Beard trim", from typed words like "send catalog" or "do you have beard trim".
-        var catalog: Item?
         /// "btw" → "by the way" (and "Explain more"), or a chart's "Draw it": the answer to what the last sentence asks.
         /// It comes before every other chip.
         var explain: [Item] = []
@@ -108,7 +104,6 @@ enum BarItems {
         case .idle:
             // A chip about the typed words gets the room; the day's chips wait for an empty field.
             out += s.explain
-            if let c = s.catalog { out.append(c) }
             out += smart
             let aboutTyping = !smart.isEmpty || !s.explain.isEmpty
             if !aboutTyping, s.copiedAvailable { out.append(Item(id: "copied", title: "Use copied message", action: .useCopied)) }
@@ -121,7 +116,7 @@ enum BarItems {
                 out.append(Item(id: chip.kind, title: title(chip), detail: detail(chip, fromCopied: fromCopied), action: .chip(chip),
                                 trigger: chip.trigger ?? (fromCopied ? nil : s.moneyTrigger)))
             }
-            out = Array((out + [s.catalog].compactMap { $0 } + smart).prefix(max(3, out.count)))
+            out = Array((out + smart).prefix(max(3, out.count)))
         case .working(let text):
             out.append(Item(id: "working", title: text, tone: .secondary))
         case .confirm(let chip, let recipient):
