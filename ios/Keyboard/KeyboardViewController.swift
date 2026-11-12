@@ -74,6 +74,10 @@ final class KeyboardViewController: UIInputViewController, TextHost {
     var needsGlobeKey: Bool { needsInputModeSwitchKey }
     var returnKeyType: UIReturnKeyType { textDocumentProxy.returnKeyType ?? .default }
     var autocapitalization: UITextAutocapitalizationType { textDocumentProxy.autocapitalizationType ?? .sentences }
+    var autocorrection: UITextAutocorrectionType {
+        if [.URL, .emailAddress, .webSearch].contains(textDocumentProxy.keyboardType ?? .default) { return .no }
+        return textDocumentProxy.autocorrectionType ?? .default
+    }
     var enablesReturnKeyAutomatically: Bool { textDocumentProxy.enablesReturnKeyAutomatically ?? false }
     func insert(_ text: String) { textDocumentProxy.insertText(text) }
     func deleteBackward() { textDocumentProxy.deleteBackward() }

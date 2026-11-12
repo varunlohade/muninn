@@ -11,6 +11,8 @@ protocol TextHost: AnyObject {
     var needsGlobeKey: Bool { get }
     var returnKeyType: UIReturnKeyType { get }
     var autocapitalization: UITextAutocapitalizationType { get }
+    /// .no turns autocorrect off, as in a link or email field.
+    var autocorrection: UITextAutocorrectionType { get }
     var enablesReturnKeyAutomatically: Bool { get }
     func insert(_ text: String)
     func deleteBackward()
@@ -208,6 +210,10 @@ final class KeyboardModel: ObservableObject {
     static let spaceHoldDelay: Duration = .milliseconds(400)
     /// How far the finger moves for the cursor to move one character.
     static let cursorStep: CGFloat = 9
+    /// The last autocorrect: what was typed, what replaced it, and the key after it.
+    private var correction: (typed: String, fixed: String, boundary: String)?
+    /// Words put back after an autocorrect. They are not fixed again.
+    private var keptWords: Set<String> = []
 
     func display(_ c: String) -> String { layout == .letters && shift != .off ? c.uppercased() : c }
 
@@ -278,7 +284,12 @@ final class KeyboardModel: ObservableObject {
     /// VoiceOver activation and tests without touches.
     func activate(_ key: KeyCap) {
         host?.playClick()
-        if key.kind == .delete { host?.deleteBackward(); afterEdit(); return }
+        if key.kind == .delete {
+            if !revertCorrection() { host?.deleteBackward() }
+            correction = nil
+            afterEdit()
+            return
+        }
         commit(key)
     }
 
@@ -292,9 +303,12 @@ final class KeyboardModel: ObservableObject {
     }
 
     private func commit(_ key: KeyCap) {
+        correction = nil
         switch key.kind {
         case .char(let c):
+            let fixed = Self.wordEnders.contains(c) ? autocorrect() : nil
             host?.insert(display(c))
+            correction = fixed.map { ($0.typed, $0.fixed, c) }
             if shift == .once && layout == .letters { shift = .off }
             if layout != .letters && c == "'" { layout = .letters }
             lastSpaceTap = nil
@@ -309,10 +323,14 @@ final class KeyboardModel: ObservableObject {
             layout = to
         case .space:
             if expandShortcut() { break }
+            let fixed = autocorrect()
             tapSpace()
+            correction = fixed.map { ($0.typed, $0.fixed, " ") }
         case .ret:
             if expandShortcut() { break }
+            let fixed = autocorrect()
             host?.insert("\n")
+            correction = fixed.map { ($0.typed, $0.fixed, "\n") }
             lastSpaceTap = nil
             afterEdit()
         case .globe:
@@ -320,6 +338,28 @@ final class KeyboardModel: ObservableObject {
         case .delete:
             break
         }
+    }
+
+    static let wordEnders: Set<String> = [",", ".", "!", "?", ";", ":"]
+
+    /// Fixes a clear typo in the word just typed, before space, return or punctuation goes in.
+    private func autocorrect() -> (typed: String, fixed: String)? {
+        guard let host, host.autocorrection != .no,
+              let c = FixCheck.autocorrect(host.contextBeforeInput ?? "", names: appointments.compactMap(\.clientName), kept: keptWords)
+        else { return nil }
+        for _ in 0..<c.typed.count { host.deleteBackward() }
+        host.insert(c.fixed)
+        return c
+    }
+
+    /// Backspace right after an autocorrect puts the typed word back, and it stays as typed from then on.
+    private func revertCorrection() -> Bool {
+        guard let c = correction, let host, (host.contextBeforeInput ?? "").hasSuffix(c.fixed + c.boundary) else { return false }
+        correction = nil
+        for _ in 0..<(c.fixed.count + c.boundary.count) { host.deleteBackward() }
+        host.insert(c.typed)
+        keptWords.insert(c.typed.lowercased())
+        return true
     }
 
     /// Double space after a word types ". ", like iOS. Space in 123 or #+= goes back to letters.
@@ -340,7 +380,8 @@ final class KeyboardModel: ObservableObject {
 
     /// Delete fires on touch down, repeats after 0.5 s, then speeds up to whole words.
     private func deleteDown() {
-        host?.deleteBackward()
+        if !revertCorrection() { host?.deleteBackward() }
+        correction = nil
         afterEdit()
         deleteTask?.cancel()
         let sleep = deps.sleep

@@ -9,6 +9,7 @@ final class FakeHost: TextHost {
     var needsGlobeKey = false
     var returnKeyType: UIReturnKeyType = .default
     var autocapitalization: UITextAutocapitalizationType = .sentences
+    var autocorrection: UITextAutocorrectionType = .default
     var enablesReturnKeyAutomatically = false
 
     var contextBeforeInput: String? { text }

@@ -45,6 +45,28 @@ final class TypingModelTests: XCTestCase {
         XCTAssertFalse(model.trackpad)
     }
 
+    private func type(_ s: String) {
+        for ch in s {
+            if ch == " " { model.activate(key("space")); continue }
+            model.activate(keys.first { $0.kind == .char(String(ch).lowercased()) }!)
+        }
+    }
+
+    func testSpaceFixesATypoAndBackspacePutsItBack() {
+        type("i can do teh ")
+        XCTAssertEqual(host.text, "I can do the ")
+        model.activate(key("delete"))
+        XCTAssertEqual(host.text, "I can do teh")
+        model.activate(key("space"))
+        XCTAssertEqual(host.text, "I can do teh ")
+    }
+
+    func testAFieldWithAutocorrectOffKeepsTheTypo() {
+        host.autocorrection = .no
+        type("i do teh ")
+        XCTAssertEqual(host.text, "I do teh ")
+    }
+
     func testAQuickSpaceTapStillTypesASpace() async {
         host.text = "see"
         let finger = NSObject()
