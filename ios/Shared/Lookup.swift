@@ -114,7 +114,7 @@ struct LookupCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             HStack(spacing: Theme.Space.xs) {
-                Text(LookupCopy.header(result, candidate)).font(M.mode.weight(.medium)).foregroundStyle(palette.label).lineLimit(1).minimumScaleFactor(0.7)
+                Text(LookupCopy.header(result, candidate)).font(Theme.Font.sans(16, 500)).foregroundStyle(palette.label).lineLimit(1).minimumScaleFactor(0.7)
                     .accessibilityIdentifier("lookup.header")
                 Spacer()
                 Button(action: onClose) {
@@ -139,12 +139,12 @@ struct LookupCard: View {
             ForEach(result.candidates) { c in
                 Button { picked = c.name } label: {
                     HStack {
-                        Text(c.name).font(M.mode).foregroundStyle(palette.label)
+                        Text(c.name).font(Theme.Font.sans(15, 500)).foregroundStyle(palette.label)
                         Spacer()
-                        Text(c.records.first.map(LookupCopy.row) ?? (c.empty_line ?? "")).font(M.predictionSmall).foregroundStyle(palette.secondaryLabel)
+                        Text(c.records.first.map(LookupCopy.row) ?? (c.empty_line ?? "")).font(Theme.Font.sans(12.5)).foregroundStyle(palette.secondaryLabel)
                     }
-                    .padding(.horizontal, Theme.Space.s).frame(height: 36)
-                    .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
+                    .padding(.horizontal, Theme.Space.s).frame(height: 38)
+                    .rowSurface()
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("lookup.pick.\(c.name)")
@@ -158,13 +158,13 @@ struct LookupCard: View {
             VStack(alignment: .leading, spacing: M.keyGap) {
                 ForEach(Array(c.records.enumerated()), id: \.element.id) { i, rec in
                     HStack(spacing: Theme.Space.xs) {
-                        Text(LookupCopy.row(rec)).font(i == 0 ? M.mode : M.smallMode).foregroundStyle(i == 0 ? palette.label : palette.secondaryLabel)
+                        Text(LookupCopy.row(rec)).font(i == 0 ? Theme.Font.sans(15, 500) : Theme.Font.sans(13)).foregroundStyle(i == 0 ? palette.label : palette.secondaryLabel)
                             .monospacedDigit()
                         Spacer(minLength: 0)
-                        Text(rec.title).font(M.predictionSmall).foregroundStyle(palette.secondaryLabel).lineLimit(1)
+                        Text(rec.title).font(Theme.Font.sans(12.5)).foregroundStyle(palette.secondaryLabel).lineLimit(1)
                     }
-                    .padding(.horizontal, Theme.Space.s).frame(height: i == 0 ? 36 : 26)
-                    .background(i == 0 ? palette.key : .clear, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
+                    .padding(.horizontal, Theme.Space.s).frame(height: i == 0 ? 38 : 26)
+                    .modifier(LookupRow(first: i == 0))
                     .accessibilityIdentifier("lookup.row.\(i)")
                 }
                 let newFor = LookupCopy.newInvoiceName(result, c)
@@ -177,7 +177,7 @@ struct LookupCard: View {
             }
         } else {
             VStack(alignment: .leading, spacing: M.keyGap) {
-                Text(c.empty_line ?? "Nothing yet").font(M.mode).foregroundStyle(palette.label).accessibilityIdentifier("lookup.empty")
+                Text(c.empty_line ?? "Nothing yet").font(Theme.Font.sans(15)).foregroundStyle(palette.label).accessibilityIdentifier("lookup.empty")
                 if let name = LookupCopy.newInvoiceName(result, c) {
                     action("New invoice", id: "lookup.new") { onNewInvoice(name) }
                     muted(LookupCopy.hint(nil, insertWord: insertWord))
@@ -187,16 +187,20 @@ struct LookupCard: View {
     }
 
     private func action(_ title: String, id: String, _ run: @escaping () -> Void) -> some View {
-        Button(action: run) {
-            Text(title).font(M.mode.weight(.medium)).foregroundStyle(palette.accent)
-                .padding(.horizontal, Theme.Space.m).frame(height: 34)
-                .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier(id)
+        Button(title, action: run)
+            .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
+            .accessibilityIdentifier(id)
     }
 
     private func muted(_ text: String) -> some View {
-        Text(text).font(M.predictionSmall).foregroundStyle(palette.secondaryLabel).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+        Text(text).font(Theme.Font.sans(12)).foregroundStyle(palette.secondaryLabel).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The top record sits on a row surface; older ones are plain lines under it.
+private struct LookupRow: ViewModifier {
+    let first: Bool
+    func body(content: Content) -> some View {
+        if first { content.rowSurface() } else { content }
     }
 }

@@ -82,6 +82,15 @@ struct TactileButton: ButtonStyle {
     }
 }
 
+/// A chip press: scale to 0.97 for 160 ms, nothing else.
+struct ChipPress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
 /// A soft status pill in mono type: Paid, Booked, Needs your OK.
 struct StatusPill: View {
     enum Tone { case paid, booked, due, neutral }
@@ -139,6 +148,8 @@ struct TaskCardLabel: View {
                 Text(title).font(Theme.Font.sans(14, 500)).foregroundStyle(titleColor).lineLimit(1)
                 if let detail { Text(detail).font(Theme.Font.sans(11.5)).foregroundStyle(Theme.Color.text2).lineLimit(1) }
             }
+            // A chip is as wide as its words; the bar scrolls instead of cutting them.
+            .fixedSize()
         }
         .padding(.leading, 6).padding(.trailing, 14)
         .frame(height: height)
