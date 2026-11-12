@@ -43,8 +43,7 @@ const app = createApp({
   cipher,
   ai: createAi({ typesafeKey: need('TYPESAFE_API_KEY'), openrouterKey: need('OPENROUTER_API_KEY') }),
   paypal,
-  // On the demo server, a new Sign in with Apple user starts with the demo business, so the app is not empty.
-  onNewUser: demoSeed ? (userId) => void seedUser(userId, true) : undefined,
+  // A new user starts empty: the demo business (its profile, catalog and invoices) belongs only to the demo user below.
 });
 
 const warmStart = performance.now();

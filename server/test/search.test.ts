@@ -28,8 +28,7 @@ test('detectLookup: business words map to kinds; plain chat and new-invoice comm
     ['invoice for sam', 'money', 'invoice'], ['bill for sam', 'money', 'bill'], ["sam's receipt", 'money', 'receipt'], ['did sam pay', 'money', null],
     ['what does sam owe', 'money', null], ['last order from ana', 'any', 'order'], ["ana's booking", 'any', 'booking'],
     ['latest appointment for ana', 'any', 'appointment'], ["dave's quote", 'any', 'quote'], ['last session with leo', 'any', 'session'],
-    ["maria's table", 'any', 'table'], ['delivery for kenji', 'any', 'delivery'], ['price of balayage', 'catalog', null],
-    ['how much is pad thai', 'catalog', null],
+    ["maria's table", 'any', 'table'], ['delivery for kenji', 'any', 'delivery'],
   ];
   for (const [t, kind, noun] of kinds) {
     const d = detectLookup(t, NOW);

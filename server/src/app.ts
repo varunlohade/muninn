@@ -16,9 +16,9 @@ import { log } from './log.ts';
 import { clean } from './text.ts';
 import {
   afterRemindName, askQuick, commandIntent, deviceSignal, deviceTitle, deviceTrigger, intervalOf, lastSentence, mentions, moneyTrigger, nameIn, noteText, onlyKnownWords, quick, repeatEnds,
-  typedEmails, withoutInterval, detectLookup, type Quick,
+  moneyRequest, saidAll, typedEmails, withoutInterval, detectLookup, type Quick,
 } from './quick.ts';
-import { ASK_AT, SHOW_AT, catalogItemFor, chipLabel, createSearch, importance, invoiceState, mentionsItemWord, namesItem, orderState } from './search.ts';
+import { ASK_AT, SHOW_AT, chipLabel, createSearch, importance, invoiceState, mentionsItemWord, orderState } from './search.ts';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createIntegrations } from './integrations.ts';
 import { createSlack, SlackWebhookUrl } from './slack.ts';
@@ -686,11 +686,9 @@ export function createApp(deps: Deps) {
     if (pay.length) return done([], 'payout', 1);
 
     const q = quick(text, context ?? '');
-    const items = db.listItems(userId);
-    // A message that names a catalog item ("and 2 extra hours?") is a money signal even with no money word,
-    // and so is an owner command: "nudge Jordan", "chase Jordan".
+    // An owner command is a money signal even with no money word: "nudge Jordan", "chase Jordan".
     const command = context ? null : commandIntent(text);
-    if (q.none && !command && !namesItem(`${text} ${context ?? ''}`, items.map((i) => i.name))) {
+    if (q.none && !command) {
       // No money signal. Plain chat stops here with no call; an action-ish sentence gets one jev question.
       if (context || !deviceSignal(text)) return done([], 'none', 1);
       path = 'jev_device';
@@ -709,10 +707,10 @@ export function createApp(deps: Deps) {
     const profile = profileOf(userId);
     const business = businessOf(userId);
     const seen = `${text} ${context ?? ''}`;
-    const known = regexFields(userId, q, text, seen, items);
+    const known = regexFields(userId, q, text, seen);
     const extract = () => {
       path = 'jev+extract';
-      return ai.extract(prompt, catalogText(items), business).then(
+      return ai.extract(prompt, '', business).then(
         (ext) => { timings.extract_ms = Math.round(performance.now() - t0); return ext; },
         (e) => { timings.extract_ms = Math.round(performance.now() - t0); log('extract_failed', { err: (e as Error).message }); return null; },
       );
@@ -722,7 +720,28 @@ export function createApp(deps: Deps) {
     let extracting = Object.values(known).some(Boolean) ? null : extract();
     parallel = !!extracting;
     path = extracting ? 'jev+extract' : 'jev_only';
-    const filled = { text, context: context ?? '', q, known, items, currency: profile.currency, business };
+    const filled = { text, context: context ?? '', q, known, currency: profile.currency, business };
+
+    // The owner plainly asks to be paid ("two screens for 50", "sam owes me 50 for the app screens"): the regex is sure
+    // of the intent and the amount, so no jev question. The model reads only the client and the reason, and each
+    // counts only when the owner typed it.
+    const asked = context || command ? null : moneyRequest(text);
+    if (asked) {
+      // Every word is an amount, a money word or a known client: nothing left for the model to read.
+      const model = known.pay_link ? null : await (extracting ?? extract());
+      const client = known.send_reminder?.client_name ?? known.pay_link?.client_name ?? grounded(model?.client_name, text);
+      const intent = q.email || client ? 'create_invoice' : 'pay_link';
+      const ext: Extraction = {
+        client_name: client, client_email: q.email, amount: asked.amount, currency: asked.currency,
+        item: grounded(model?.item, text) ?? asked.reason,
+      };
+      path = timings.extract_ms !== undefined ? 'regex_ask+extract' : 'regex_ask';
+      parallel = false;
+      const trigger = moneyTrigger(text);
+      // A bare number, or a rate, tip or discount word next to the amount: the pay link takes a confirm too.
+      const unsure = q.amount === null || q.amount !== asked.amount;
+      return done(buildChips(userId, intent, ext, text, '', profile.currency, unsure).map((ch) => (trigger ? { ...ch, trigger } : ch)), intent, 1);
+    }
 
     // An owner command that names its action needs no jev question: "bill Kowalski ..." is an invoice, and
     // "remind Emma ..." is a reminder when one known unpaid client is named.
@@ -772,14 +791,13 @@ export function createApp(deps: Deps) {
     }
   }
 
-  type Filled = { text: string; context: string; q: Quick; known: ReturnType<typeof regexFields>; items: CatalogItem[]; currency: string; business: string };
+  type Filled = { text: string; context: string; q: Quick; known: ReturnType<typeof regexFields>; currency: string; business: string };
   /**
    * The chips for an intent that is already picked. `extracting` is an extract call that already runs, or null;
    * `extract` starts one, and it runs only when the regex and the owner's records cannot fill the intent.
    * Null when the extract call was needed and failed.
    */
   async function moneyChips(userId: string, intent: string, f: Filled, extracting: Promise<Extraction | null> | null, extract: () => Promise<Extraction | null>): Promise<Chip[] | null> {
-    if (intent === 'catalog_reply') return priceChips(f, await (extracting ?? extract()));
     const { q } = f;
     let ext: Extraction | null = null;
     // Unsure: the regex and the model read different amounts, only the model read one, or it came only from client text.
@@ -793,7 +811,7 @@ export function createApp(deps: Deps) {
         if (!model) return null;
         // The model read no amount but the text has more than amount, item and name words ("half off", "waived"):
         // the amount comes from the regex or the catalog, so the owner confirms it.
-        const extraWords = !onlyKnownWords(f.text, [...f.items.map((i) => i.name), ...clientNames(userId)]);
+        const extraWords = !onlyKnownWords(f.text, clientNames(userId));
         unsure = q.clientAmountOnly || (model.amount !== null && model.amount !== q.amount) || (model.amount === null && extraWords);
         // What the regex read beats a model guess. Email comes only from the owner's own text (see buildChips).
         ext = {
@@ -808,59 +826,26 @@ export function createApp(deps: Deps) {
     }
     // Each chip names the typed words it came from ("$45 for the haircut"), so the keyboard can quote them.
     const trigger = f.context ? null : moneyTrigger(f.text);
-    return buildChips(userId, intent, ext, f.text, f.context, f.items, f.currency, unsure).map((ch) => (trigger ? { ...ch, trigger } : ch));
+    return buildChips(userId, intent, ext, f.text, f.context, f.currency, unsure).map((ch) => (trigger ? { ...ch, trigger } : ch));
   }
 
-  /**
-   * A client asks a price. The price comes only from the owner's catalog, never from the model: a catalog item
-   * inserts its price (times the asked quantity), a named item with no price offers "Add a price",
-   * and no named item offers the whole catalog.
-   */
-  function priceChips(f: Filled, ext: Extraction | null): Chip[] {
-    const match = catalogMatch(f.items, `${f.text} ${f.context}`, ext?.item, f.business);
-    if (match) {
-      // The model only reads the quantity; it counts only when that number is in the words the owner or client typed.
-      const qty = ext?.quantity && ext.quantity > 1 && saysNumber(`${f.text} ${f.context}`, ext.quantity) ? ext.quantity : 1;
-      const each = formatMoney(match.price_cents, match.currency);
-      const total = formatMoney(match.price_cents * qty, match.currency);
-      const text = qty > 1 ? `${qty} × ${match.name}: ${total} (${each} each).` : `${match.name} is ${each}.`;
-      return [chip('insert', qty > 1 ? `${qty} × ${match.name} · ${total}` : `${match.name} · ${each}`,
-        { text, item: match.name, quantity: qty, amount: centsToValue(match.price_cents * qty), currency: match.currency })];
-    }
-    const item = cleanOrNull(ext?.item, 60);
-    if (item) return [chip('add_price', `Add a price · ${item}`, { item })];
-    return f.items.length ? [chip('reply', 'Reply with prices', {})] : [chip('add_price', 'Add a price', { item: null })];
-  }
-
-  const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
-  /** True when `n` is written in the text, as digits ("5 screens", "1,500 words") or as a word ("five screens"). */
-  const saysNumber = (text: string, n: number) =>
-    new RegExp(`(?<![\\d.,])${n}(?!\\d|[.,]\\d)`).test(text.replace(/(?<=\d),(?=\d{3}(?!\d))/g, ''))
-    || (NUMBER_WORDS[n] !== undefined && new RegExp(`\\b${NUMBER_WORDS[n]}\\b`, 'i').test(text));
-
-  /**
-   * The catalog item a message means. The model's item goes through catalogItemFor, which never takes a shorter name
-   * inside a longer phrase ("kids haircut" is not "Haircut"). With no model item, the name the text writes out in full.
-   */
-  const catalogMatch = (items: CatalogItem[], seen: string, extItem?: string | null, about = '') => {
-    const names = items.map((i) => i.name);
-    const exact = extItem && names.find((n) => n.toLowerCase() === extItem.trim().toLowerCase());
-    const name = exact || (extItem ? catalogItemFor(extItem, names, about) : namesItem(seen, names));
-    return name ? items.find((i) => i.name === name) : undefined;
+  /** The model's words, kept only when every main word of them is in what the owner typed. Never a word nobody typed. */
+  const grounded = (v: string | null | undefined, typed: string) => {
+    const w = cleanOrNull(v, 120);
+    return w && saidAll(w, typed) ? w : null;
   };
 
   /**
    * For each intent that needs fields: the fields when the regex and the owner's own records give all of them
-   * (then no extract call), else null. An invoice needs amount, a catalog item and a typed email; a pay link
-   * needs amount and item; a reminder needs one known unpaid client named; a refund needs one paid client
+   * (then no extract call), else null. An invoice needs amount and a typed email; a pay link
+   * needs amount; a reminder needs one known unpaid client named; a refund needs one paid client
    * named and, if the text has digits, the amount. A regex amount counts only when every other word the owner
-   * typed is a money word, a catalog item or a known client; else the model reads it too (rule B).
+   * typed is a money word or a known client; else the model reads it too (rule B).
    */
   const clientNames = (userId: string) =>
     [...db.listInvoices(userId), ...db.listOrders(userId)].map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n);
 
-  function regexFields(userId: string, q: Quick, text: string, seen: string, items: CatalogItem[]) {
-    const hasItem = !!catalogMatch(items, seen);
+  function regexFields(userId: string, q: Quick, text: string, seen: string) {
     const invoices = db.listInvoices(userId);
     const orders = db.listOrders(userId);
     const clients = clientNames(userId);
@@ -869,7 +854,7 @@ export function createApp(deps: Deps) {
       const names = new Set(rows.map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n && said(n)));
       return names.size === 1 ? [...names][0] : null;
     };
-    const amount = q.amount !== null && onlyKnownWords(text, [...items.map((i) => i.name), ...clients]);
+    const amount = q.amount !== null && onlyKnownWords(text, clients);
     const base: Extraction = { client_name: named([...invoices, ...orders]), client_email: q.email, amount: q.amount, currency: q.currency, item: null };
     const unpaid = invoices.filter((r) => !r.paid_at && r.status !== 'CANCELLED');
     const paid = [...invoices, ...orders].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED');
@@ -877,8 +862,8 @@ export function createApp(deps: Deps) {
     const remindName = named(unpaid, true);
     const refundName = named(paid);
     return {
-      create_invoice: amount && hasItem && q.email ? base : null,
-      pay_link: amount && hasItem ? base : null,
+      create_invoice: amount && q.email ? base : null,
+      pay_link: amount ? base : null,
       send_reminder: remindName ? { ...base, client_name: remindName } : null,
       refund: refundName && (amount || !/\d/.test(seen)) ? { ...base, client_name: refundName } : null,
     };
@@ -923,22 +908,19 @@ export function createApp(deps: Deps) {
     return emails.size === 1 ? [...emails][0] : null;
   }
 
-  function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, context: string, items: CatalogItem[], defaultCurrency: string, unsure = false): Chip[] {
-    const ext = rawExt && { ...rawExt, item: cleanOrNull(rawExt.item, 120), client_name: cleanOrNull(rawExt.client_name, 100) };
-    // Copied client text may only help match the catalog.
-    const lower = text.toLowerCase();
-    const seen = `${lower} ${context.toLowerCase()}`;
-    const match = catalogMatch(items, seen, ext?.item, businessOf(userId));
-    // A typed currency wins; a typed amount with a bare $ is in the profile currency; only a catalog price keeps the item's.
+  function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, context: string, defaultCurrency: string, unsure = false): Chip[] {
+    // The reason is the owner's (or the copied client text's) own words, never a word nobody typed ("Logo design").
+    const ext = rawExt && { ...rawExt, item: grounded(rawExt.item, `${text} ${context}`), client_name: cleanOrNull(rawExt.client_name, 100) };
+    // A typed currency wins; a bare $ is in the profile currency.
     const typedCurrency = (config.money.currencies as readonly string[]).includes(ext?.currency ?? '') ? ext!.currency! : null;
-    const currency = typedCurrency ?? (ext?.amount != null ? defaultCurrency : match?.currency ?? defaultCurrency);
+    const currency = typedCurrency ?? defaultCurrency;
     // Copied or typed text names a client: true when that text holds the client's full or first name.
     const namedIn = (t: string, client: string) => !!client && (mentions(t, client) || mentions(t, client.split(/\s+/)[0]));
 
     if (intent === 'create_invoice' || intent === 'pay_link') {
-      const cents = ext?.amount != null ? amountToCents(ext.amount) : match?.price_cents ?? null;
+      const cents = ext?.amount != null ? amountToCents(ext.amount) : null;
       if (cents === null) return [];
-      const item = ext?.item ? ext.item.charAt(0).toUpperCase() + ext.item.slice(1) : match?.name ?? 'Payment';
+      const item = ext?.item ? ext.item.charAt(0).toUpperCase() + ext.item.slice(1) : 'Payment';
       const money = formatMoney(cents, currency);
       const base = { amount: centsToValue(cents), currency, item, client_name: ext?.client_name ?? null };
       // An email the owner typed, else the one email the owner's records hold for the client named in the owner's
@@ -950,8 +932,7 @@ export function createApp(deps: Deps) {
       const recipient = email ?? ext?.client_name ?? null;
       // Every invoice gets one confirm tap that shows the amount and the recipient; the server checks both.
       const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`, { ...base, client_email: email }, true);
-      const currencyClash = !!match && ext?.amount != null && match.currency !== currency;
-      const link = chip('paylink', `Pay link ${money} · ${item}`, base, unsure || currencyClash);
+      const link = chip('paylink', `Pay link ${money} · ${item}`, base, unsure);
       return intent === 'create_invoice' ? [invoice, link] : [link, invoice];
     }
     if (intent === 'payment_status') {
@@ -982,9 +963,6 @@ export function createApp(deps: Deps) {
       const who = biz.namer(userId)(hit) ?? hit.item;
       return [chip('refund', `Refund ${formatMoney(refundCents, hit.currency)} · ${who}`, { id: hit.id, amount: centsToValue(refundCents) })];
     }
-    if (intent === 'catalog_reply') {
-      return items.length ? [chip('reply', 'Reply with prices', {})] : [];
-    }
     return [];
   }
 
@@ -999,10 +977,9 @@ export function createApp(deps: Deps) {
     if (!interval) return [];
     const plain = withoutInterval(text);
     const q = quick(plain);
-    const items = db.listItems(userId);
     const clients = clientNames(userId);
     const known = new Set(clients.filter((n) => mentions(text, n)));
-    let ext: Extraction | null = q.amount !== null && onlyKnownWords(plain, [...items.map((i) => i.name), ...clients])
+    let ext: Extraction | null = q.amount !== null && onlyKnownWords(plain, clients)
       ? { client_name: known.size === 1 ? [...known][0] : null, client_email: q.email, amount: q.amount, currency: q.currency, item: null }
       : null;
     if (!ext) {
@@ -1010,19 +987,17 @@ export function createApp(deps: Deps) {
       if (!model) return [];
       ext = { ...model, client_email: q.email ?? model.client_email, amount: q.amount ?? model.amount, currency: q.amount !== null ? q.currency : model.currency };
     }
-    const match = catalogMatch(items, text, ext.item, businessOf(userId));
-    const cents = ext.amount != null ? amountToCents(ext.amount) : match?.price_cents ?? null;
+    const cents = ext.amount != null ? amountToCents(ext.amount) : null;
     if (cents === null) return [];
-    const defaultCurrency = profileOf(userId).currency;
     const typedCurrency = (config.money.currencies as readonly string[]).includes(ext.currency ?? '') ? ext.currency! : null;
-    const currency = typedCurrency ?? (ext.amount != null ? defaultCurrency : match?.currency ?? defaultCurrency);
+    const currency = typedCurrency ?? profileOf(userId).currency;
     const rawName = cleanOrNull(ext.client_name, 100);
     const name = rawName && (mentions(text, rawName) || mentions(text, rawName.split(/\s+/)[0])) ? rawName : null;
     const emails = typedEmails(text);
     const typed = ext.client_email && emails.length === 1 && emails[0] === ext.client_email.toLowerCase() ? emails[0] : null;
     const email = emails.length > 1 ? null : typed ?? recordEmail(userId, name, text);
-    const itemName = cleanOrNull(ext.item, 120);
-    const item = itemName ? itemName.charAt(0).toUpperCase() + itemName.slice(1) : match?.name ?? 'Repeat payment';
+    const itemName = grounded(ext.item, text);
+    const item = itemName ? itemName.charAt(0).toUpperCase() + itemName.slice(1) : 'Repeat payment';
     const who = name ?? email;
     return [chip('subscribe', `Repeat ${formatMoney(cents, currency)} ${EVERY[interval]}${who ? ` · ${who}` : ''}`,
       { amount: centsToValue(cents), currency, interval, item, client_name: name, client_email: email }, true)];
@@ -1359,10 +1334,9 @@ export function createApp(deps: Deps) {
       return none(0, 'Could not read that right now. Try again.', (e as Error).message);
     }
 
-    const items = db.listItems(userId);
     const extract = () => {
       paid++;
-      return ai.extract(text, catalogText(items), businessOf(userId)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
+      return ai.extract(text, '', businessOf(userId)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
     };
     if (route === 'subscribe') {
       if (repeatEnds(text)) return none(confidence, "Repeat billing with an end date isn't ready yet. Send one invoice at a time for now.");
@@ -1373,7 +1347,7 @@ export function createApp(deps: Deps) {
     const intent = ROUTE_INTENT[route];
     if (intent) {
       const q = quick(text);
-      const filled = { text, context: '', q, known: regexFields(userId, q, text, text, items), items, currency: profileOf(userId).currency, business: businessOf(userId) };
+      const filled = { text, context: '', q, known: regexFields(userId, q, text, text), currency: profileOf(userId).currency, business: businessOf(userId) };
       return done(route, confidence, { chips: (await moneyChips(userId, intent, filled, null, extract)) ?? [] });
     }
 

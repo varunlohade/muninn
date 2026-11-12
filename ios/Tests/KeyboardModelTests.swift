@@ -170,5 +170,16 @@ final class KeyboardModelTests: XCTestCase {
         await passDebounce()
         await until("chip again") { model.bar == .chips([invoiceChip], fromCopied: false) }
     }
-}
 
+    /// Build 7: "$45 for the haircut" got chips on the server but none in the bar. The reply must reach the bar items.
+    func testShortMoneySentenceChipsReachTheBar() async {
+        let link = Chip(kind: "paylink", label: "Pay link $45.00 · Haircut",
+                        payload: ["item": .string("haircut"), "amount": .string("45.00"), "currency": .string("USD")], needs_confirm: false)
+        api.suggestReply = SuggestResponse(chips: [link, invoiceChip], intent: "pay_link", timings: nil)
+        type("$45 for the haircut")
+        await passDebounce()
+        await until("chip") { model.bar == .chips([link, invoiceChip], fromCopied: false) }
+        XCTAssertEqual(api.suggested.map(\.text), ["$45 for the haircut"])
+        XCTAssertEqual(model.barItems.first?.id, "paylink", "bar: \(model.barItems.map(\.id))")
+    }
+}

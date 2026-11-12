@@ -1,6 +1,6 @@
 const env = process.env;
 
-export const INTENTS = ['create_invoice', 'pay_link', 'payment_status', 'send_reminder', 'refund', 'catalog_reply', 'none'] as const;
+export const INTENTS = ['create_invoice', 'pay_link', 'payment_status', 'send_reminder', 'refund', 'none'] as const;
 export type Intent = (typeof INTENTS)[number];
 // Ask router: step 1 picks a group, step 2 picks one function inside it. 'none' is the last option of every question.
 export const ASK_GROUPS = ['money', 'writing', 'info', 'device', 'none'] as const;

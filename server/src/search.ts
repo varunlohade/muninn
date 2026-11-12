@@ -1,5 +1,5 @@
 // Lookup over the owner's own records: "invoice for sam" finds Sam's latest invoice. Read only: it never moves money or sends mail.
-import type { CatalogItem, Db, InvoiceRow, OrderRow, SubscriptionRow } from './db.ts';
+import type { Db, InvoiceRow, OrderRow, SubscriptionRow } from './db.ts';
 import { centsToValue, formatMoney } from './money.ts';
 import { editDistance, type Lookup } from './quick.ts';
 
@@ -227,21 +227,8 @@ export function createSearch({ db, dec, namer }: Deps) {
     return out;
   }
 
-  function catalog(items: CatalogItem[], l: Lookup): LookupResult | null {
-    const m = matchName(l.name, items.map((i) => i.name));
-    if (m.match === 'none') return null;
-    const candidates = m.names.map((n) => {
-      const it = items.find((i) => i.name.toLowerCase() === n.toLowerCase())!;
-      const money = formatMoney(it.price_cents, it.currency);
-      const rec: Rec = { kind: 'item', id: it.id, title: it.name, amount: centsToValue(it.price_cents), currency: it.currency, state: 'price', date: null, date_label: null, link: null, line: `${it.name} is ${money}.` };
-      return { name: it.name, records: [rec], empty_line: null };
-    });
-    return { kind: 'catalog', noun: 'item', query: l.name, match: m.match, candidates, note: null, new_invoice: false };
-  }
-
   /** The lookup's result: up to 3 clients, each with its latest record and up to 2 older ones. */
   function find(userId: string, l: Lookup): LookupResult | null {
-    if (l.kind === 'catalog') return catalog(db.listItems(userId), l);
     const clients = byClient(userId);
     const m = matchName(l.name, [...clients.values()].map((c) => c.name));
     let note: string | null = null;

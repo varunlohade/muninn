@@ -57,13 +57,12 @@ const WRITER = 'You edit chat messages for a small business owner. The user mess
 
 
 const CRITERIA: Record<Intent, string> = {
-  create_invoice: 'The owner wants to bill or invoice a client for a job or item ("bill Sam for the cut", "bill Kowalski the retainer", "invoice ana@x.com $90"), tells a client what they owe, or the client asks for a bill or invoice.',
-  pay_link: 'The owner wants to give the client a quick link to pay now, e.g. "send me a link", "how can I pay you".',
+  create_invoice: 'The owner wants to bill or invoice a client for a job or item ("bill Sam for the cut", "bill Kowalski the retainer", "invoice ana@x.com $90"), tells a client what they owe ("two screens for 50", "done with the screens, that\'s $50", "sam owes me 50 for the app screens"), or the client asks for a bill or invoice.',
+  pay_link: 'The owner asks the client to pay now or gives a quick way to pay, e.g. "can you pay $45 for the haircut", "send me 45 for the cut", "send me a link", "how can I pay you".',
   payment_status: 'The owner asks or wonders whether someone has paid, who paid, or what is still owed.',
   send_reminder: 'The owner wants to remind, nudge or chase a client about an unpaid or overdue invoice or a job not paid yet ("remind Emma about last week\'s walks").',
   refund: 'The owner agrees to give a client money back or refund a payment.',
-  catalog_reply: 'A client asks what something costs (a price, rate, fee or quote, in any wording or language), or about services, products or availability, and the owner should reply with the price.',
-  none: 'Ordinary chat with no payment, pricing or invoice action.',
+  none: 'Ordinary chat with no payment action, including money the owner or someone else spent or paid ("I paid 50 for lunch", "the bus was $2", "my rent is $1200").',
 };
 
 const GROUP_CRITERIA: Record<AskGroup, string> = {
@@ -339,16 +338,13 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
             'Reply with one JSON object only, no prose: {"client_name": string|null, "client_email": string|null, ' +
             '"amount": number|null, "currency": "USD"|"EUR"|"GBP"|"CAD"|"AUD"|null, "item": string|null, "quantity": number|null}. ' +
             'Use null for anything not stated. The message may start with "Client said:". ' +
-            'item: the one product or service the message is about. If the catalog has that same thing, copy its catalog name exactly. ' +
-            'If the catalog does not have it, use the client\'s own short words for it ("gift wrap", "rush delivery"). ' +
-            'Never put a different catalog item in its place, even a similar or more expensive one. ' +
-            'When the message asks about a product or service, item is never null, even when the catalog does not have it. ' +
+            'item: the job or product the money is for, copied from the message in its own short words ("two screens", "beard trim"). ' +
+            'Never a word that is not in the message. Null when the message does not say. ' +
+            'client_name: the person who should pay, only when the message names them. ' +
             'quantity: how many of the item, counted in the unit its price is for ("3 trims" is 3, "800 words" at a per-word price is 800, ' +
             '"3 dozen" at a per-dozen price is 3). Pick the item whose unit is what the client counts: single units, not a bundle of them. ' +
-            'amount: a total written in the message. If none is written and the client asks to be billed or to pay, ' +
-            'use the catalog price of the item times the quantity, or of the only catalog item if there is just one. Never make up a price. ' +
-            (business ? `The owner's business: ${business}. Read a vague price question ("how much?", "a cut?", "5 pages?") as a question about ` +
-              'what this business sells. ' : '') +
+            'amount: the total written in the message, or null. Never make up a price. ' +
+            (business ? `The owner's business: ${business}. ` : '') +
             (catalog ? `The owner's catalog: ${catalog}` : ''),
         },
         { role: 'user', content: text.slice(0, config.maxTextChars) },

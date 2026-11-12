@@ -95,6 +95,93 @@ export function quick(text: string, context = ''): Quick {
   };
 }
 
+// ---- A plain request to be paid, in the owner's natural words: "two screens for 50", "sam owes me 50 for the app
+// screens", "drain is clear, 120 please". Regex only, so a sure case needs no intent question. The model may still read
+// the reason and the client; the amount is always the one read here.
+
+// Money the owner spent or someone else paid, or a bill of the owner's own: never a request to a client.
+const SPENT = [
+  /\b(?:i|we|i've|we've|ive)\s+(?:just\s+|already\s+)?(?:paid|spent|bought|owe|lost|got charged)\b/i,
+  /\b(?:she|he|they|mom|dad)\s+(?:just\s+)?(?:paid|spent|bought)\b/i,
+  /\b(?:my|our)\s+(?:\w+\s+)?(?:rent|bill|phone|car|gas|lunch|dinner|ticket|tickets|groceries|mortgage|loan|insurance)\b/i,
+  /\b(?:bus|train|lunch|dinner|breakfast|coffee|gas|rent|uber|taxi|cab|tickets?|movie|groceries|parking|drinks?|pizza)\s+(?:was|is|were|cost|costs)\b/i,
+];
+// The owner asks the client to pay: a pay word, a total word, or a job that is done.
+const ASKS = /\bowe[sd]?\b|\bpay\b|\bsend\b|\bplease\b|\bpls\b|\bthat'?s\b|\bthats\b|\bthat(?:'ll| will) be\b|\bit(?:'s| is)\b|\btotal\b|\bcame to\b|\bcomes to\b|\bready\b|\bdone\b|\bfixed\b|\bfinished\b|\bdue\b|\binvoice\b|\bbill\b/i;
+// A number with these after it counts things or time, not money.
+const UNIT_AFTER = /^\s*(?:%|percent|people|persons|pax|guests|kids|min|mins|minutes?|hours?|hrs?|days?|weeks?|months?|years?|yrs?|degrees?|followers?|likes?|pm|am|o'?clock|times|miles?|km|kg|lbs?|pages?|words?|st|nd|rd|th)\b/i;
+const BARE = /(?<![\w.,:/$€£])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\w.,:/]*\d)(?!\s*[$€£])/g;
+// Words that end a reason: "for the cut bro", "for the fade when you get a sec", "for the cut last week".
+const REASON_END = /\s+(?:bro|man|mate|dude|pls|please|thanks|thx|when\b.*|whenever\b.*|tonight|today|yesterday|last\s+\w+|this\s+\w+|here\b.*|asap|now|ok|okay)$/i;
+const LEAD = /^(?:(?:done|finished|ready)\s+(?:with\s+)?|(?:i\s+)?(?:can\s+)?do\s+|the\s+|your\s+|my\s+|for\s+(?:the\s+|your\s+)?)+/i;
+
+export type MoneyRequest = { amount: number; currency: string | null; reason: string | null };
+
+/**
+ * The owner's own text asks a client for one amount. Null for chat, money the owner spent ("I paid 50 for lunch"),
+ * more than one possible amount, a number that counts time or things, or a sentence with no ask in it.
+ */
+export function moneyRequest(text: string): MoneyRequest | null {
+  const s = text.trim();
+  if (!s || SPENT.some((re) => re.test(s)) || TIME_LIKE.test(s)) return null;
+  const marked = amountsIn(s).filter((a) => a.total);
+  let amount: number;
+  let currency: string | null = null;
+  let at: number;
+  if (marked.length) {
+    if (new Set(marked.map((a) => a.at)).size !== 1) return null;
+    ({ amount, currency, at } = marked[0]);
+  } else {
+    // Bare digits: only the one number that is not a count ("2 screens") and sits by an ask or a "for".
+    const bare = [...s.matchAll(BARE)].filter((m) => !UNIT_AFTER.test(s.slice(m.index + m[0].length)));
+    const counts = (m: RegExpMatchArray) => /^\s+[a-z]/i.test(s.slice(m.index! + m[0].length)) && !/^\s+(?:for|please|pls|total|bucks|now|thanks|when|if)\b/i.test(s.slice(m.index! + m[0].length));
+    const money = bare.filter((m) => !counts(m));
+    if (money.length !== 1) return null;
+    amount = Number(money[0][1].replace(/,/g, '') + (money[0][2] ? `.${money[0][2]}` : ''));
+    at = money[0].index!;
+    if (amount < 5) return null;
+  }
+  if (!(amount > 0)) return null;
+  const forShape = /\bfor\b/i.test(s);
+  if (!ASKS.test(s) && !forShape) return null;
+  return { amount, currency, reason: reasonIn(s, at) };
+}
+
+// "7:30", "at 5", "by 3" read as a time.
+const TIME_LIKE = /\d:\d\d|\b(?:at|by|around|after|before|until|till)\s+\d{1,2}\b(?!\s*(?:dollars?|bucks|usd|eur))/i;
+
+/** The owner's words for what the money is for: after "for", else the clause without the amount. Null when none. */
+function reasonIn(s: string, at: number): string | null {
+  const clauses = s.split(/[,.!?;]|\s+-\s+/).map((c) => c.trim()).filter(Boolean);
+  const tidy = (r: string) => {
+    let t = r.replace(/[$€£]?\s?\d[\d,.]*\s?(?:usd|eur|gbp|dollars?|bucks)?/gi, ' ').replace(/\s+/g, ' ').trim();
+    for (let i = 0; i < 3; i++) t = t.replace(REASON_END, '').trim();
+    t = t.replace(/\s+(?:it'?s|its|is|was)$/i, '').replace(LEAD, '').replace(/\b(?:is|was|are|were)\s+(?:ready|done|clear|finished)$/i, '').replace(/\s+(?:is|was|came to|comes to|done|ready)$/i, '').trim();
+    const words = t.split(/\s+/).filter(Boolean);
+    if (!words.length || words.length > 5) return null;
+    if (words.every((w) => /^(?:that'?s|thats|it'?s|its|that'll|be|total|please|pls|pay|me|you|send|can|the|a|an|it|here|owe[sd]?|done|with|order|your|my)$/i.test(w))) return null;
+    return t;
+  };
+  const after = /\bfor\s+(?:the\s+|your\s+|my\s+|a\s+|an\s+)?([^,.!?;]+)/i.exec(s);
+  if (after) {
+    const r = tidy(after[1]);
+    if (r && !/^\d/.test(after[1].trim())) return r;
+  }
+  // "two screens for 50": the words before "for <amount>".
+  const before = /^(.*?)\s+for\s+[$€£]?\d/i.exec(s);
+  if (before) {
+    const r = tidy(before[1].split(/[,.!?;]/).pop() ?? '');
+    if (r) return r;
+  }
+  // "fixed the leak, that's $150": the clause without the amount.
+  for (const c of clauses) {
+    if (/\d/.test(c) && s.indexOf(c) <= at && at < s.indexOf(c) + c.length) continue;
+    const r = tidy(c.replace(/^(?:fixed|replaced|cleaned|finished|done with|completed)\s+/i, (m) => (/^fixed|^replaced|^cleaned/i.test(m) ? '' : '')));
+    if (r && !/\b(?:you|can|send|pay|here|how)\b/i.test(r)) return r;
+  }
+  return null;
+}
+
 // Words that add nothing to a money request. Any other word next to a regex amount sends the request to the model too.
 const FILLER = new Set(['a', 'an', 'the', 'for', 'to', 'of', 'is', 'it', 'this', 'that', 'here', "here's", 'heres', 'please', 'pls', 'and', 'my', 'your', 'you', 'me', 'send', 'make', 'create', 'new', 'now', 'with']);
 
@@ -233,8 +320,8 @@ export function deviceTitle(sentence: string): string {
 // ---- Lookup: "invoice for sam", "did sam pay", "ana's booking". The owner asks about their own records.
 // Regex only. A sentence that is a lookup phrase from end to end is sure; "invoice sam" (a command or a lookup) is unsure.
 
-/** money: invoices, bills, receipts, payments. any: the client's latest record of any kind. catalog: an item and its price. */
-export type LookupKind = 'money' | 'any' | 'catalog';
+/** money: invoices, bills, receipts, payments. any: the client's latest record of any kind. */
+export type LookupKind = 'money' | 'any';
 export type Lookup = {
   sure: boolean;
   /** The name or item as typed, lowercased. */
@@ -290,12 +377,6 @@ const TEMPLATES: Template[] = [
   tpl(`(?:what|when) did ${NAME} (?:last )?(?:order|book|buy|get|have|come in)(?: last time| last)?`, true, { kind: 'any' }),
   // invoice sam: a command or a lookup, so the router decides.
   tpl(`${NOUN} ${NAME}`, false),
-];
-const CATALOG_TEMPLATES = [
-  /^(?:the )?(?:price|prices|cost) (?:of|for) (?:a |an |the )?(?<name>[a-z][a-z' -]{1,40})$/,
-  /^how much (?:is|are|for|does) (?:a |an |the )?(?<name>[a-z][a-z' -]{1,40}?)(?: cost)?$/,
-  /^(?:the )?(?:price|cost|rate) on (?:a |an |the )?(?<name>[a-z][a-z' -]{1,40})$/,
-  /^(?:the )?(?<name>[a-z][a-z' -]{1,40}?) (?:price|cost|rate)$/,
 ];
 const LEAD_IN = /^(?:hey|hi|hello|yo|ok|okay|so|um|uh|hmm|lol|lmao|haha|btw|quick q|quick question|pls|please|can you|could you|can u|would you|will you|show me|show|find me|find|get me|get|pull up|open|check|look up|lookup|what's|whats|what is|where's|wheres|where is|when's|when is|when was|give me|gimme|i need|need|see|send me|bring up|remind me)\b[ ,:]*/;
 const TRAIL = /(?:[ ,]+(?:lol|lmao|haha|pls|please|thanks|thx|again|rn|right now|now|real quick|quickly|asap|for me|then))+$/;
@@ -405,12 +486,6 @@ export function detectLookup(text: string, now: number): Lookup | null {
       cents: amountCents(g.amt ?? g.amt2 ?? g.amt3), range: g.date ? rangeOf(g.date, now) : null, trigger,
     };
   }
-  for (const re of CATALOG_TEMPLATES) {
-    const name = re.exec(core)?.groups?.name?.trim();
-    if (name && !name.split(' ').every((w) => NOT_NAME.has(w))) {
-      return { sure: true, name, kind: 'catalog', noun: null, want: null, cents: null, range: null, trigger };
-    }
-  }
   return null;
 }
 
@@ -445,14 +520,17 @@ export type PayoutAsk = { name: string; amount: number; currency: string | null;
  */
 export function payoutAsk(text: string): PayoutAsk | null {
   const s = lastSentence(text);
-  if (NOT_PAYOUT.test(s) || TIME_WORD.test(s.replace(EMAIL, ' ')) || amountsIn(s).length === 0) return null;
+  // A bare number counts too ("pay ritika 20"): the whole sentence must still be a payout shape.
+  const bare = [...s.replace(EMAIL, ' ').matchAll(BARE)];
+  if (NOT_PAYOUT.test(s) || TIME_WORD.test(s.replace(EMAIL, ' ')) || (amountsIn(s).length === 0 && bare.length !== 1)) return null;
   const g = PAYOUT_SHAPES.map((re) => s.match(re)?.groups).find((x) => x?.name);
   const words = g?.name.split(/\s+/) ?? [];
   if (!words.length || words.some((w) => NOT_A_NAME.has(w.toLowerCase()))) return null;
   const q = quick(s);
-  if (q.amount === null) return null;
+  const amount = q.amount ?? (amountsIn(s).length === 0 && (s.match(NUMBER) ?? []).length === 1 ? Number(bare[0][1].replace(/,/g, '') + (bare[0][2] ? `.${bare[0][2]}` : '')) : null);
+  if (amount === null) return null;
   const name = words.map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ');
-  return { name, amount: q.amount, currency: q.currency, email: q.email, note: g?.reason?.trim() || null };
+  return { name, amount, currency: q.currency, email: q.email, note: g?.reason?.trim() || null };
 }
 
 // Repeat bills (PayPal subscriptions). Pause and resume are clear verbs alone; stop, end and cancel need a plan word,
@@ -545,4 +623,16 @@ export function chartAsk(text: string): ChartAsk | null {
   const back = countIn(s.match(new RegExp(`\\b(?:last|past)\\s+(${COUNT})\\s+months?\\b`, 'i')));
   const ahead = countIn(s.match(new RegExp(`\\b(?:next|coming)\\s+(${COUNT})\\s+months?\\b`, 'i')));
   return { kind: /\bline\b/i.test(s) ? 'line' : 'bar', back: clamp(back ?? 6, 2, 12), ahead: clamp(ahead ?? 3, 1, 6) };
+}
+
+const GLUE_WORDS = new Set(['the', 'a', 'an', 'for', 'of', 'and', 'my', 'your', 'to', 'with', 'on', 'in', 'at']);
+const stemWord = (w: string) => w.toLowerCase().replace(/(?:es|s)$/, '');
+/**
+ * True when every main word of `words` is a word of `typed` ("screens" in "two screens for 50"; "Logo design" is not).
+ * A word may differ by a plural ending or be a short form of a longer typed word.
+ */
+export function saidAll(words: string, typed: string): boolean {
+  const said = (typed.toLowerCase().match(/[\p{L}\d]+/gu) ?? []).map(stemWord);
+  const need = (words.toLowerCase().match(/[\p{L}\d]+/gu) ?? []).filter((w) => !GLUE_WORDS.has(w)).map(stemWord);
+  return need.length > 0 && need.every((w) => said.some((s) => s === w || (s.length >= 4 && w.startsWith(s)) || (w.length >= 4 && s.startsWith(w))));
 }
