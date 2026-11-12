@@ -91,11 +91,13 @@ export type PayPalPartner = {
   merchantStatus(merchantId: string): Promise<MerchantStatus | null>;
   merchantIdForTracking(trackingId: string): Promise<string | null>;
 };
-// Every feature the app uses, in one referral, so the seller consents once. All are values of the
-// rest_endpoint_features enum in the Partner Referrals v2 spec (PAYPAL_BALANCE and BILLING_AGREEMENT included).
+// The features this partner app may ask for today, in one referral, so the seller consents once.
+// PayPal answers 422 FEATURES_UNAUTHORIZED for the whole referral if one feature is not granted to the partner.
+// Checked on sandbox 2026-11-12: INVOICE_READ_WRITE, PAYOUTS and TRACKING_SHIPMENT_READWRITE are not granted yet.
+// Add them back once PayPal approves them for this partner.
 export const PARTNER_FEATURES = [
-  'PAYMENT', 'REFUND', 'INVOICE_READ_WRITE', 'PAYOUTS', 'ADVANCED_TRANSACTIONS_SEARCH', 'READ_SELLER_DISPUTE', 'UPDATE_SELLER_DISPUTE',
-  'TRACKING_SHIPMENT_READWRITE', 'ACCESS_MERCHANT_INFORMATION', 'PAYPAL_BALANCE', 'BILLING_AGREEMENT',
+  'PAYMENT', 'REFUND', 'ADVANCED_TRANSACTIONS_SEARCH', 'READ_SELLER_DISPUTE', 'UPDATE_SELLER_DISPUTE',
+  'ACCESS_MERCHANT_INFORMATION', 'PAYPAL_BALANCE', 'BILLING_AGREEMENT',
 ] as const;
 
 export class PayPalError extends Error {

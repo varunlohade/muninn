@@ -367,8 +367,8 @@ test('provider partner: one referral asks for every feature; merchant status rea
     assert.equal(ref.body.tracking_id, 'mu1');
     assert.equal(ref.body.partner_config_override.return_url, 'https://muninn.test/paypal/return');
     assert.deepEqual(ref.body.operations[0].api_integration_preference.rest_api_integration.third_party_details.features, [...PARTNER_FEATURES]);
-    assert.deepEqual([...PARTNER_FEATURES].sort(), ['ACCESS_MERCHANT_INFORMATION', 'ADVANCED_TRANSACTIONS_SEARCH', 'BILLING_AGREEMENT', 'INVOICE_READ_WRITE', 'PAYMENT',
-      'PAYOUTS', 'PAYPAL_BALANCE', 'READ_SELLER_DISPUTE', 'REFUND', 'TRACKING_SHIPMENT_READWRITE', 'UPDATE_SELLER_DISPUTE']);
+    assert.deepEqual([...PARTNER_FEATURES].sort(), ['ACCESS_MERCHANT_INFORMATION', 'ADVANCED_TRANSACTIONS_SEARCH', 'BILLING_AGREEMENT', 'PAYMENT',
+      'PAYPAL_BALANCE', 'READ_SELLER_DISPUTE', 'REFUND', 'UPDATE_SELLER_DISPUTE']);
     assert.equal(await partner.merchantIdForTracking('mu1'), 'SELLER12345');
     assert.ok(sent.some((x) => x.path === '/v1/customer/partners/PARTNER123/merchant-integrations?tracking_id=mu1'));
     assert.deepEqual(await partner.merchantStatus('SELLER12345'), {
