@@ -7,6 +7,12 @@ What to test:
 - Send money in plain words. Type "cool, sending Palak $40". The bar offers "Send $40 · Palak".
 - Connect PayPal opens PayPal's sandbox sign-in. Log in with a sandbox business account.
 - Log out wipes the phone fully before the start screen shows.
+- Refund. Type "refund sam $20".
+- Monthly bill. Type "bill ana $40 every month".
+- Plans. Type "pause ana's plan", then "resume ana's plan", then "stop ana's plan for good".
+- Mark paid. Type "mark sam paid". The confirm names the invoice.
+- Cancel. Type "cancel sam's invoice".
+- An invoice with no typed reason says "Services".
 
 ## 0.1 (8) — 2026-11-12
 
