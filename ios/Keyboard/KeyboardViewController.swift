@@ -45,6 +45,7 @@ final class KeyboardViewController: UIInputViewController, TextHost {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         updateAppearance()
+        keyHaptics = SharedStore.keyHaptics
         model.keyboardAppeared()
     }
 
@@ -83,11 +84,13 @@ final class KeyboardViewController: UIInputViewController, TextHost {
     func deleteBackward() { textDocumentProxy.deleteBackward() }
     func adjustCursor(by offset: Int) { textDocumentProxy.adjustTextPosition(byCharacterOffset: offset) }
     func nextKeyboard() { advanceToNextInputMode() }
-    /// A keyboard can click and tap the phone only with Full Access. The click also follows the Keyboard Clicks setting.
+    /// A keyboard can click and tap the phone only with Full Access. The click follows the Keyboard Clicks setting;
+    /// the tap follows "Key haptics" in the app, off by default.
     func playClick() {
         guard hasFullAccess else { return }
         UIDevice.current.playInputClick()
-        haptic.impactOccurred()
+        if keyHaptics { haptic.impactOccurred() }
     }
     private let haptic = UIImpactFeedbackGenerator(style: .light)
+    private var keyHaptics = false
 }
