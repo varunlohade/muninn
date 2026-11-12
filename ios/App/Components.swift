@@ -71,6 +71,86 @@ struct SectionHeader: View {
     }
 }
 
+/// The pixel sky card: our own procedural scene (exported from build/pixel.js), two-tone words on the sky,
+/// and an optional light button.
+struct PixelBanner<Action: View>: View {
+    let first: String
+    let rest: String
+    var height: CGFloat = 148
+    @ViewBuilder var action: Action
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous)
+        ZStack(alignment: .topLeading) {
+            GeometryReader { g in
+                Image("PixelCard").resizable().interpolation(.none)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: g.size.width, height: g.size.height, alignment: .bottom)
+                    .clipped()
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                twoTone(first, rest, ink: .white, ink2: .white.opacity(0.8))
+                    .font(Theme.Font.sans(18)).tracking(-0.2).lineSpacing(1)
+                    .shadow(color: Color(hex: 0x0B4A94).opacity(0.25), radius: 0, y: 1)
+                    .frame(maxWidth: 270, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: Theme.Space.s)
+                action
+            }
+            .padding(16)
+        }
+        .frame(height: height)
+        .clipShape(shape)
+        .overlay(shape.stroke(.black.opacity(0.06), lineWidth: 1))
+    }
+}
+
+extension PixelBanner where Action == EmptyView {
+    init(first: String, rest: String, height: CGFloat = 148) {
+        self.init(first: first, rest: rest, height: height) { EmptyView() }
+    }
+}
+
+/// Numbered rows in one card, split by dashed hairlines: a mono number, then the step.
+struct NumberedSteps: View {
+    let lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { i, text in
+                if i > 0 { DashedLine() }
+                NumberedLine(number: i + 1, text: text).padding(.vertical, Theme.Space.s)
+            }
+        }
+        .padding(.horizontal, Theme.Metric.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
+    }
+}
+
+struct NumberedLine: View {
+    let number: Int
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+            Text("\(number)").font(Theme.Font.mono(12)).foregroundStyle(Theme.Color.text3).frame(width: 14, alignment: .leading)
+            Text(text).font(Theme.Font.body).foregroundStyle(Theme.Color.text1).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// The dashed hairline inside cards.
+struct DashedLine: View {
+    var body: some View {
+        Line().stroke(Theme.Color.dash, style: StrokeStyle(lineWidth: 1, dash: [3, 3])).frame(height: 1)
+    }
+
+    private struct Line: Shape {
+        func path(in r: CGRect) -> Path { Path { $0.move(to: CGPoint(x: 0, y: r.midY)); $0.addLine(to: CGPoint(x: r.maxX, y: r.midY)) } }
+    }
+}
+
 /// Value over label. Cents are dimmed.
 struct MoneyValue: View {
     let amount: String

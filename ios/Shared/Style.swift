@@ -122,6 +122,32 @@ func twoTone(_ first: String, _ rest: String, ink: Color = Theme.Color.text1, in
     Text(first).foregroundColor(ink) + Text(rest.isEmpty ? "" : " " + rest).foregroundColor(ink2)
 }
 
+/// A task card: an icon tile, a title and a grey sub-line ("Invoice $45 / Sam"). Keyboard chips and previews use it.
+struct TaskCardLabel: View {
+    let icon: PixelIcon.Name
+    var iconFill: Color = .white
+    let title: String
+    var detail: String? = nil
+    var titleColor: Color = Theme.Color.text1
+    var height: CGFloat = 42
+
+    var body: some View {
+        HStack(spacing: 9) {
+            PixelIcon(name: icon, fill: iconFill, size: 24)
+                .frame(width: 30, height: 30)
+                .background(Theme.Color.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(Theme.Font.sans(14, 500)).foregroundStyle(titleColor).lineLimit(1)
+                if let detail { Text(detail).font(Theme.Font.sans(11.5)).foregroundStyle(Theme.Color.text2).lineLimit(1) }
+            }
+        }
+        .padding(.leading, 6).padding(.trailing, 14)
+        .frame(height: height)
+        .cardSurface(radius: 10, fill: Theme.Color.surface)
+    }
+}
+
 /// The dotted grid behind boards and the catalog panel.
 struct DottedGrid: View {
     var body: some View {

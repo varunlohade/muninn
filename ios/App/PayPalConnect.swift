@@ -122,29 +122,22 @@ final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPres
     }
 }
 
-/// Home: shown while money runs on the demo account. Text only, no PayPal logo. Home loads the status.
+/// Home: shown while money runs on the demo account. The pixel sky card, no PayPal logo. Home loads the status.
 struct ConnectPayPalCard: View {
     @ObservedObject private var paypal = PayPalConnector.shared
 
     var body: some View {
         if let s = paypal.status, !s.connected {
-            Card {
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    HStack(spacing: Theme.Space.s) {
-                        IconCircle(systemImage: "dollarsign")
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            Text("Connect PayPal").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
-                            Text("You are on the demo account. Connect your PayPal to get paid.").font(Theme.Font.label)
-                                .foregroundStyle(Theme.Color.text2).fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 0)
-                        AskChip(title: paypal.busy ? "One moment\u{2026}" : "Connect", detail: nil) { Task { await paypal.connect() } }
-                            .disabled(paypal.busy)
-                            .accessibilityIdentifier("home.paypal.connect")
-                    }
-                    if let note = paypal.note {
-                        Text(note).font(Theme.Font.label).foregroundStyle(Theme.Color.due).fixedSize(horizontal: false, vertical: true)
-                    }
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                PixelBanner(first: "Get paid in any chat.", rest: "Every invoice gets a pay link.") {
+                    Button(paypal.busy ? "One moment\u{2026}" : "Connect PayPal") { Task { await paypal.connect() } }
+                        .buttonStyle(TactileButton(kind: .light, small: true, wide: false))
+                        .disabled(paypal.busy)
+                        .accessibilityIdentifier("home.paypal.connect")
+                }
+                if let note = paypal.note {
+                    Text(note).font(Theme.Font.label).foregroundStyle(Theme.Color.due).fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 2)
                 }
             }
             .padding(.horizontal, Theme.Metric.cardInset)
@@ -163,7 +156,8 @@ struct PayPalIntegrationRow: View {
         Card {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 HStack(spacing: Theme.Space.s) {
-                    IconCircle(systemImage: "dollarsign")
+                    Image("PixelThumb").resizable().interpolation(.none).frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                         Text("PayPal").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                         Text(PayPalConnector.summary(paypal.status)).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
@@ -172,7 +166,7 @@ struct PayPalIntegrationRow: View {
                     }
                     Spacer(minLength: 0)
                     if paypal.connected {
-                        Image(systemName: "checkmark").foregroundStyle(Theme.Color.paid).accessibilityLabel("Connected")
+                        StatusPill(text: "Connected", tone: .paid)
                     } else if paypal.status != nil {
                         AskChip(title: paypal.busy ? "One moment\u{2026}" : "Connect", detail: nil) { Task { await paypal.connect() } }
                             .disabled(paypal.busy)
@@ -203,18 +197,24 @@ struct PayPalConfirmSheet: ViewModifier {
 
     func body(content: Content) -> some View {
         content.sheet(isPresented: Binding(get: { paypal.confirming != nil }, set: { if !$0 { paypal.decide(false) } })) {
-            VStack(spacing: Theme.Space.m) {
-                Text("Use this PayPal account?").font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
-                Text(paypal.confirming ?? "").font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Use this PayPal account?").font(Theme.Font.sans(20)).foregroundStyle(Theme.Color.text1)
+                    Spacer()
+                    StatusPill(text: "Needs your OK", tone: .due)
+                }
+                Text(paypal.confirming ?? "").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                    .padding(Theme.Space.m).frame(maxWidth: .infinity, alignment: .leading).cardSurface()
                     .accessibilityIdentifier("paypal.confirm.account")
                 Button("Use this account") { paypal.decide(true) }
                     .buttonStyle(PrimaryButton())
                     .accessibilityIdentifier("paypal.confirm.use")
                 Button("Not now") { paypal.decide(false) }
-                    .font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
+                    .font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text2)
                     .frame(maxWidth: .infinity, minHeight: Theme.Metric.secondaryButton)
             }
             .padding(Theme.Metric.margin)
+            .presentationBackground(Theme.Color.bg)
             .presentationDetents([.height(280)])
         }
     }
