@@ -29,7 +29,9 @@ struct KeyboardView: View {
 
     private func keyboard(_ p: M.Palette) -> some View {
         ZStack(alignment: .top) {
-            p.bed
+            // The keys stay on the system grey. Every panel, and the bar above it, sits on paper.
+            if model.panelOpen { Theme.Color.bg } else { p.bed }
+            if model.catalog.open && model.explainPanel == nil && !model.notesOpen && !model.writeOpen { DottedGrid() }
             if let panel = model.explainPanel {
                 Group {
                     switch panel {
@@ -44,11 +46,16 @@ struct KeyboardView: View {
                 WritePanelView(model: model, palette: p).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
             } else if model.catalog.open {
                 CatalogPanel(model: model, palette: p).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
+            } else if let c = model.confirmPanel {
+                ConfirmPanel(model: model, chip: c.chip, recipient: c.recipient).padding(.top, M.barHeight).padding(.bottom, M.bottomInset)
             } else {
                 SystemKeysView(model: model)
             }
+            // The bar never reports more than the keyboard's width, so a crowded bar can never shift the keys.
             SuggestionBar(model: model, palette: p)
+                .frame(maxWidth: .infinity)
                 .frame(height: M.barHeight)
+                .clipped()
         }
         .frame(height: model.keyboardHeight)
     }
@@ -70,7 +77,7 @@ struct WhoPaidStrip: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: Theme.Space.xs) {
-                Text(WhoPaid.header(clients)).font(M.mode.weight(.medium)).foregroundStyle(palette.label).lineLimit(1).minimumScaleFactor(0.7)
+                Text(WhoPaid.header(clients)).font(Theme.Font.sans(15, 500)).foregroundStyle(palette.label).lineLimit(1).minimumScaleFactor(0.7)
                     .accessibilityIdentifier("whopaid.header")
                 Spacer()
                 Button(action: model.closeWhoPaid) {
@@ -97,40 +104,40 @@ struct WhoPaidStrip: View {
 
     private func row(_ c: UnpaidClient) -> some View {
         HStack(spacing: Theme.Space.xs) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("\(c.name) \(c.money)").font(M.mode).foregroundStyle(palette.label).lineLimit(1).minimumScaleFactor(0.7)
-                Text("\(c.item) \u{00B7} \(c.veryLate ? "very late, " : "")\(c.late)").font(M.predictionSmall)
-                    .foregroundStyle(c.daysLate > 0 ? Theme.Color.due : palette.secondaryLabel).lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(c.name).font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1).lineLimit(1).minimumScaleFactor(0.7)
+                Text("\(c.item), \(c.veryLate ? "very late, " : "")\(c.late.lowercased())").font(Theme.Font.sans(12))
+                    .foregroundStyle(c.daysLate > 0 ? Theme.Color.due : Theme.Color.text2).lineLimit(1)
             }
             Spacer(minLength: 0)
+            Text(c.money).font(Theme.Font.sans(15, 500)).monospacedDigit().foregroundStyle(Theme.Color.text1)
             if let chip = c.remind {
-                Button { model.tapChip(chip) } label: {
-                    Text("Nudge").font(M.mode.weight(.medium)).foregroundStyle(palette.accent)
-                        .padding(.horizontal, Theme.Space.s).frame(height: Self.rowHeight).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("whopaid.remind.\(c.name)")
+                Button("Nudge") { model.tapChip(chip) }
+                    .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
+                    .accessibilityIdentifier("whopaid.remind.\(c.name)")
             }
         }
-        .padding(.leading, Theme.Space.s)
+        .padding(.leading, Theme.Space.s).padding(.trailing, 6)
         .frame(height: Self.rowHeight)
-        .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
+        .rowSurface()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("whopaid.row.\(c.name)")
     }
 }
 
-/// Sits where iOS shows predictive text: same height, centred text, 1 pt dividers. Empty when there is nothing to say.
+/// Sits where iOS shows predictive text, at the same height and type: one line per slot, thin dividers, no cards.
+/// Each slot fits its words ("Invoice Sam $45"); the action slot is accent-coloured. Rewrite, Notes and Catalog wait behind "…".
 struct SuggestionBar: View {
     @ObservedObject var model: KeyboardModel
     let palette: Theme.SystemKeyboard.Palette
     typealias M = Theme.SystemKeyboard
+    @State private var showTools = false
 
     var body: some View {
         let items = model.barItems
         HStack(spacing: 0) {
             if let panel = model.explainPanel {
-                Text(panelSubject(panel)).font(M.prediction.weight(.medium)).foregroundStyle(palette.label)
+                Text(panelSubject(panel)).font(Theme.Font.sans(16, 500)).foregroundStyle(Theme.Color.text1)
                     .lineLimit(1).truncationMode(.tail)
                     .padding(.leading, Theme.Space.s)
                     .accessibilityLabel(panelTitle(panel))
@@ -138,66 +145,136 @@ struct SuggestionBar: View {
                 Spacer(minLength: Theme.Space.xxs)
                 barButton("keyboard", id: "explain.close", label: "Keyboard", action: model.closeExplain)
             } else if model.notesOpen {
-                Text("Notes").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, Theme.Space.s)
+                panelTitle("Notes")
                 Spacer()
                 barButton("plus", id: "notes.add", label: "Save typed text as a note", action: model.saveNote)
                     .disabled(!model.canSaveNote)
                     .opacity(model.canSaveNote ? 1 : 0.3)
             } else if model.writeOpen {
-                Text("Rewrite").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, Theme.Space.s)
+                panelTitle("Rewrite")
                 Spacer()
             } else if model.catalog.open {
-                Text("Catalog").font(M.prediction.weight(.medium)).foregroundStyle(palette.label).padding(.leading, Theme.Space.s)
-                if model.catalog.selection.count > 0 {
-                    Text("\(model.catalog.selection.count) selected").font(M.prediction).foregroundStyle(palette.secondaryLabel)
-                        .padding(.leading, Theme.Space.xs).accessibilityIdentifier("catalog.count")
-                }
-                Spacer()
-            } else {
+                catalogHeader
+            } else if let c = model.confirmPanel {
+                Text(ConfirmPanel.title(c.chip, recipient: c.recipient, question: confirmQuestion(items)))
+                    .font(Theme.Font.sans(19)).tracking(-0.2).foregroundStyle(Theme.Color.text1)
+                    .lineLimit(1).minimumScaleFactor(0.6)
+                    .padding(.leading, Theme.Space.s)
+                    .accessibilityIdentifier("confirm.title")
+                Spacer(minLength: Theme.Space.xs)
+                StatusPill(text: "Needs your OK", tone: .due).padding(.trailing, Theme.Space.xs)
+            } else if showTools {
+                toolsRow
+            } else if items.allSatisfy({ $0.id.hasPrefix("predict.") }) && !items.isEmpty {
+                // The word row: plain, centred, with 1 pt dividers, like Apple's.
                 HStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                         if i > 0 { Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight) }
-                        Slot(item: item, palette: palette, action: item.action.map { a in { model.perform(a) } },
-                             width: (confirming && item.id == "cancel") || item.id == "undo" ? 80 : nil)
+                        Word(item: item, palette: palette) { if let a = item.action { model.perform(a) } }
                             .accessibilityIdentifier("chip.\(item.id)")
-                            .transition(.opacity)
                     }
                 }
                 .frame(maxWidth: .infinity)
+            } else {
+                QuickRow(model: model, items: items, palette: palette)
             }
-            if showsFix, let plan = model.fixPlan {
-                Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
-                Button(action: model.fix) {
-                    Text(plan.title).font(M.prediction.weight(.medium)).foregroundStyle(palette.accent)
-                        .lineLimit(1).fixedSize()
-                        .padding(.horizontal, Theme.Space.xs)
-                        .frame(maxHeight: .infinity).contentShape(Rectangle())
+            if quickMode {
+                // QuickType bar: Fix is a plain slot, and Rewrite, Notes and Catalog wait behind "…".
+                if showsFix, let plan = model.fixPlan, !showTools {
+                    Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
+                    Button(action: model.fix) {
+                        Text(plan.title).font(M.prediction).foregroundStyle(palette.label).lineLimit(1).fixedSize()
+                            .padding(.horizontal, 8).frame(maxHeight: .infinity).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(plan.title)
+                    .accessibilityIdentifier("chip.fix")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(plan.title)
-                .accessibilityIdentifier("chip.fix")
-                .transition(.opacity)
-            }
-            if model.paired && !model.notesOpen && !model.catalog.open && !confirming && !explaining {
                 Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
-                barButton(model.writeOpen ? "keyboard" : "wand.and.stars", id: "write.toggle", label: model.writeOpen ? "Keyboard" : "Rewrite", action: model.toggleWrite)
-            }
-            // Notes live in the App Group, which the keyboard reaches only with Full Access.
-            if model.hasFullAccess && !model.writeOpen && !model.catalog.open && !confirming && !explaining {
-                Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
-                barButton(model.notesOpen ? "keyboard" : "note.text", id: "notes.toggle", label: model.notesOpen ? "Keyboard" : "Notes", action: model.toggleNotes)
-            }
-            // The catalog cache lives in the App Group, which needs Full Access too.
-            if model.paired && !model.writeOpen && !model.notesOpen && !confirming && !explaining {
-                Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
-                barButton(model.catalog.open ? "keyboard" : "tag", id: "catalog.toggle", label: model.catalog.open ? "Keyboard" : "Catalog", action: model.toggleCatalog)
+                barButton(showTools ? "xmark" : "ellipsis", id: "bar.more", label: showTools ? "Close" : "More") { showTools.toggle() }
+            } else {
+                // A panel is open: its own way back to the keys.
+                if model.paired && !model.notesOpen && !model.catalog.open && !confirming && !explaining {
+                    barButton(model.writeOpen ? "keyboard" : "wand.and.stars", id: "write.toggle", label: model.writeOpen ? "Keyboard" : "Rewrite", action: model.toggleWrite)
+                }
+                // Notes live in the App Group, which the keyboard reaches only with Full Access.
+                if model.hasFullAccess && !model.writeOpen && !model.catalog.open && !confirming && !explaining {
+                    barButton(model.notesOpen ? "keyboard" : "note.text", id: "notes.toggle", label: model.notesOpen ? "Keyboard" : "Notes", action: model.toggleNotes)
+                }
+                // The catalog cache lives in the App Group, which needs Full Access too. Open, the panel's back button closes it.
+                if model.paired && !model.writeOpen && !model.notesOpen && !model.catalog.open && !confirming && !explaining {
+                    barButton("tag", id: "catalog.toggle", label: "Catalog", action: model.toggleCatalog)
+                }
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.bottom, M.barHeight - 2 * 23.8)
+        .padding(.trailing, 2)
         .animation(Theme.Motion.chipAppear, value: items.map(\.id))
         .animation(Theme.Motion.chipAppear, value: showsFix)
     }
+
+    /// The bar is showing its slots or the word row (not a panel head or a confirm).
+    private var quickMode: Bool {
+        model.explainPanel == nil && !model.notesOpen && !model.writeOpen && !model.catalog.open && model.confirmPanel == nil && !explaining
+    }
+
+    /// Behind "…": Rewrite, Notes and Catalog as plain slots.
+    private var toolsRow: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(tools.enumerated()), id: \.offset) { i, t in
+                if i > 0 { Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight) }
+                Button { showTools = false; t.run() } label: {
+                    Text(t.title).font(M.prediction).foregroundStyle(palette.label).lineLimit(1)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(t.id)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var tools: [(title: String, id: String, run: () -> Void)] {
+        var out: [(title: String, id: String, run: () -> Void)] = []
+        if model.paired { out.append(("Rewrite", "write.toggle", model.toggleWrite)) }
+        if model.hasFullAccess { out.append(("Notes", "notes.toggle", model.toggleNotes)) }
+        if model.paired { out.append(("Catalog", "catalog.toggle", model.toggleCatalog)) }
+        return out
+    }
+
+    /// The catalog's head, per M1-4: back, the name and count, then Share.
+    private var catalogHeader: some View {
+        let c = model.catalog
+        return HStack(spacing: Theme.Space.xs) {
+            Button(action: model.toggleCatalog) {
+                Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
+            }
+            .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
+            .frame(width: 40)
+            .accessibilityLabel("Keyboard")
+            .accessibilityIdentifier("catalog.toggle")
+            Text("Catalog").font(Theme.Font.sans(16, 500)).foregroundStyle(Theme.Color.text1)
+            if c.selection.count > 0 {
+                Text("\(c.selection.count) selected").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                    .accessibilityIdentifier("catalog.count")
+            }
+            Spacer(minLength: 0)
+            if !c.items.isEmpty {
+                Button(c.selection.count > 1 ? "Share \(c.selection.count)" : "Share", action: model.insertCatalog)
+                    .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
+                    .disabled(c.selection.count == 0)
+                    .accessibilityLabel(c.selection.count > 1 ? "Insert \(c.selection.count)" : "Insert")
+                    .accessibilityIdentifier("catalog.insert")
+            }
+        }
+        .padding(.horizontal, Theme.Space.s)
+    }
+
+    private func panelTitle(_ text: String) -> some View {
+        Text(text).font(Theme.Font.sans(16, 500)).foregroundStyle(Theme.Color.text1).padding(.leading, Theme.Space.s)
+    }
+
+    /// The bar's own confirm question, for VoiceOver and the tests: "Email Sam (sam@x.com) a $45 invoice?".
+    private func confirmQuestion(_ items: [BarItems.Item]) -> String { items.first { $0.id == "confirm" }?.title ?? "" }
 
     /// A confirm question takes the whole bar beside Cancel, so the amount and the recipient stay readable.
     private var confirming: Bool {
@@ -237,75 +314,137 @@ struct SuggestionBar: View {
 
     private func barButton(_ systemImage: String, id: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: systemImage).font(M.icon).foregroundStyle(palette.label)
-                .frame(width: 40).frame(maxHeight: .infinity).contentShape(Rectangle())
+            Image(systemName: systemImage).font(M.icon).foregroundStyle(model.panelOpen ? Theme.Color.text1 : palette.label)
+                .frame(width: 34).frame(maxHeight: .infinity).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .accessibilityIdentifier(id)
     }
 
-    struct Slot: View {
+    /// One word of the prediction row.
+    struct Word: View {
         let item: BarItems.Item
         let palette: Theme.SystemKeyboard.Palette
-        let action: (() -> Void)?
-        /// A fixed width, or nil to share the bar with the other slots.
-        var width: CGFloat? = nil
+        let action: () -> Void
 
         var body: some View {
-            Button { action?() } label: {
-                VStack(spacing: 0) {
-                    if let t = item.trigger {
-                        // The words that caused the chip, quoted, on one line. The trigger shortens first, then goes,
-                        // so the action stays whole.
-                        ViewThatFits(in: .horizontal) {
-                            quoted(t, item.title).fixedSize()
-                            ForEach(Self.shortened(t), id: \.self) { s in quoted(s, item.short ?? item.title).fixedSize() }
-                            titleText
-                        }
-                    } else {
-                        titleText
-                    }
-                    if let d = item.detail {
-                        Text(d).font(M.predictionSmall).foregroundStyle(palette.secondaryLabel).lineLimit(1).minimumScaleFactor(0.7)
-                    }
-                }
-                .padding(.horizontal, Theme.Space.xs)
-                .frame(maxWidth: width ?? .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
+            Button(action: action) {
+                Text(item.title).font(M.prediction).foregroundStyle(palette.label).lineLimit(1).minimumScaleFactor(0.6)
+                    .padding(.horizontal, Theme.Space.xs)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(action == nil)
         }
+    }
+}
 
-        private var titleText: some View {
-            Text(item.title).font(item.detail == nil ? M.prediction : M.prediction.weight(.medium))
-                .foregroundStyle(tint)
-                .lineLimit(item.id == "confirm" ? 2 : 1).minimumScaleFactor(item.id == "confirm" ? 0.8 : 0.6)
-                .multilineTextAlignment(.center)
-        }
+/// The confirm panel, per M1-5: the question with "Needs your OK" above (in the bar), To / For / Pays-with rows,
+/// then Edit and the action. Edit cancels, so the owner can change the message. Nothing is sent before the dark button.
+struct ConfirmPanel: View {
+    @ObservedObject var model: KeyboardModel
+    let chip: Chip
+    let recipient: String
 
-        private func quoted(_ trigger: String, _ title: String) -> Text {
-            Text("\u{201C}\(trigger)\u{201D} ").font(M.prediction).foregroundColor(palette.accent)
-                + Text(title).font(item.detail == nil ? M.prediction : M.prediction.weight(.medium)).foregroundColor(tint)
-        }
-
-        /// The trigger whole, then cut shorter, for ViewThatFits to try in turn.
-        static func shortened(_ t: String) -> [String] {
-            var out = [t]
-            for n in [16, 10, 6] where t.count > n + 1 { out.append(String(t.prefix(n)).trimmingCharacters(in: .whitespaces) + "\u{2026}") }
-            return out
-        }
-
-        private var tint: Color {
-            switch item.tone {
-            case .label: palette.label
-            case .secondary: palette.secondaryLabel
-            case .accent: palette.accent
-            case .paid: Theme.Color.paid
-            case .due: Theme.Color.due
+    var body: some View {
+        let question = model.barItems.first { $0.id == "confirm" }?.title ?? BarItems.confirmTitle(chip, recipient: recipient)
+        VStack(spacing: Theme.Space.s) {
+            VStack(spacing: 0) {
+                ForEach(Array(Self.rows(chip, recipient: recipient).enumerated()), id: \.offset) { i, r in
+                    if i > 0 { Dashed() }
+                    HStack(spacing: 0) {
+                        Text(r.label).font(Theme.Font.sans(12.5)).foregroundStyle(Theme.Color.text2).frame(width: 78, alignment: .leading)
+                        Text(r.value).font(Theme.Font.sans(14, 500)).foregroundStyle(Theme.Color.text1).lineLimit(1).minimumScaleFactor(0.8)
+                        Spacer(minLength: Theme.Space.xs)
+                        if let d = r.detail {
+                            Text(d).font(Theme.Font.sans(12.5)).monospacedDigit().foregroundStyle(Theme.Color.text2).lineLimit(1).minimumScaleFactor(0.7)
+                        }
+                    }
+                    .frame(height: 40)
+                }
             }
+            .padding(.horizontal, 14)
+            .cardSurface()
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("confirm.card")
+            HStack(spacing: Theme.Space.xs) {
+                Button("Edit") { model.perform(.cancelConfirm) }
+                    .buttonStyle(TactileButton(kind: .quiet))
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("chip.cancel")
+                Button(Self.verb(chip)) { model.perform(.confirm(chip, recipient: recipient)) }
+                    .buttonStyle(TactileButton(kind: .dark))
+                    .frame(maxWidth: .infinity)
+                    .layoutPriority(1)
+                    .frame(minWidth: 0)
+                    .accessibilityLabel(question)
+                    .accessibilityIdentifier("chip.confirm")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, Theme.Space.s)
+        .padding(.top, Theme.Space.xs)
+    }
+
+    private struct Dashed: View {
+        var body: some View {
+            GeometryReader { g in
+                Path { $0.move(to: .zero); $0.addLine(to: CGPoint(x: g.size.width, y: 0)) }
+                    .stroke(Theme.Color.dash, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
+            .frame(height: 1)
+        }
+    }
+
+    private static func s(_ chip: Chip, _ key: String) -> String? { BarItems.string(chip, key) }
+
+    private static func money(_ chip: Chip) -> String? {
+        s(chip, "amount").map { formatMoney($0, s(chip, "currency") ?? "USD") }
+    }
+
+    /// The bar's short question: "Email Sam a $45 invoice?" when the To row shows the email. Else the bar's own question.
+    static func title(_ chip: Chip, recipient: String, question: String) -> String {
+        if chip.kind == "invoice", recipient.contains("@"), let m = money(chip) {
+            let who = s(chip, "client_name").flatMap { $0.split(separator: " ").first.map(String.init) } ?? recipient
+            return "Email \(who) a \(m) invoice?"
+        }
+        return question
+    }
+
+    static func verb(_ chip: Chip) -> String {
+        switch chip.kind {
+        case "invoice": s(chip, "client_email") != nil || BarItems.recipient(chip).contains("@") ? "Send invoice" : "Make invoice link"
+        case "remind": "Send nudge"
+        case "subscribe": "Start repeat billing"
+        case "paylink": "Make pay link"
+        default: "Confirm"
+        }
+    }
+
+    struct Row { let label: String; let value: String; let detail: String? }
+
+    static func rows(_ chip: Chip, recipient: String) -> [Row] {
+        let name = s(chip, "client_name"), email = s(chip, "client_email") ?? (recipient.contains("@") ? recipient : nil)
+        var out: [Row] = []
+        if let who = name ?? (recipient.isEmpty ? nil : recipient) {
+            out.append(Row(label: "To", value: who, detail: email == who ? nil : email))
+        }
+        switch chip.kind {
+        case "remind":
+            out.append(Row(label: "For", value: s(chip, "item") ?? "Unpaid invoice", detail: money(chip)))
+            out.append(Row(label: "Sends", value: "Reminder email", detail: "From PayPal"))
+        case "subscribe":
+            out.append(Row(label: "For", value: s(chip, "item") ?? "Repeat payment", detail: money(chip)))
+            out.append(Row(label: "Repeats", value: s(chip, "interval").flatMap { BarItems.every[$0] }?.capitalized ?? "Yes", detail: "PayPal"))
+        case "invoice", "paylink":
+            out.append(Row(label: "For", value: s(chip, "item")?.capitalized ?? (chip.kind == "paylink" ? "Payment" : "Invoice"), detail: money(chip)))
+            out.append(Row(label: "Pays with", value: "PayPal link", detail: chip.kind == "invoice" ? (email == nil ? "No email goes out" : "Emailed now") : nil))
+        default:
+            out.append(Row(label: "Does", value: chip.label, detail: money(chip)))
+        }
+        return out
     }
 }
 
@@ -320,20 +459,25 @@ struct NotesPanel: View {
             VStack(spacing: M.keyGap) {
                 ForEach(Array(model.notes.enumerated()), id: \.element.id) { i, note in
                     Button { model.insertNote(note) } label: {
-                        Text(note.text).font(M.mode).foregroundStyle(palette.label)
-                            .lineLimit(2).multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, minHeight: M.keyHeight - 20, alignment: .leading)
-                            .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xs)
-                            .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
+                        HStack(spacing: Theme.Space.s) {
+                            IconTile(icon: .note, fill: Color(hex: 0xF4D35E), size: 28)
+                            Text(note.text).font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text1)
+                                .lineLimit(2).multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(minHeight: M.keyHeight - 4)
+                        .padding(.horizontal, Theme.Space.xs).padding(.vertical, 6)
+                        .rowSurface()
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("note.\(i)")
                 }
                 if model.notes.isEmpty {
-                    Text("No notes yet. Type a reply, then tap +.").font(M.mode).foregroundStyle(palette.secondaryLabel).padding(.top, Theme.Space.xl)
+                    Text("No notes yet. Type a reply, then tap +.").font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text2).padding(.top, Theme.Space.xl)
                 }
             }
-            .padding(.horizontal, M.sideInset)
+            .padding(.horizontal, Theme.Space.s)
+            .padding(.top, 2)
         }
     }
 }
@@ -353,8 +497,8 @@ struct WritePanelView: View {
             case .preview(let p): preview(p)
             }
         }
-        .padding(.horizontal, M.sideInset)
-        .padding(.vertical, 4)
+        .padding(.horizontal, Theme.Space.s)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -381,13 +525,13 @@ struct WritePanelView: View {
         VStack(spacing: M.keyGap) {
             Button(action: model.usePreview) {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(p.title).font(M.predictionSmall.weight(.semibold)).foregroundStyle(palette.secondaryLabel)
-                    Text(p.text).font(M.mode).foregroundStyle(palette.label)
+                    Text(p.title).font(Theme.Font.sans(12.5)).foregroundStyle(Theme.Color.text2)
+                    Text(p.text).font(Theme.Font.sans(16)).foregroundStyle(Theme.Color.text1)
                         .multilineTextAlignment(.leading).minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
                 .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xs)
-                .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
+                .cardSurface()
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("write.preview")
@@ -399,19 +543,26 @@ struct WritePanelView: View {
     }
 
     private func note(_ text: String) -> some View {
-        Text(text).font(M.mode).foregroundStyle(palette.secondaryLabel).multilineTextAlignment(.center)
+        Text(text).font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text2).multilineTextAlignment(.center)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityIdentifier("write.note")
     }
 
     private func wide(_ title: String, id: String, accent: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title).font(M.mode).foregroundStyle(accent ? .white : palette.label)
-                .lineLimit(1).minimumScaleFactor(0.8)
-                .frame(maxWidth: .infinity, minHeight: M.keyHeight, maxHeight: M.keyHeight + 9)
-                .background(accent ? palette.accent : palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier(id)
+        Button(title, action: action)
+            .buttonStyle(TactileButton(kind: accent ? .dark : .quiet))
+            .frame(maxHeight: M.keyHeight + 9)
+            .accessibilityIdentifier(id)
+    }
+}
+
+extension KeyboardModel {
+    /// A panel replaces the keys: explain, notes, rewrite, catalog or the confirm.
+    var panelOpen: Bool { explainPanel != nil || notesOpen || writeOpen || catalog.open || confirmPanel != nil }
+
+    /// The invoice, reminder or repeat bill waiting for the owner's OK, shown as a panel in place of the keys.
+    var confirmPanel: (chip: Chip, recipient: String)? {
+        guard explainPanel == nil, !notesOpen, !writeOpen, !catalog.open, case .confirm(let chip, let recipient) = bar else { return nil }
+        return (chip, recipient)
     }
 }

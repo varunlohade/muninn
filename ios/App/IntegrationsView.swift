@@ -12,7 +12,9 @@ struct IntegrationsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
-                Text("Integrations").font(Theme.Font.title).foregroundStyle(Theme.Color.text1).padding(.horizontal, Theme.Metric.margin)
+                twoTone("Settings.", "What \(AppConfig.displayName) is connected to, and how the keyboard feels.")
+                    .font(Theme.Font.title).tracking(-0.3).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Theme.Metric.cardInset + 2).padding(.bottom, Theme.Space.xs)
                 NavigationLink { BusinessView() } label: { BusinessRow() }
                     .buttonStyle(PressScale())
                     .padding(.horizontal, Theme.Metric.cardInset)
@@ -52,7 +54,7 @@ struct IntegrationsView: View {
                                     Text("Saved with your Apple account.").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
                                 }
                                 Spacer(minLength: 0)
-                                Image(systemName: "checkmark").foregroundStyle(Theme.Color.paid).accessibilityLabel("Saved")
+                                StatusPill(text: "Saved", tone: .paid)
                             }
                         }
                     } else {
@@ -68,13 +70,14 @@ struct IntegrationsView: View {
                     SectionHeader(title: "Coming soon").padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: Theme.Metric.cardGap), GridItem(.flexible(), spacing: Theme.Metric.cardGap)], spacing: Theme.Metric.cardGap) {
                         ForEach(soon) { i in
-                            Card {
-                                VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                                    IconCircle(systemImage: Self.icon(i.id), size: 36)
-                                    Text(i.name).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text2)
-                                    Text("Coming soon").font(Theme.Font.label).foregroundStyle(Theme.Color.text3)
-                                }
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                IconCircle(systemImage: Self.icon(i.id), size: 34)
+                                Text(i.name).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1).lineLimit(1).minimumScaleFactor(0.8)
+                                StatusPill(text: "Soon")
                             }
+                            .padding(Theme.Space.s)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .rowSurface()
                             .allowsHitTesting(false)
                             .accessibilityElement(children: .combine)
                         }
@@ -112,7 +115,9 @@ struct IntegrationsView: View {
                 }
                 Spacer(minLength: 0)
                 if i.status == "connected" {
-                    Image(systemName: "checkmark").foregroundStyle(Theme.Color.paid).accessibilityLabel("Connected")
+                    StatusPill(text: "Connected", tone: .paid)
+                } else if i.status == "on_device" {
+                    StatusPill(text: "On this phone", tone: .booked)
                 } else if opens {
                     Image(systemName: "chevron.right").font(.system(size: 13)).foregroundStyle(Theme.Color.text3)
                 }
@@ -141,7 +146,7 @@ struct IntegrationsView: View {
                 }
                 Spacer(minLength: 0)
                 if calendar.connected {
-                    Image(systemName: "checkmark").foregroundStyle(Theme.Color.paid).accessibilityLabel("Connected")
+                    StatusPill(text: "Connected", tone: .paid)
                 } else if calendar.status == .notDetermined {
                     AskChip(title: "Connect", detail: nil) { Task { await calendar.connect() } }
                         .accessibilityIdentifier("calendar.connect")
@@ -181,8 +186,7 @@ struct SettingPage<Content: View>: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.m) {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                    Text(title).font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
-                    Text(help).font(Theme.Font.body).foregroundStyle(Theme.Color.text2).fixedSize(horizontal: false, vertical: true)
+                    twoTone(title + ".", help).font(Theme.Font.sans(24)).tracking(-0.3).fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, Theme.Space.xs)
                 content
@@ -200,20 +204,7 @@ struct SettingPage<Content: View>: View {
 private struct Steps: View {
     let steps: [String]
 
-    var body: some View {
-        Card {
-            VStack(alignment: .leading, spacing: Theme.Space.s) {
-                ForEach(Array(steps.enumerated()), id: \.offset) { i, text in
-                    HStack(alignment: .top, spacing: Theme.Space.s) {
-                        Text("\(i + 1)").font(Theme.Font.count).foregroundStyle(Theme.Color.text1)
-                            .frame(width: Theme.Space.xl, height: Theme.Space.xl).background(Theme.Color.button, in: Circle())
-                        Text(text).font(Theme.Font.body).foregroundStyle(Theme.Color.text1).fixedSize(horizontal: false, vertical: true)
-                            .frame(minHeight: Theme.Space.xl, alignment: .leading)
-                    }
-                }
-            }
-        }
-    }
+    var body: some View { NumberedSteps(lines: steps) }
 }
 
 /// The owner's Google review link. Muninn puts it in a thank-you message; "Ask for a review" writes that message.

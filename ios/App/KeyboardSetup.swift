@@ -88,12 +88,8 @@ struct KeyboardDefaultGuide: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             ForEach(Array(lines.enumerated()), id: \.offset) { i, text in
-                HStack(spacing: Theme.Space.s) {
-                    Text("\(i + 1)").font(Theme.Font.count).foregroundStyle(Theme.Color.text1)
-                        .frame(width: Theme.Space.xl, height: Theme.Space.xl).background(Theme.Color.button, in: Circle())
-                    Text(text).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                if i > 0 { DashedLine() }
+                NumberedLine(number: i + 1, text: text)
             }
             Group {
                 if setup.state.isOn {

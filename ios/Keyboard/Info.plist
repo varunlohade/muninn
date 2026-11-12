@@ -61,5 +61,11 @@
 	</dict>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>$(PRODUCT_DISPLAY_NAME) adds the reminders you type, such as "call supplier at 5". They stay on this phone.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Figtree-Regular.ttf</string>
+		<string>Figtree-Medium.ttf</string>
+		<string>IBMPlexMono-Regular.ttf</string>
+	</array>
 </dict>
 </plist>

@@ -34,15 +34,15 @@ struct SignInOptions: View {
             }
             .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
             .frame(height: Theme.Metric.primaryButton)
-            .clipShape(Capsule())
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Metric.buttonRadius, style: .continuous))
             .opacity(busy ? 0.5 : 1)
             .disabled(busy)
             .accessibilityIdentifier("signin.apple")
             Button("Continue with email") { error = nil; emailOpen = true }
-                .buttonStyle(PrimaryButton())
+                .buttonStyle(QuietButton())
                 .accessibilityIdentifier("signin.email")
             Button("Try without an account") { Task { await onTry() } }
-                .font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
+                .font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text2)
                 .frame(maxWidth: .infinity, minHeight: Theme.Metric.secondaryButton)
                 .accessibilityIdentifier("onboarding.start")
         }
@@ -89,8 +89,9 @@ struct EmailAuthForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Text(link ? "Add an email" : current == .signup ? "Create your account" : "Log in")
-                .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+            twoTone(link ? "Add an email." : current == .signup ? "Create your account." : "Log in.",
+                    link ? "Then you can log in with it on any phone." : "Your clients and invoices follow you to any phone.")
+                .font(Theme.Font.sans(24)).tracking(-0.3).fixedSize(horizontal: false, vertical: true)
             if !link {
                 Picker("", selection: Binding(get: { current }, set: { picked = $0; error = nil })) {
                     Text("Create account").tag(APIClient.EmailMode.signup)

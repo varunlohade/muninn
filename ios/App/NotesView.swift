@@ -8,34 +8,42 @@ struct NotesView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
-                HStack {
-                    Text("Notes").font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
-                    Spacer()
-                    Button { editing = Note(text: "") } label: { IconCircle(systemImage: "plus") }
+                HStack(alignment: .top) {
+                    twoTone("Notes.", "Replies you send often, one tap from any chat.")
+                        .font(Theme.Font.title).tracking(-0.3).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: Theme.Space.s)
+                    Button { editing = Note(text: "") } label: { IconCircle(systemImage: "plus", size: 40) }
                         .buttonStyle(PressScale())
                         .accessibilityLabel("Add note")
                         .accessibilityIdentifier("notes.new")
                 }
-                .padding(.leading, Theme.Metric.margin)
+                .padding(.leading, Theme.Metric.cardInset + 2)
                 .padding(.trailing, Theme.Metric.cardInset)
                 Text("Tap the notes button on the keyboard to insert one in any chat. Notes stay on this phone.")
-                    .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.margin)
+                    .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.cardInset + 2)
+                    .fixedSize(horizontal: false, vertical: true)
                 ForEach(notes) { note in
                     Button { editing = note } label: {
-                        Card {
-                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                                Text(note.text).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
-                                    .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                                if let t = note.trigger { Text(t).font(Theme.Font.paper(13)).foregroundStyle(Theme.Color.text2) }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(alignment: .top, spacing: Theme.Space.s) {
+                            IconTile(icon: .note, fill: Color(hex: 0xF4D35E))
+                            Text(note.text).font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text1)
+                                .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 5)
+                            if let t = note.trigger { StatusPill(text: t) }
                         }
+                        .padding(10)
+                        .rowSurface()
                     }
                     .buttonStyle(PressScale())
                     .padding(.horizontal, Theme.Metric.cardInset)
                 }
                 if notes.isEmpty {
-                    Text("No notes yet").font(Theme.Font.label).foregroundStyle(Theme.Color.text3).padding(.horizontal, Theme.Metric.margin)
+                    Text("No notes yet. Tap + to save your prices, hours or address.").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(Theme.Space.m)
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Metric.rowRadius, style: .continuous)
+                            .strokeBorder(Theme.Color.dash, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                        .padding(.horizontal, Theme.Metric.cardInset)
                 }
             }
             .padding(.top, Theme.Space.xs)
@@ -93,8 +101,7 @@ struct NoteEditor: View {
                     .scrollContentBackground(.hidden)
                     .padding(Theme.Space.s)
                     .frame(height: 160)
-                    .background(Theme.Color.card, in: RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
+                    .cardSurface()
                     .accessibilityIdentifier("note.text")
                 if !isNew {
                     Button("Delete note", role: .destructive) { delete(note); dismiss() }

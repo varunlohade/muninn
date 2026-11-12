@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS auth_failures (key TEXT PRIMARY KEY, count INTEGER NO
 -- Sign in with Apple nonces the server gave out: SHA-256 of the nonce, single use, 10 minutes.
 CREATE TABLE IF NOT EXISTS apple_nonces (hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS shared_images (
-  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), png BLOB NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), png BLOB NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+  preview BLOB, preview_w INTEGER, preview_h INTEGER, title TEXT);
 CREATE INDEX IF NOT EXISTS shared_images_expiry ON shared_images(expires_at);
 CREATE TABLE IF NOT EXISTS profiles (
   user_id TEXT PRIMARY KEY REFERENCES users(id), business_name TEXT NOT NULL, tone TEXT NOT NULL, currency TEXT NOT NULL, review_url TEXT,
@@ -120,6 +121,9 @@ export type PayPalConnectionRow = {
 export type Db = ReturnType<typeof openDb>;
 export type IdemRow = { route: string; body_hash: string; status: 'pending' | 'done'; response: string | null };
 export type ClaimResult = { ok: RefundRow } | { error: 'not_found' | 'busy' | 'closed' | 'exceeds' };
+export type Preview = { jpeg: Uint8Array; width: number; height: number };
+export type SharedImage = { png: Uint8Array; expiresAt: number; preview?: Preview; title?: string };
+export type SharedImageInput = { id: string; userId: string; png: Uint8Array; createdAt: number; expiresAt: number; preview?: Preview; title?: string };
 
 export function openDb(path: string) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -158,6 +162,11 @@ export function openDb(path: string) {
     if (itemCols.length && !itemCols.some((c) => c.name === col)) db.exec(`ALTER TABLE catalog_items ADD COLUMN ${col} ${type}`);
   }
   db.exec(SCHEMA);
+  // Databases made before link previews lack the preview columns.
+  const cols = new Set((db.prepare('PRAGMA table_info(shared_images)').all() as { name: string }[]).map((c) => c.name));
+  for (const [name, type] of [['preview', 'BLOB'], ['preview_w', 'INTEGER'], ['preview_h', 'INTEGER'], ['title', 'TEXT']]) {
+    if (!cols.has(name)) db.exec(`ALTER TABLE shared_images ADD COLUMN ${name} ${type}`);
+  }
   const now = () => Date.now();
   const q = (sql: string) => db.prepare(sql);
 
@@ -285,15 +294,23 @@ export function openDb(path: string) {
       }
     },
     // A drawing shared as a link. The id is the only way to reach it; no query lists them.
-    addSharedImage(id: string, userId: string, png: Uint8Array, createdAt: number, expiresAt: number) {
-      q('INSERT INTO shared_images (id, user_id, png, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(id, userId, png, createdAt, expiresAt);
+    addSharedImage(img: SharedImageInput) {
+      q('INSERT INTO shared_images (id, user_id, png, created_at, expires_at, preview, preview_w, preview_h, title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(img.id, img.userId, img.png, img.createdAt, img.expiresAt, img.preview?.jpeg ?? null, img.preview?.width ?? null, img.preview?.height ?? null, img.title ?? null);
     },
-    sharedImage(id: string, at: number): Uint8Array | undefined {
-      const r = q('SELECT png FROM shared_images WHERE id = ? AND expires_at > ?').get(id, at) as { png: Uint8Array } | undefined;
-      return r?.png;
+    /** A live drawing, 'gone' once it expired (the row stays, emptied, so its link can say so), or undefined for an unknown id. */
+    sharedImage(id: string, at: number): SharedImage | 'gone' | undefined {
+      const r = q('SELECT png, expires_at, preview, preview_w, preview_h, title FROM shared_images WHERE id = ?').get(id) as
+        { png: Uint8Array; expires_at: number; preview: Uint8Array | null; preview_w: number | null; preview_h: number | null; title: string | null } | undefined;
+      if (!r) return undefined;
+      if (r.expires_at <= at) return 'gone';
+      const preview = r.preview && r.preview_w && r.preview_h ? { jpeg: r.preview, width: r.preview_w, height: r.preview_h } : undefined;
+      return { png: r.png, expiresAt: r.expires_at, preview, title: r.title ?? undefined };
     },
-    purgeSharedImages(at: number): number {
-      return Number(q('DELETE FROM shared_images WHERE expires_at <= ?').run(at).changes);
+    /** Empties expired drawings and deletes their rows after `keepGoneMs` more. Returns how many images it emptied. */
+    purgeSharedImages(at: number, keepGoneMs: number): number {
+      q('DELETE FROM shared_images WHERE expires_at <= ?').run(at - keepGoneMs);
+      return Number(q("UPDATE shared_images SET png = x'', preview = NULL, title = NULL WHERE expires_at <= ? AND length(png) > 0").run(at).changes);
     },
     userForDeviceLabel(label: string): string | undefined {
       return (q('SELECT user_id FROM devices WHERE label = ? ORDER BY created_at LIMIT 1').get(label) as { user_id: string } | undefined)?.user_id;

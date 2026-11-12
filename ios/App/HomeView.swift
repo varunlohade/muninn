@@ -75,6 +75,13 @@ final class HomeModel: ObservableObject {
         return (formatMoney(String(format: "%.2f", Double(cents) / 100), currency), chats)
     }
 
+    /// What is still out in the week's main currency: every unpaid invoice and pay link.
+    var stillOut: String {
+        let currency = mainTotal(summary?.earned_this_week)?.currency ?? "USD"
+        let cents = unpaidClients.filter { $0.currency == currency }.reduce(0) { $0 + Int((Double($1.amount) ?? 0) * 100 + 0.5) }
+        return String(format: "%.2f", Double(cents) / 100)
+    }
+
     /// All of a client's payments: unpaid first, newest first.
     func papers(for client: Client) -> [Payment] {
         payments.filter { $0.client_name != nil && $0.client_name == client.name }
@@ -97,41 +104,44 @@ struct HomeView: View {
     @StateObject private var ask = AskModel()
     @ObservedObject private var calendar = CalendarModel.shared
     @ObservedObject private var keyboard = KeyboardSetup.shared
-    @Namespace private var folders
 
     var body: some View {
+        // The 1 pt strip keeps the scroll view off the top edge, so scrolled cards never run under the clock.
+        VStack(spacing: 0) {
+        Theme.Color.bg.frame(height: 1)
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
                 header
-                // The AI's work comes first: the brief, then who to bill today.
-                if !model.brief.isEmpty { briefCard }
-                if !calendar.today.isEmpty { todaySection }
-                summaryCard
                 ConnectPayPalCard()
+                earnedCard
+                if let error = model.error {
+                    Text(error).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Metric.margin)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                unpaidList.padding(.top, Theme.Space.xs)
+                if !calendar.today.isEmpty { todaySection }
+                // The AI's note on the day, under the numbers it talks about.
+                if !model.brief.isEmpty { briefCard }
                 if !session.appleLinked {
-                    SaveDetailsCard().padding(.horizontal, Theme.Metric.cardInset)
+                    SaveDetailsCard().padding(.horizontal, Theme.Metric.cardInset).padding(.top, Theme.Space.xs)
                 } else if let notice = session.notice {
                     Text(notice).font(Theme.Font.label).foregroundStyle(Theme.Color.paid)
                         .padding(.horizontal, Theme.Metric.margin).fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("home.saved")
                 }
+                SectionHeader(title: "Your keyboard").padding(.top, Theme.Space.s)
                 keyboardCard
                 if calendar.neverAsked { calendarCard }
                 if let n = model.summary?.open_disputes, n > 0 { disputesRow(n) }
-                if let error = model.error {
-                    Text(error).font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Metric.margin)
-                }
-                clientsShelf.padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
-                unpaidList.padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
+                if !model.clients.isEmpty { clientsList.padding(.top, Theme.Space.s) }
             }
-            .padding(.top, Theme.Space.xs)
+            .padding(.top, Theme.Space.xxs)
             .padding(.bottom, Theme.Space.l)
         }
         .scrollIndicators(.hidden)
-        .background(Theme.Color.bg.ignoresSafeArea())
         .safeAreaInset(edge: .bottom) { AskBar(model: ask) }
-        // No navigation bar here, so cover the status bar: scrolled cards never run under the clock.
-        .overlay(alignment: .top) { Theme.Color.bg.frame(height: 0).ignoresSafeArea(edges: .top) }
+        }
+        .background(Theme.Color.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .refreshable { await model.load(); await PayPalConnector.shared.refresh() }
         // Loads again when the account changes: "Welcome back" brings the earlier account's data.
@@ -146,201 +156,243 @@ struct HomeView: View {
 
     private var header: some View {
         HStack(spacing: Theme.Space.xs) {
-            MarkView(size: 36)
-            Text(AppConfig.displayName).font(Theme.Font.appName).tracking(Theme.Tracking.appName).foregroundStyle(Theme.Color.text1)
+            Wordmark(size: 32)
             Spacer()
-            NavigationLink { CatalogView() } label: { IconCircle(systemImage: "tag") }
+            NavigationLink { CatalogView() } label: { IconCircle(systemImage: "tag", size: 36) }
                 .accessibilityLabel("Catalog")
                 .accessibilityIdentifier("nav.catalog")
-            NavigationLink { ShortcutsView() } label: { IconCircle(systemImage: "bolt") }
+            NavigationLink { ShortcutsView() } label: { IconCircle(systemImage: "bolt", size: 36) }
                 .accessibilityLabel("Shortcuts")
                 .accessibilityIdentifier("nav.shortcuts")
-            NavigationLink { NotesView() } label: { IconCircle(systemImage: "note.text") }
+            NavigationLink { NotesView() } label: { IconCircle(systemImage: "note.text", size: 36) }
                 .accessibilityLabel("Notes")
                 .accessibilityIdentifier("nav.notes")
-            NavigationLink { IntegrationsView() } label: { IconCircle(systemImage: "square.grid.2x2") }
-                .accessibilityLabel("Integrations")
+            NavigationLink { IntegrationsView() } label: { IconCircle(systemImage: "gearshape", size: 36) }
+                .accessibilityLabel("Settings and integrations")
                 .accessibilityIdentifier("nav.integrations")
         }
-        .padding(.horizontal, Theme.Metric.cardInset)
-        .padding(.bottom, Theme.Space.xs)
+        .frame(height: 44)
+        .padding(.horizontal, Theme.Metric.cardInset + 4)
+        .padding(.bottom, Theme.Space.xxs)
     }
 
-    private var summaryCard: some View {
-        Card {
-            VStack(spacing: Theme.Space.l) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                        let today = mainTotal(model.summary?.earned_today) ?? ("0.00", "USD")
-                        MoneyValue(amount: today.amount, currency: today.currency)
-                        Text("Earned today").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
-                    }
+    /// Earned this week: the big number, then one bar of what is paid and what is still out.
+    private var earnedCard: some View {
+        let week = mainTotal(model.summary?.earned_this_week) ?? ("0.00", "USD")
+        let today = mainTotal(model.summary?.earned_today)
+        let paid = Double(week.amount) ?? 0, out = Double(model.stillOut) ?? 0
+        return Card {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Earned this week").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                        .accessibilityIdentifier("home.earned")
                     Spacer()
-                    VStack(alignment: .trailing, spacing: Theme.Space.xxs) {
-                        let week = mainTotal(model.summary?.earned_this_week) ?? ("0.00", "USD")
-                        MoneyValue(amount: week.amount, currency: week.currency, font: Theme.Font.heroSmall, tracking: Theme.Tracking.heroSmall, showCents: false)
-                            .padding(.top, 18)
-                        Text("This week").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                    if let today, (Double(today.amount) ?? 0) > 0 {
+                        StatusPill(text: "+\(formatMoney(today.amount, today.currency)) today", tone: .paid)
+                            .accessibilityIdentifier("home.today.earned")
                     }
                 }
-                TickBar(payments: model.paymentTimes)
+                MoneyValue(amount: week.amount, currency: week.currency, showCents: false)
+                    .padding(.top, Theme.Space.xs).padding(.bottom, Theme.Space.s)
+                EarnedBar(paid: paid, out: out)
+                HStack(spacing: Theme.Space.m) {
+                    legend(Theme.Color.dotPaid, "Paid", formatMoney(week.amount, week.currency))
+                    legend(Theme.Color.dotOut, "Still out", formatMoney(model.stillOut, week.currency))
+                }
+                .padding(.top, 9)
             }
         }
         .padding(.horizontal, Theme.Metric.cardInset)
+
+    }
+
+    private func legend(_ color: Color, _ label: String, _ money: String) -> some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8)
+            (Text(label + " ").foregroundStyle(Theme.Color.text2) + Text(money).foregroundStyle(Theme.Color.text1).font(Theme.Font.sans(12, 500)))
+                .font(Theme.Font.sans(12)).monospacedDigit()
+        }
     }
 
     private var briefCard: some View {
         Card {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                HStack(spacing: Theme.Space.xs) {
+                    PixelRaven(scale: 1.4)
+                    Text("Muninn noticed").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                }
                 ForEach(model.brief, id: \.self) { line in
                     Text(line).font(Theme.Font.body).foregroundStyle(Theme.Color.text1).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
         .padding(.horizontal, Theme.Metric.cardInset)
+        .padding(.top, Theme.Space.xs)
         .accessibilityIdentifier("home.brief")
     }
 
-    /// Today's appointments from the phone calendar. An ended one with no invoice today offers "Bill Sam?".
+    /// Today's appointments from the phone calendar. An ended one with no invoice today offers "Invoice".
     private var todaySection: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            SectionHeader(title: "Today", count: calendar.today.count)
-            Card(padding: 0) {
-                TimelineView(.everyMinute) { now in
-                    VStack(spacing: 0) {
-                        ForEach(calendar.today) { a in
-                            appointmentRow(a, ended: a.end <= now.date)
-                        }
+        VStack(alignment: .leading, spacing: 7) {
+            SectionHeader(title: "Today", note: Date().formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
+                .padding(.bottom, 2)
+            TimelineView(.everyMinute) { now in
+                VStack(spacing: 7) {
+                    ForEach(calendar.today) { a in
+                        appointmentRow(a, ended: a.end <= now.date)
                     }
                 }
-                .padding(.vertical, Theme.Space.xs)
             }
             .padding(.horizontal, Theme.Metric.cardInset)
         }
-        .padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
+        .padding(.top, Theme.Space.s)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.today")
     }
 
     private func appointmentRow(_ a: Appointment, ended: Bool) -> some View {
         HStack(spacing: Theme.Space.s) {
-            Text(a.time).font(Theme.Font.body).monospacedDigit().foregroundStyle(ended ? Theme.Color.text3 : Theme.Color.text1)
-                .frame(width: Theme.Space.xxl, alignment: .leading)
-            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(a.title).font(Theme.Font.body).foregroundStyle(Theme.Color.text1).lineLimit(1)
-                if let name = a.clientName ?? a.clientEmail {
-                    Text(name).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).lineLimit(1)
-                }
-            }
-            Spacer()
+            Text(a.time).font(Theme.Font.time).monospacedDigit().foregroundStyle(Theme.Color.text3)
+                .frame(width: 40, alignment: .leading)
+            (Text(a.clientName ?? a.clientEmail ?? a.title).foregroundStyle(Theme.Color.text1).font(Theme.Font.sans(15, 500))
+                + Text(a.clientName != nil || a.clientEmail != nil ? " " + Self.what(a) : "").foregroundStyle(Theme.Color.text2).font(Theme.Font.sans(14)))
+                .lineLimit(1)
+            Spacer(minLength: Theme.Space.xs)
             if a.clientName != nil || a.clientEmail != nil {
                 if a.billed {
-                    Text("Billed").font(Theme.Font.label).foregroundStyle(Theme.Color.paid)
+                    StatusPill(text: "Billed", tone: .paid)
                 } else if ended {
-                    AskChip(title: "Invoice \(a.who)", detail: nil) { ask.prefill(a.invoicePrefix + " $") }
+                    Button("Invoice") { ask.prefill(a.invoicePrefix + " $") }
+                        .buttonStyle(QuietButton(small: true, wide: false))
                         .accessibilityIdentifier("today.bill.\(a.who)")
+                } else {
+                    StatusPill(text: "Booked", tone: .booked)
                 }
+            } else if !ended {
+                StatusPill(text: "Booked", tone: .booked)
             }
         }
-        .padding(.horizontal, Theme.Metric.cardPadding)
+        .padding(.leading, 14).padding(.trailing, 10)
         .frame(minHeight: Theme.Metric.rowHeight)
+        .rowSurface()
+    }
+
+    /// The event title without the client's name: "Color - Ava Chen" reads "Color" beside "Ava Chen".
+    /// Only a whole part between dashes or a colon is dropped, so "Haircut - Sam Okafor" stays whole for a client named Sam.
+    static func what(_ a: Appointment) -> String {
+        guard let name = a.clientName else { return a.title }
+        let parts = a.title.components(separatedBy: CharacterSet(charactersIn: "-\u{2013}\u{2014}:\u{00B7}"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let rest = parts.filter { $0.caseInsensitiveCompare(name) != .orderedSame }
+        return rest.isEmpty || rest.count == parts.count ? a.title : rest.joined(separator: " ")
     }
 
     private var keyboardCard: some View {
         NavigationLink {
-            ScrollView { EnableKeyboardSteps().padding(Theme.Metric.cardInset) }.background(Theme.Color.bg.ignoresSafeArea())
+            ScrollView { EnableKeyboardSteps().padding(Theme.Metric.cardInset) }
+                .background(Theme.Color.bg.ignoresSafeArea())
+                .navigationTitle("Keyboard setup")
         } label: {
-            Card {
-                HStack(spacing: Theme.Space.s) {
-                    IconCircle(systemImage: "keyboard")
-                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                        Text(keyboard.state.homeTitle)
-                            .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+            HStack(spacing: Theme.Space.s) {
+                IconTile(icon: .chat)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(keyboard.state.homeTitle)
+                        .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                    Group {
                         if keyboard.state == .needsFullAccess {
-                            Text(KeyboardState.finishSetupLine).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                            Text(KeyboardState.finishSetupLine)
                         } else if keyboard.state == .notFirst {
-                            Text("Drag it to the top in Settings").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                            Text("Drag it to the top in Settings")
                         } else if !keyboard.state.isOn {
-                            Text("Make it your default keyboard").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                            Text("Make it your default keyboard")
                         } else if let b = model.broughtBack {
-                            (Text("Brought back ") + Text(b.money).foregroundStyle(Theme.Color.paidInk).font(Theme.Font.urbanist(13, 600))
-                                + Text(" from \(b.chats) chat\(b.chats == 1 ? "" : "s")"))
-                                .font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                            Text("Brought back ") + Text(b.money).foregroundStyle(Theme.Color.paid).font(Theme.Font.sans(13, 500))
+                                + Text(" from \(b.chats) chat\(b.chats == 1 ? "" : "s")")
                         } else {
-                            Text("Invoices you send from chats show up here").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                            Text("Invoices you send from chats show up here")
                         }
                     }
-                    Spacer()
-                    IconCircle(systemImage: "chevron.right")
+                    .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).fixedSize(horizontal: false, vertical: true)
                 }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.Color.text3)
             }
+            .padding(.leading, 10).padding(.trailing, 14).padding(.vertical, 10)
+            .frame(minHeight: Theme.Metric.rowHeight)
+            .rowSurface()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScale())
         .padding(.horizontal, Theme.Metric.cardInset)
         .accessibilityIdentifier("home.keyboard")
     }
 
     /// Optional, and never a blocking step. It goes away once the owner answers the system prompt.
     private var calendarCard: some View {
-        Card {
-            HStack(spacing: Theme.Space.s) {
-                IconCircle(systemImage: "calendar")
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text("Connect Calendar").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
-                    Text("Who to bill, and events from the keyboard").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
-                }
-                Spacer()
-                AskChip(title: "Connect", detail: nil) { Task { await calendar.connect() } }
-                    .accessibilityIdentifier("home.calendar.connect")
+        HStack(spacing: Theme.Space.s) {
+            IconTile(icon: .calendar, fill: Color(hex: 0xDAE9FB))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Connect Calendar").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                Text("Who to bill, and events from the keyboard").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            Spacer(minLength: 0)
+            Button("Connect") { Task { await calendar.connect() } }
+                .buttonStyle(QuietButton(small: true, wide: false))
+                .accessibilityIdentifier("home.calendar.connect")
         }
+        .padding(.leading, 10).padding(.trailing, 10).padding(.vertical, 10)
+        .rowSurface()
         .padding(.horizontal, Theme.Metric.cardInset)
     }
 
     private func disputesRow(_ n: Int) -> some View {
         NavigationLink { DisputesView() } label: {
-            Card {
-                HStack(spacing: Theme.Space.xs) {
-                    Text("Disputes").font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
-                    Spacer()
-                    Text("\(n) open").font(Theme.Font.label).foregroundStyle(Theme.Color.due)
-                    Image(systemName: "chevron.right").font(.system(size: 13)).foregroundStyle(Theme.Color.text3)
-                }
+            HStack(spacing: Theme.Space.s) {
+                IconTile(icon: .bell, fill: Color(hex: 0xFBEBD4))
+                Text("Disputes").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                Spacer()
+                StatusPill(text: "\(n) open", tone: .due)
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.Color.text3)
             }
+            .padding(.leading, 10).padding(.trailing, 14)
+            .frame(minHeight: Theme.Metric.rowHeight)
+            .rowSurface()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScale())
         .padding(.horizontal, Theme.Metric.cardInset)
+        .accessibilityIdentifier("home.disputes")
     }
 
-    private var clientsShelf: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            SectionHeader(title: "Clients", count: model.clients.count)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: Theme.Space.m) {
-                    ForEach(model.clients.prefix(6)) { client in
-                        NavigationLink {
-                            ClientDetailView(client: client, papers: model.papers(for: client))
-                                .zoomTransition(id: client.id, in: folders)
-                        } label: {
-                            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                                FolderView(papers: model.folderPapers(for: client), width: 160, channel: channelIcon(client.channels))
-                                    .zoomSource(id: client.id, in: folders)
-                                    .padding(.top, 26)
-                                Text(client.displayName).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1).padding(.top, Theme.Space.xs)
-                                ClientLine(client: client)
-                            }
+    /// Clients as numbered rows: name, what is open or how many visits, and the way in to their invoices.
+    private var clientsList: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            SectionHeader(title: "Clients", note: "\(model.clients.count)").padding(.bottom, 2)
+            ForEach(Array(model.clients.prefix(6).enumerated()), id: \.element.id) { i, client in
+                NavigationLink {
+                    ClientDetailView(client: client, papers: model.papers(for: client))
+                } label: {
+                    HStack(spacing: Theme.Space.s) {
+                        Text(String(format: "1.%d", i + 1)).font(Theme.Font.mono(11)).foregroundStyle(Theme.Color.text3).frame(width: 24, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(client.displayName).font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1).lineLimit(1)
+                            ClientLine(client: client)
                         }
-                        .buttonStyle(PressScale())
-                        .accessibilityIdentifier("folder.\(client.displayName)")
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.Color.text3)
                     }
+                    .padding(.leading, 14).padding(.trailing, 14)
+                    .frame(minHeight: Theme.Metric.rowHeight)
+                    .rowSurface()
                 }
-                .padding(.horizontal, Theme.Metric.margin)
+                .buttonStyle(PressScale())
+                .accessibilityIdentifier("folder.\(client.displayName)")
             }
+            .padding(.horizontal, Theme.Metric.cardInset)
         }
     }
 
     private var unpaidList: some View {
-        // Remind asks in the Ask bar below: the same confirm and the same call as a reminder chip.
+        // Nudge asks in the Ask bar below: the same confirm and the same call as a reminder chip.
         UnpaidListView(clients: Array(model.unpaidClients.prefix(8))) { ask.run($0) }
             .padding(.horizontal, Theme.Metric.cardInset)
             .accessibilityElement(children: .contain)
@@ -353,7 +405,7 @@ struct ClientLine: View {
 
     var body: some View {
         if let open = mainTotal(client.open_amount) {
-            Text("\(formatMoney(open.amount, open.currency)) open").font(Theme.Font.label).foregroundStyle(Theme.Color.due)
+            Text("\(formatMoney(open.amount, open.currency)) open").font(Theme.Font.label).foregroundStyle(Theme.Color.due).lineLimit(1)
         } else {
             Text("Remembers \(client.visits) visit\(client.visits == 1 ? "" : "s")").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
         }
@@ -367,15 +419,15 @@ struct PaymentRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.s) {
-            MiniSheet(paid: payment.state == "paid")
+            IconTile(icon: payment.kind == "invoice" ? .invoice : .link, fill: payment.state == "paid" ? Color(hex: 0xE0F2DC) : .white)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(showClient ? payment.client_name ?? payment.item : payment.item).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
+                Text(showClient ? payment.client_name ?? payment.item : payment.item).font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1)
                 Text(showClient ? payment.item : shortDate(payment.created_at)).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: Theme.Space.xxs) {
                 let m = moneyParts(payment.amount, payment.currency)
-                Text(m.whole + m.cents).font(Theme.Font.body).monospacedDigit().foregroundStyle(Theme.Color.text1)
+                Text(m.whole + m.cents).font(Theme.Font.sans(15, 500)).monospacedDigit().foregroundStyle(Theme.Color.text1)
                 status
             }
         }
@@ -384,11 +436,11 @@ struct PaymentRow: View {
 
     @ViewBuilder private var status: some View {
         switch payment.state {
-        case "paid": Text("Paid").font(Theme.Font.label).foregroundStyle(Theme.Color.paid)
+        case "paid": StatusPill(text: "Paid", tone: .paid)
         case "unpaid" where payment.days_overdue > 0:
-            Text("\(payment.days_overdue) day\(payment.days_overdue == 1 ? "" : "s") late").font(Theme.Font.label).foregroundStyle(Theme.Color.due)
-        case "unpaid": Text("Open").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
-        default: Text(payment.state.capitalized).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+            StatusPill(text: "\(payment.days_overdue) day\(payment.days_overdue == 1 ? "" : "s") late", tone: .due)
+        case "unpaid": StatusPill(text: "Open", tone: .booked)
+        default: StatusPill(text: payment.state.capitalized)
         }
     }
 }
@@ -569,7 +621,7 @@ struct AskBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.xs) {
-                TextField("", text: $model.text, prompt: Text("Ask Muninn anything").foregroundStyle(Theme.Color.text3))
+                TextField("", text: $model.text, prompt: Text("Ask \(AppConfig.displayName) anything").foregroundStyle(Theme.Color.text3))
                     .font(Theme.Font.body)
                     .foregroundStyle(Theme.Color.text1)
                     .submitLabel(.send)
@@ -578,15 +630,18 @@ struct AskBar: View {
                     .onChange(of: model.focusRequests) { focused = true }
                     .padding(.leading, Theme.Space.m)
                     .accessibilityIdentifier("ask.field")
-                Button(action: model.submit) { IconCircle(systemImage: model.state == .loading ? "ellipsis" : "arrow.up") }
-                    .buttonStyle(PressScale())
+                Button(action: model.submit) {
+                    Image(systemName: model.state == .loading ? "ellipsis" : "arrow.up")
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
+                .frame(width: 40)
                     .accessibilityLabel("Ask")
             }
             content
         }
-        .padding(Theme.Space.xs)
-        .background(Theme.Color.card, in: RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
+        .padding(6)
+        .cardSurface()
         .padding(.horizontal, Theme.Metric.cardInset)
         .padding(.top, Theme.Space.xs)
         .padding(.bottom, Theme.Space.xs)
@@ -600,6 +655,22 @@ struct AskBar: View {
         .sheet(item: $pickingFor) { chip in
             ContactEmailPicker { email, name in model.useContact(email: email, name: name, for: chip) }.ignoresSafeArea()
         }
+    }
+
+    /// A question that needs an answer: the words wrap, the buttons sit right, the main one dark.
+    private func decision<Buttons: View>(_ question: String, pill: String?, @ViewBuilder buttons: () -> Buttons) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            HStack(alignment: .top, spacing: Theme.Space.xs) {
+                Text(question).font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if let pill { StatusPill(text: pill, tone: .due) }
+            }
+            HStack(spacing: Theme.Space.xs) {
+                Spacer(minLength: 0)
+                buttons()
+            }
+        }
+        .padding(.horizontal, Theme.Space.s).padding(.bottom, Theme.Space.xs)
     }
 
     @ViewBuilder private var content: some View {
@@ -658,38 +729,40 @@ struct AskBar: View {
             }
             .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xxs)
         case .confirm(let chip, let email):
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Theme.Space.xs) {
-                    AskChip(title: BarItems.confirmTitle(chip, recipient: email), detail: nil) { model.run(chip, confirmed: email) }
-                        .accessibilityIdentifier("ask.confirm")
-                    if AskModel.canAddContact(chip) {
-                        AskChip(title: "Add email from Contacts", detail: nil) { pickingFor = chip }
-                            .accessibilityIdentifier("ask.contacts")
-                    }
-                    AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+            // The question wraps; nothing is sent before the dark button.
+            let question = BarItems.confirmTitle(chip, recipient: email)
+            decision(question, pill: "Needs your OK") {
+                AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+                if AskModel.canAddContact(chip) {
+                    AskChip(title: "Add email", detail: nil) { pickingFor = chip }
+                        .accessibilityLabel("Add email from Contacts")
+                        .accessibilityIdentifier("ask.contacts")
                 }
-                .padding(.horizontal, Theme.Space.xs)
+                Button(ConfirmPanel.verb(chip)) { model.run(chip, confirmed: email) }
+                    .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
+                    .accessibilityLabel(question)
+                    .accessibilityIdentifier("ask.confirm")
             }
-            .padding(.bottom, Theme.Space.xxs)
         case .ask(let chip, let question):
-            HStack(spacing: Theme.Space.xs) {
-                AskChip(title: question, detail: nil) { model.run(chip) }
+            decision(question, pill: "Needs your OK") {
                 AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+                Button("Yes") { model.run(chip) }
+                    .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
+                    .accessibilityLabel(question)
             }
-            .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xxs)
         case .retry(let chip, let confirmed):
-            HStack(spacing: Theme.Space.xs) {
-                AskChip(title: "It didn't go through. Tap to try again.", detail: nil) { model.run(chip, confirmed: confirmed) }
-                    .accessibilityIdentifier("ask.retry")
+            decision("It didn't go through. Tap to try again.", pill: nil) {
                 AskChip(title: "Cancel", detail: nil) { model.state = .idle }
+                Button("Try again") { model.run(chip, confirmed: confirmed) }
+                    .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
+                    .accessibilityIdentifier("ask.retry")
             }
-            .padding(.horizontal, Theme.Space.xs).padding(.bottom, Theme.Space.xxs)
         case .line(let line):
             Text(line).font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
                 .textSelection(.enabled)
         case .undoable(let line, let undo):
             HStack(spacing: Theme.Space.xs) {
-                Text(line).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.paid).padding(.leading, Theme.Space.m)
+                StatusPill(text: line, tone: .paid).padding(.leading, Theme.Space.s)
                 AskChip(title: "Undo", detail: nil) { model.run(undo) }
                     .accessibilityIdentifier("ask.undo")
             }
@@ -699,8 +772,9 @@ struct AskBar: View {
         case .result(let r):
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(spacing: Theme.Space.xs) {
-                    Image(systemName: "checkmark").foregroundStyle(Theme.Color.paid)
                     Text(AskModel.resultTitle(r)).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                    Spacer(minLength: 0)
+                    StatusPill(text: "Ready", tone: .paid)
                 }
                 Text(r.link).font(Theme.Font.paper(12)).foregroundStyle(Theme.Color.text2).lineLimit(2).textSelection(.enabled)
                     .accessibilityIdentifier("ask.link")
@@ -709,7 +783,7 @@ struct AskBar: View {
                         .buttonStyle(PrimaryButton())
                         .accessibilityIdentifier("ask.copy")
                     Button("Done") { model.state = .idle; model.copied = false }
-                        .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text2).frame(width: 80, height: Theme.Metric.secondaryButton)
+                        .buttonStyle(QuietButton(wide: false))
                 }
             }
             .padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
@@ -721,6 +795,7 @@ struct AskBar: View {
     }
 }
 
+/// A quiet paper chip: a title and an optional grey sub-line.
 struct AskChip: View {
     let title: String
     let detail: String?
@@ -728,27 +803,12 @@ struct AskChip: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title).font(Theme.Font.urbanist(15, 600)).foregroundStyle(Theme.Color.text1)
-                if let detail { Text(detail).font(Theme.Font.urbanist(11, 500)).foregroundStyle(Theme.Color.text3) }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(Theme.Font.sans(14, 500)).foregroundStyle(Theme.Color.text1)
+                if let detail { Text(detail).font(Theme.Font.sans(11.5)).foregroundStyle(Theme.Color.text2) }
             }
             .lineLimit(1)
-            .padding(.horizontal, Theme.Space.m)
-            .frame(height: Theme.Metric.chipHeight + (detail == nil ? 0 : Theme.Space.xs))
-            .background(Theme.Color.button, in: Capsule())
-            .overlay(Capsule().strokeBorder(Theme.Color.chipEdge, lineWidth: 1))
         }
-        .buttonStyle(PressScale())
-    }
-}
-
-extension View {
-    /// iOS 18 zoom transition from a folder into the client detail; plain push on iOS 17.
-    @ViewBuilder func zoomTransition(id: String, in ns: Namespace.ID) -> some View {
-        if #available(iOS 18.0, *) { navigationTransition(.zoom(sourceID: id, in: ns)) } else { self }
-    }
-
-    @ViewBuilder func zoomSource(id: String, in ns: Namespace.ID) -> some View {
-        if #available(iOS 18.0, *) { matchedTransitionSource(id: id, in: ns) } else { self }
+        .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
     }
 }

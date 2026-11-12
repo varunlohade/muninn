@@ -39,7 +39,29 @@ final class WalkthroughTests: XCTestCase {
         return out
     }
 
+    /// How many AI calls the fake server has seen. The paste's own suggest call must finish before the next answer is set,
+    /// or it takes the answer meant for the last key.
+    private func aiCalls() -> Int {
+        let data = fakeCall("GET", "_log")
+        return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["ai"].flatMap { $0 as? [Any] }?.count ?? 0
+    }
+
+    private func waitForAICalls(above count: Int) {
+        let deadline = Date().addingTimeInterval(6)
+        while aiCalls() <= count, Date() < deadline { Thread.sleep(forTimeInterval: 0.25) }
+        Thread.sleep(forTimeInterval: 0.4)
+    }
+
     private func next(_ json: String) { fakeCall("POST", "_next", json) }
+
+    /// Rewrite, Notes and Catalog sit behind the bar's "…" slot; this opens it first when the button is hidden.
+    private func tapTool(_ app: XCUIApplication, _ identifier: String) {
+        let tool = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", identifier)).firstMatch
+        let more = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", "bar.more")).firstMatch
+        if !tool.exists, more.waitForExistence(timeout: 3) { more.tap() }
+        XCTAssertTrue(tool.waitForExistence(timeout: 5), "no \(identifier) behind the bar's …")
+        tool.tap()
+    }
 
     /// Prints the requests the fake server saw since `from`, and saves the whole log next to the screenshots.
     private func dumpLog(_ name: String, from: Int) -> Int {
@@ -84,9 +106,10 @@ final class WalkthroughTests: XCTestCase {
         let paste = label(messages, "label == %@", "Paste")
         if !paste.waitForExistence(timeout: 2) { field.tap(); field.press(forDuration: 1.2) }
         XCTAssertTrue(paste.waitForExistence(timeout: 3), messages.debugDescription)
+        let before = aiCalls()
         paste.tap()
         // The paste makes its own suggest call; set the fake answer after it, for the call on the last key.
-        Thread.sleep(forTimeInterval: 2)
+        waitForAICalls(above: before)
         if let answer { next(answer) }
         typeKeys(String(text.last!))
     }
@@ -116,7 +139,7 @@ final class WalkthroughTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-calendarDemo", "-serverURL", fake.absoluteString]
         app.launch()
-        if id(app, "onboarding.skip").waitForExistence(timeout: 6) { id(app, "onboarding.skip").tap() }
+        if id(app, "onboarding.add").waitForExistence(timeout: 6) { id(app, "onboarding.add").tap() }
         if id(app, "onboarding.later").waitForExistence(timeout: 3) { id(app, "onboarding.later").tap() }
         if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
         let start = id(app, "onboarding.start")
@@ -281,7 +304,7 @@ final class WalkthroughTests: XCTestCase {
             print("NO_FIX_CHIP", messages.debugDescription.suffix(3000))
         }
 
-        id(messages, "write.toggle").tap()
+        tapTool(messages, "write.toggle")
         XCTAssertTrue(id(messages, "write.friendly").waitForExistence(timeout: 5), messages.debugDescription)
         shot("05c-keyboard-refine-panel")
         id(messages, "write.friendly").tap()
@@ -290,7 +313,7 @@ final class WalkthroughTests: XCTestCase {
         id(messages, "write.use").tap()
         print("AFTER_REFINE", field.value as? String ?? "")
 
-        id(messages, "write.toggle").tap()
+        tapTool(messages, "write.toggle")
         id(messages, "write.grammar").tap()
         let grammarUse = id(messages, "write.use")
         let grammarFine = label(messages, "label BEGINSWITH %@", "The grammar looks good")
@@ -309,9 +332,7 @@ final class WalkthroughTests: XCTestCase {
         print("BILL_CHIP", billShown ? bill.label : "none", "NEXT", nextUp.exists ? nextUp.label : "none")
         shot("06a-keyboard-calendar-chip")
 
-        let toggle = id(messages, "notes.toggle")
-        XCTAssertTrue(toggle.waitForExistence(timeout: 3), messages.debugDescription)
-        toggle.tap()
+        tapTool(messages, "notes.toggle")
         let prices = label(messages, "label BEGINSWITH %@", "Prices: cut $45")
         XCTAssertTrue(prices.waitForExistence(timeout: 3), messages.debugDescription)
         shot("06b-keyboard-notes-panel")

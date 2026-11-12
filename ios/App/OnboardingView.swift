@@ -52,7 +52,13 @@ struct OnboardingView: View {
     var body: some View {
         Group {
             if step == .intro {
-                IntroView { Task { await advance(from: .intro) } }.transition(.opacity)
+                // "I already have an account" goes straight to sign-in; Home offers the keyboard setup afterwards.
+                HeroView(addKeyboard: { Task { await advance(from: .intro) } },
+                         haveAccount: {
+                             UserDefaults.standard.set(true, forKey: Self.introSeenKey)
+                             withAnimation(stepMotion) { step = .start }
+                         })
+                    .transition(.opacity)
             } else {
                 steps.transition(.opacity)
             }
@@ -77,59 +83,77 @@ struct OnboardingView: View {
     }
 
     private var steps: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Wordmark(size: 24)
+                Spacer()
                 StepDots(count: Step.allCases.count, current: step.rawValue)
-                    .padding(.top, Theme.Space.s)
-                Spacer(minLength: 0).frame(maxHeight: step == .start ? .infinity : Theme.Space.xl)
-                mark
-                VStack(spacing: Theme.Space.xs) {
-                    Text(title).font(Theme.Font.title).foregroundStyle(Theme.Color.text1)
-                    Text(line).font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
-                        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                    if step == .keyboard { keyboardSteps.padding(.top, Theme.Space.m) }
-                    if step == .makeDefault { Card { KeyboardDefaultGuide() }.padding(.top, Theme.Space.m) }
-                    if step == .business { BusinessQuestion(text: $business).padding(.top, Theme.Space.m) }
-                }
-                .padding(.top, Theme.Space.l)
-                .id(step)
-                .transition(slide)
-                Spacer(minLength: Theme.Space.l).frame(maxHeight: .infinity)
-                if let error = session.error {
-                    Text(error).font(Theme.Font.label).foregroundStyle(Theme.Color.due)
-                        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                        .padding(.bottom, Theme.Space.s)
-                        .accessibilityIdentifier("onboarding.error")
-                }
-                actions
-                    .id(step)
-                    .transition(.opacity)
-                    .disabled(busy || checked)
             }
-            .padding(.horizontal, Theme.Metric.cardInset)
-            .padding(.bottom, Theme.Space.m)
+            .padding(.top, Theme.Space.s)
+            // The middle scrolls, so the "Type here" keyboard never pushes the mark under the clock.
+            ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+            mark.padding(.top, step == .start ? 72 : Theme.Space.xl)
+            VStack(alignment: .leading, spacing: Theme.Space.l) {
+                // The signature two-tone headline: the step in ink, what it does in ink 2.
+                twoTone(title.hasSuffix(".") ? title : title + ".", line)
+                    .font(step == .start ? Theme.Font.headline : Theme.Font.title).tracking(-0.3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("onboarding.title")
+                if step == .keyboard { keyboardSteps }
+                if step == .makeDefault { Card { KeyboardDefaultGuide() } }
+                if step == .business { BusinessQuestion(text: $business) }
+                if step == .start {
+                    // What the keyboard offers in a chat, as a task card.
+                    TaskCardLabel(icon: .invoice, title: "Invoice $45", detail: "Sam, via PayPal", height: 52)
+                        .rotationEffect(.degrees(-3), anchor: .leading)
+                        .padding(.leading, Theme.Space.xs)
+                        .accessibilityHidden(true)
+                }
+                if step == .paypal { PixelBanner(first: "Get paid in any chat.", rest: "Every invoice gets a pay link.").accessibilityHidden(true) }
+            }
+            .padding(.top, Theme.Space.l)
+            .id(step)
+            .transition(slide)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, Theme.Space.l)
+            }
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize)
+            if let error = session.error {
+                Text(error).font(Theme.Font.label).foregroundStyle(Theme.Color.due)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, Theme.Space.s)
+                    .accessibilityIdentifier("onboarding.error")
+            }
+            actions
+                .id(step)
+                .transition(.opacity)
+                .disabled(busy || checked)
         }
+        .padding(.horizontal, 20)
+        .padding(.bottom, Theme.Space.s)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.Color.bg.ignoresSafeArea())
     }
 
-    /// The mark is one view for the whole flow. It is large on the first screen, then moves up and shrinks.
+    /// The mark is one view for the whole flow: the raven on a paper tile, larger on Get started.
     /// A finished step stamps a green check on it.
     private var mark: some View {
-        let size: CGFloat = step == .start ? 104 : 64
+        let size: CGFloat = step == .start ? 88 : 56
         return ZStack {
             MarkView(size: size)
             if checked {
                 Image(systemName: "checkmark")
                     .font(.system(size: size * 0.4, weight: .semibold))
-                    .foregroundStyle(Theme.Color.paidInk)
+                    .foregroundStyle(Theme.Color.paid)
                     .frame(width: size, height: size)
-                    .background(Theme.Color.paidChip, in: Circle())
-                    .overlay(Circle().strokeBorder(Theme.Color.paidChipEdge, lineWidth: 1))
+                    .background(Theme.Color.paidChip, in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.4).combined(with: .opacity))
             }
         }
-        .contentShape(Circle())
+        .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(AppConfig.displayName)
         .accessibilityIdentifier("onboarding.mark")
@@ -140,17 +164,7 @@ struct OnboardingView: View {
     }
 
     private var keyboardSteps: some View {
-        Card {
-            VStack(alignment: .leading, spacing: Theme.Space.s) {
-                ForEach(Array(["Tap Keyboards.", "Turn on \(AppConfig.keyboardName).", "Turn on Allow Full Access."].enumerated()), id: \.offset) { i, text in
-                    HStack(spacing: Theme.Space.s) {
-                        Text("\(i + 1)").font(Theme.Font.count).foregroundStyle(Theme.Color.text1)
-                            .frame(width: Theme.Space.xl, height: Theme.Space.xl).background(Theme.Color.button, in: Circle())
-                        Text(text).font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
-                    }
-                }
-            }
-        }
+        NumberedSteps(lines: ["Tap Keyboards.", "Turn on \(AppConfig.keyboardName).", "Turn on Allow Full Access."])
     }
 
     @ViewBuilder private var actions: some View {
@@ -218,7 +232,7 @@ struct OnboardingView: View {
 
     private func quietButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
-            .font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
+            .font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text2)
             .frame(maxWidth: .infinity, minHeight: Theme.Metric.secondaryButton)
     }
 
@@ -291,11 +305,11 @@ struct StepDots: View {
     let current: Int
 
     var body: some View {
-        HStack(spacing: Theme.Space.xs) {
+        HStack(spacing: 6) {
             ForEach(0..<count, id: \.self) { i in
                 Capsule()
-                    .fill(i == current ? Theme.Color.text1 : i < current ? Theme.Color.text2 : Theme.Color.tick)
-                    .frame(width: i == current ? Theme.Space.l : 6, height: 6)
+                    .fill(i == current ? Theme.Color.text1 : i < current ? Theme.Color.text3 : Theme.Color.tick)
+                    .frame(width: i == current ? 18 : 6, height: 6)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -407,7 +421,7 @@ struct ServerOption: View {
                 .foregroundStyle(selected ? Theme.Color.bg : Theme.Color.text2)
                 .padding(.horizontal, Theme.Space.m)
                 .frame(height: Theme.Metric.iconButton)
-                .background(selected ? Theme.Color.text1 : Theme.Color.button, in: Capsule())
+                .background(selected ? Theme.Color.text1 : Theme.Color.button, in: RoundedRectangle(cornerRadius: Theme.Metric.buttonRadius, style: .continuous))
         }
         .buttonStyle(PressScale())
     }
@@ -422,9 +436,8 @@ struct StepCard<Content: View>: View {
     var body: some View {
         Card {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
-                HStack(spacing: Theme.Space.s) {
-                    Text("\(number)").font(Theme.Font.count).foregroundStyle(Theme.Color.text1)
-                        .frame(width: Theme.Space.xl, height: Theme.Space.xl).background(Theme.Color.button, in: Circle())
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                    Text("\(number)").font(Theme.Font.mono(11)).foregroundStyle(Theme.Color.text3)
                     Text(title).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                 }
                 content
@@ -440,19 +453,18 @@ struct FieldStyle: ViewModifier {
             .foregroundStyle(Theme.Color.text1)
             .padding(.horizontal, Theme.Space.m)
             .frame(height: Theme.Metric.secondaryButton)
-            .background(Theme.Color.button, in: Capsule())
-            .overlay(Capsule().strokeBorder(Theme.Color.edge, lineWidth: 1))
+            .cardSurface(radius: Theme.Metric.buttonRadius, fill: Theme.Color.surface, lifted: false)
     }
 }
 
+/// The main action: the tactile dark button.
 struct PrimaryButton: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Theme.Font.cardTitle)
-            .foregroundStyle(Theme.Color.bg)
-            .frame(maxWidth: .infinity, minHeight: Theme.Metric.primaryButton)
-            .background(Theme.Color.text1, in: Capsule())
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(Theme.Motion.press, value: configuration.isPressed)
-    }
+    func makeBody(configuration: Configuration) -> some View { TactileButton().makeBody(configuration: configuration) }
+}
+
+/// The second action: the quiet paper button.
+struct QuietButton: ButtonStyle {
+    var small = false
+    var wide = true
+    func makeBody(configuration: Configuration) -> some View { TactileButton(kind: .quiet, small: small, wide: wide).makeBody(configuration: configuration) }
 }

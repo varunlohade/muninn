@@ -9,6 +9,15 @@ final class CatalogShots: XCTestCase {
 
     override func setUp() { continueAfterFailure = false }
 
+    /// Rewrite, Notes and Catalog sit behind the bar's "…" slot; this opens it first when the button is hidden.
+    private func tapTool(_ app: XCUIApplication, _ identifier: String) {
+        let tool = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", identifier)).firstMatch
+        let more = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", "bar.more")).firstMatch
+        if !tool.exists, more.waitForExistence(timeout: 3) { more.tap() }
+        XCTAssertTrue(tool.waitForExistence(timeout: 5), "no \(identifier) behind the bar's …")
+        tool.tap()
+    }
+
     private func shot(_ name: String) {
         Thread.sleep(forTimeInterval: 0.8)
         let png = XCUIScreen.main.screenshot().pngRepresentation
@@ -54,7 +63,7 @@ final class CatalogShots: XCTestCase {
             token.tap()
             token.typeText("pkd_fake")
             app.buttons["Pair"].tap()
-            for id in ["onboarding.later", "onboarding.skip"] {
+            for id in ["onboarding.later", "onboarding.add", "onboarding.paypal.demo"] {
                 let b = element(app, id)
                 if b.waitForExistence(timeout: 8) { b.tap() }
             }
@@ -62,11 +71,11 @@ final class CatalogShots: XCTestCase {
         }
         // The intro tour, if it shows.
         let later = NSPredicate(format: "identifier ENDSWITH 'later' OR identifier ENDSWITH 'skip' OR identifier == 'onboarding.start' OR label == 'Skip' OR label == 'Not now'")
-        for _ in 0..<10 where !app.staticTexts["Earned today"].waitForExistence(timeout: 2) {
+        for _ in 0..<10 where !app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 2) {
             let b = app.buttons.matching(later).firstMatch
             if b.exists && b.isHittable { b.tap() }
         }
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15), String(app.debugDescription.prefix(4000)))
+        XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 15), String(app.debugDescription.prefix(4000)))
 
         settings.launch()
         tap(settings, ["General"], timeout: 12)
@@ -155,9 +164,7 @@ final class CatalogShots: XCTestCase {
         XCTAssertTrue(ours.exists, "Muninn keyboard not shown")
         paste("Hi Ana! Here are our prices:", into: field)
 
-        let toggle = element(messages, "catalog.toggle")
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "no catalog button in the bar")
-        toggle.tap()
+        tapTool(messages, "catalog.toggle")
         let cut = element(messages, "catalog.item.Haircut")
         XCTAssertTrue(cut.waitForExistence(timeout: 5), String(messages.debugDescription.suffix(3000)))
         cut.tap()

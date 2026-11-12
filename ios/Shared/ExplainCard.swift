@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The explain card, in place of the keys: the answer, an example or a few lines, then Back, Show visually and Insert.
-/// Muninn's keyboard look (key-coloured card, accent Insert), kept in its own file for the redesign.
+/// A white card on paper, then quiet Back and Show visually and the dark Insert.
 struct ExplainCardView: View {
     @ObservedObject var model: KeyboardModel
     let offer: ExplainOffer
@@ -10,20 +10,24 @@ struct ExplainCardView: View {
 
     var body: some View {
         VStack(spacing: M.keyGap) {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                (Text("\u{201C}\(offer.subject)\u{201D}  ").foregroundColor(palette.accent) + Text(offer.line).foregroundColor(palette.label))
-                    .font(M.mode.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("explain.line")
-                ForEach(Array(details.enumerated()), id: \.offset) { _, line in
-                    Text(line).font(M.mode).foregroundStyle(palette.secondaryLabel)
+            // A long answer scrolls inside the card, so Back and Insert always stay on screen.
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    twoTone("\u{201C}\(offer.subject)\u{201D}", offer.line, ink: Theme.Color.text2, ink2: Theme.Color.text1)
+                        .font(Theme.Font.sans(17, 500))
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("explain.line")
+                    ForEach(Array(details.enumerated()), id: \.offset) { _, line in
+                        Text(line).font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                Spacer(minLength: 0)
+                .padding(.horizontal, 14).padding(.vertical, Theme.Space.s)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.s)
+            .scrollIndicators(.hidden)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
+            .cardSurface()
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("explain.card")
 
@@ -35,8 +39,8 @@ struct ExplainCardView: View {
                 ExplainButton(title: "Insert", id: "explain.insert", accent: true, palette: palette, action: model.insertExplain)
             }
         }
-        .padding(.horizontal, M.sideInset)
-        .padding(.vertical, 4)
+        .padding(.horizontal, Theme.Space.s)
+        .padding(.vertical, 6)
     }
 
     private var details: [String] {
@@ -54,7 +58,7 @@ struct ExplainCardView: View {
     }
 }
 
-/// A wide key-shaped button, like the Rewrite panel's. `accent` is the one main action.
+/// A wide tactile button, like the Rewrite panel's. `accent` is the one main action (dark).
 struct ExplainButton: View {
     let title: String
     let id: String
@@ -64,14 +68,9 @@ struct ExplainButton: View {
     typealias M = Theme.SystemKeyboard
 
     var body: some View {
-        Button(action: action) {
-            Text(title).font(M.mode.weight(accent ? .semibold : .regular)).foregroundStyle(accent ? .white : palette.label)
-                .lineLimit(1).minimumScaleFactor(0.8)
-                .frame(maxWidth: .infinity, minHeight: M.keyHeight, maxHeight: M.keyHeight)
-                .background(accent ? palette.accent : palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier(id)
+        Button(title, action: action)
+            .buttonStyle(TactileButton(kind: accent ? .dark : .quiet))
+            .frame(height: M.keyHeight)
+            .accessibilityIdentifier(id)
     }
 }

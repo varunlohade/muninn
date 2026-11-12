@@ -413,7 +413,7 @@ private struct StageView: View {
             VStack(spacing: 0) {
                 HStack(spacing: Theme.Space.xs) {
                     MarkView(size: Theme.Space.xl)
-                    Text(AppConfig.displayName).font(Theme.Font.urbanist(17, 600)).foregroundStyle(Theme.Color.text1)
+                    Text(AppConfig.displayName).font(Theme.Font.sans(17, 600)).foregroundStyle(Theme.Color.text1)
                     Spacer()
                 }
                 .padding(.horizontal, Theme.Space.m)

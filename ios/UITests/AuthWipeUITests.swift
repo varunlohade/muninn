@@ -56,7 +56,7 @@ final class AuthWipeUITests: XCTestCase {
     /// From any state to the sign-in step: Home logs out through Settings; onboarding skips to the sign-in step.
     private func toSignIn(_ app: XCUIApplication) {
         if id(app, "nav.integrations").waitForExistence(timeout: 5) { logOut(app, shotName: nil) }
-        if id(app, "onboarding.skip").waitForExistence(timeout: 2) { id(app, "onboarding.skip").tap() }
+        if id(app, "onboarding.add").waitForExistence(timeout: 2) { id(app, "onboarding.add").tap() }
         if id(app, "onboarding.later").waitForExistence(timeout: 2) { id(app, "onboarding.later").tap() }
         if id(app, "onboarding.default.later").waitForExistence(timeout: 2) { id(app, "onboarding.default.later").tap() }
         if id(app, "onboarding.default.next").waitForExistence(timeout: 1) { id(app, "onboarding.default.next").tap() }

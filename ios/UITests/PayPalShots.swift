@@ -56,6 +56,19 @@ final class PayPalShots: XCTestCase {
         if x.exists { x.tap() }
     }
 
+    /// How many AI calls the fake server has seen. The paste's own suggest call must finish before the next answer is set,
+    /// or it takes the answer meant for the last key.
+    private func aiCalls() -> Int {
+        let data = fakeCall("GET", "_log")
+        return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["ai"].flatMap { $0 as? [Any] }?.count ?? 0
+    }
+
+    private func waitForAICalls(above count: Int) {
+        let deadline = Date().addingTimeInterval(6)
+        while aiCalls() <= count, Date() < deadline { Thread.sleep(forTimeInterval: 0.25) }
+        Thread.sleep(forTimeInterval: 0.4)
+    }
+
     /// Pastes all but the last character, then types the last one on our keys, so the keyboard reads it as typed.
     private func enter(_ field: XCUIElement, _ text: String, next answer: String? = nil) {
         clear(field)
@@ -64,11 +77,12 @@ final class PayPalShots: XCTestCase {
         let paste = label(messages, "label == %@", "Paste")
         if !paste.waitForExistence(timeout: 2) { field.tap(); field.press(forDuration: 1.2) }
         XCTAssertTrue(paste.waitForExistence(timeout: 3), messages.debugDescription)
+        let before = aiCalls()
         paste.tap()
         let allow = messages.alerts.buttons["Allow Paste"]
         if allow.waitForExistence(timeout: 1) { allow.tap() }
         UIPasteboard.general.items = []
-        Thread.sleep(forTimeInterval: 2)
+        waitForAICalls(above: before)
         if let answer { fakeCall("POST", "_next", answer) }
         let last = messages.descendants(matching: .any)
             .matching(NSPredicate(format: "label ==[c] %@ AND identifier BEGINSWITH 'k.'", String(text.last!))).firstMatch
@@ -93,7 +107,7 @@ final class PayPalShots: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-serverURL", fake.absoluteString]
         app.launch()
-        if id(app, "onboarding.skip").waitForExistence(timeout: 6) { id(app, "onboarding.skip").tap() }
+        if id(app, "onboarding.add").waitForExistence(timeout: 6) { id(app, "onboarding.add").tap() }
         if id(app, "onboarding.later").waitForExistence(timeout: 3) { id(app, "onboarding.later").tap() }
         if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
         let start = id(app, "onboarding.start")
@@ -203,10 +217,10 @@ final class PayPalShots: XCTestCase {
         app.launchArguments = ["-serverURL", fake.absoluteString]
         app.launch()
         XCTAssertTrue(label(app, "label CONTAINS %@", "Jordan Ray").waitForExistence(timeout: 15))
-        let row = label(app, "label BEGINSWITH %@", "Disputes")
+        let row = id(app, "home.disputes")
         XCTAssertTrue(row.waitForExistence(timeout: 10), String(app.debugDescription.suffix(3000)))
-        // The Ask bar sits over the bottom of Home: one short scroll brings the row above it.
-        app.swipeUp(velocity: .slow)
+        // The Disputes row sits near the end of Home: scroll until it is clear of the Ask bar.
+        for _ in 0..<5 where row.frame.maxY > app.frame.height - 180 { app.swipeUp(velocity: .slow) }
         Thread.sleep(forTimeInterval: 0.8)
         row.tap()
         let reply = id(app, "dispute.reply")

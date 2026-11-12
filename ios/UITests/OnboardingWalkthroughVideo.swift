@@ -49,8 +49,10 @@ final class OnboardingWalkthroughVideo: XCTestCase {
         app.launchArguments = ["-calendarDemo", "-serverURL", env["FAKE_URL"] ?? "http://127.0.0.1:8799"]
         app.launch()
 
-        // 1. The intro plays by itself: eight scenes, about 3 s each.
-        XCTAssertTrue(id(app, "onboarding.skip").waitForExistence(timeout: 10), "a fresh install starts at the intro")
+        // 1. The hero street plays for a moment, then "Add the keyboard".
+        XCTAssertTrue(id(app, "onboarding.add").waitForExistence(timeout: 10), "a fresh install starts at the hero")
+        pause(4)
+        id(app, "onboarding.add").tap()
 
         // 2. Enable the keyboard in Settings, the way the step says.
         let start = id(app, "onboarding.start")
@@ -108,7 +110,7 @@ final class OnboardingWalkthroughVideo: XCTestCase {
         if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { pause(2); id(app, "onboarding.paypal.demo").tap() }
         // The business question follows the PayPal step; these runs leave it for later.
         if id(app, "onboarding.business.later").waitForExistence(timeout: 5) { pause(2); id(app, "onboarding.business.later").tap() }
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 20), app.debugDescription)
         dismissPrompts(app)
         _ = id(app, "home.brief").waitForExistence(timeout: 10)
         pause(3)

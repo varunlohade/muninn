@@ -174,6 +174,10 @@ final class KeyboardModel: ObservableObject {
     weak var visualPage: VisualPage?
     /// Keeps the voice and the drawing in step while "Play with voice" is on.
     var narration: NarrationSync?
+    /// The drawing's PNG and JPEG link preview, made when it finished drawing, so Send only has to upload them.
+    var sharePrepared: (png: Data, preview: Data?)?
+    /// The Send waiting for its upload. A late answer for an older Send is dropped.
+    var shareAttempt: UUID?
 
     weak var host: TextHost?
     /// False in the intro scenes about writing, where a payment chip would get in the way. Then typing sends nothing.

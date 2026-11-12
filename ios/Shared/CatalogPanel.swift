@@ -148,7 +148,8 @@ final class CatalogThumbs {
     }
 }
 
-/// The catalog in place of the keys: category tabs, a scrolling grid to pick from, then the three actions.
+/// The catalog in place of the keys, per M1-4: category tabs, a two-column grid of item cards on the dotted board,
+/// then the extras and the total. Share (Insert) sits in the bar above.
 struct CatalogPanel: View {
     @ObservedObject var model: KeyboardModel
     let palette: Theme.SystemKeyboard.Palette
@@ -156,123 +157,137 @@ struct CatalogPanel: View {
 
     var body: some View {
         let c = model.catalog
-        VStack(spacing: M.keyGap) {
+        VStack(spacing: Theme.Space.xs) {
             if c.items.isEmpty {
-                Text("Add what you sell in \(AppConfig.displayName) \u{2192} Catalog. It shows here.")
-                    .font(M.mode).foregroundStyle(palette.secondaryLabel).multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityIdentifier("catalog.empty")
+                VStack(spacing: Theme.Space.s) {
+                    PixelIcon(name: .tag, fill: Color(hex: 0xF4D35E), size: 36)
+                    Text("Add what you sell in \(AppConfig.displayName) \u{2192} Catalog. It shows here.")
+                        .font(Theme.Font.sans(15)).foregroundStyle(Theme.Color.text2).multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("catalog.empty")
             } else {
                 let tabs = CatalogTabs.tabs(c.items)
                 if !tabs.isEmpty { tabRow(tabs, current: c.tab) }
                 if c.examples {
-                    Text("Examples. Add your own in \(AppConfig.displayName) \u{2192} Catalog.").font(M.predictionSmall)
-                        .foregroundStyle(palette.secondaryLabel).lineLimit(1).minimumScaleFactor(0.8)
+                    Text("Examples. Add your own in \(AppConfig.displayName) \u{2192} Catalog.").font(Theme.Font.sans(12))
+                        .foregroundStyle(Theme.Color.text2).lineLimit(1).minimumScaleFactor(0.8)
                         .accessibilityIdentifier("catalog.examples")
                 }
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: M.keyGap), GridItem(.flexible(), spacing: M.keyGap)], spacing: M.keyGap) {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: Theme.Space.xs), GridItem(.flexible(), spacing: Theme.Space.xs)], spacing: Theme.Space.xs) {
                         ForEach(c.shown) { cell($0, picked: c.selection.contains($0)) }
                     }
+                    .padding(3)
                 }
                 .scrollIndicators(.hidden)
                 if let note = c.note {
-                    Text(note).font(M.predictionSmall).foregroundStyle(palette.secondaryLabel).lineLimit(1)
+                    Text(note).font(Theme.Font.sans(12)).foregroundStyle(Theme.Color.text2).lineLimit(1)
                         .accessibilityIdentifier("catalog.note")
                 }
                 actions(c)
             }
         }
-        .padding(.horizontal, M.sideInset)
+        .padding(.horizontal, Theme.Space.s - 3)
         .padding(.top, 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func tabRow(_ tabs: [String], current: String) -> some View {
         ScrollView(.horizontal) {
-            HStack(spacing: M.keyGap) {
+            HStack(spacing: 6) {
                 ForEach(tabs, id: \.self) { t in
                     Button { model.pickCatalogTab(t) } label: {
-                        Text(t).font(M.smallMode.weight(t == current ? .semibold : .regular))
-                            .foregroundStyle(t == current ? Color.white : palette.label)
-                            .padding(.horizontal, Theme.Space.s).frame(height: 28)
-                            .background(t == current ? palette.accent : palette.key, in: Capsule())
+                        Text(t).font(Theme.Font.sans(13, t == current ? 500 : 400))
+                            .foregroundStyle(t == current ? Theme.Color.darkButtonText : Theme.Color.text1)
+                            .padding(.horizontal, Theme.Space.s).frame(height: 26)
+                            .background(t == current ? Theme.Color.darkButton : Theme.Color.surface, in: Capsule())
+                            .overlay(Capsule().stroke(Theme.Color.edge, lineWidth: t == current ? 0 : 0.8))
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("catalog.tab.\(t)")
                 }
             }
+            .padding(.horizontal, 3)
         }
         .scrollIndicators(.hidden)
         .frame(height: 28)
     }
 
     private func cell(_ item: CatalogItem, picked: Bool) -> some View {
-        Button { model.toggleCatalogItem(item) } label: {
-            HStack(spacing: Theme.Space.xs) {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        return Button { model.toggleCatalogItem(item) } label: {
+            HStack(spacing: 10) {
                 Group {
                     if let img = model.catalogThumb(item) {
-                        Image(uiImage: img).resizable().scaledToFill()
+                        Image(uiImage: img).resizable().scaledToFill().frame(width: 30, height: 30)
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                     } else {
-                        Image(systemName: "tag").font(M.predictionSmall).foregroundStyle(palette.secondaryLabel)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity).background(palette.bed)
+                        let icon = PixelIcon.forItem(item.name)
+                        IconTile(icon: icon, fill: PixelIcon.fill(for: icon))
                     }
                 }
-                .frame(width: 34, height: 34)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(item.name).font(M.smallMode.weight(.medium)).foregroundStyle(palette.label).lineLimit(1)
-                    Text(item.in_stock ? item.money : "Sold out").font(M.predictionSmall)
-                        .foregroundStyle(item.in_stock ? palette.secondaryLabel : Theme.Color.due).lineLimit(1)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.name).font(Theme.Font.sans(14.5, 500)).foregroundStyle(Theme.Color.text1).lineLimit(1).minimumScaleFactor(0.8)
+                    Text(item.in_stock ? item.money : "Sold out").font(Theme.Font.sans(13)).monospacedDigit()
+                        .foregroundStyle(item.in_stock ? Theme.Color.text2 : Theme.Color.due).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                if picked {
-                    Image(systemName: "checkmark.circle.fill").font(M.icon).foregroundStyle(palette.accent)
-                }
             }
-            .padding(.horizontal, Theme.Space.xs)
-            .frame(height: 46)
-            .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous).strokeBorder(picked ? palette.accent : .clear, lineWidth: 2))
+            .padding(.leading, 10).padding(.trailing, 24)
+            .frame(height: 54)
+            .background(picked ? Theme.Color.card : Theme.Color.surface, in: shape)
+            .overlay(shape.strokeBorder(picked ? Theme.Color.text1 : Theme.Color.edge, lineWidth: picked ? 1.5 : 0.8))
+            .shadow(color: .black.opacity(picked ? 0.08 : 0.05), radius: 6, y: 4)
+            .overlay(alignment: .topTrailing) {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(picked ? Theme.Color.text1 : Theme.Color.card)
+                    .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Theme.Color.chipEdge, lineWidth: picked ? 0 : 1))
+                    .overlay { if picked { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.Color.bg) } }
+                    .frame(width: 18, height: 18)
+                    .padding(8)
+            }
             .opacity(item.in_stock ? 1 : 0.45)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ChipPress())
         .accessibilityLabel("\(item.name), \(item.in_stock ? item.money : "sold out")\(picked ? ", selected" : "")")
         .accessibilityIdentifier("catalog.item.\(item.name)")
     }
 
+    /// The extras and the total of what is picked: "Sends as one PayPal pay link · $135" when one item can carry a link.
     private func actions(_ c: CatalogPanelState) -> some View {
         let one = c.selection.payLinkItem(in: c.items) != nil
         let photo = c.selection.photoItem(in: c.items) != nil
-        return HStack(spacing: M.keyGap) {
+        let picked = c.selection.items(in: c.items)
+        let currency = picked.first?.currency ?? "USD"
+        let total = picked.filter { $0.currency == currency }.reduce(0.0) { $0 + (Double($1.price) ?? 0) }
+        return HStack(spacing: 6) {
             Button(action: model.toggleCatalogDescriptions) {
-                Image(systemName: "text.alignleft").font(M.icon)
-                    .foregroundStyle(c.descriptions ? Color.white : palette.label)
-                    .frame(width: 44, height: 40)
-                    .background(c.descriptions ? palette.accent : palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
+                Image(systemName: "text.alignleft").font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(c.descriptions ? Theme.Color.darkButtonText : Theme.Color.text1)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TactileButton(kind: c.descriptions ? .dark : .quiet, small: true, wide: false))
             .accessibilityLabel(c.descriptions ? "Descriptions on" : "Descriptions off")
             .accessibilityIdentifier("catalog.descriptions")
-            action(c.selection.count > 1 ? "Insert \(c.selection.count)" : "Insert", id: "catalog.insert", accent: true,
-                   enabled: c.selection.count > 0, run: model.insertCatalog)
             action("With pay link", id: "catalog.paylink", enabled: one, run: model.insertCatalogWithPayLink)
             action("Copy photo", id: "catalog.copyphoto", enabled: photo, run: model.copyCatalogPhoto)
+            Spacer(minLength: 0)
+            if !picked.isEmpty {
+                Text(formatMoney(String(format: "%.2f", total), currency)).font(Theme.Font.sans(15, 500)).monospacedDigit()
+                    .foregroundStyle(Theme.Color.text1).padding(.trailing, 4)
+                    .accessibilityIdentifier("catalog.total")
+            }
         }
-        .frame(height: 40)
+        .padding(.horizontal, 3)
+        .frame(height: 36)
     }
 
-    private func action(_ title: String, id: String, accent: Bool = false, enabled: Bool, run: @escaping () -> Void) -> some View {
-        Button(action: run) {
-            Text(title).font(M.smallMode.weight(.medium)).foregroundStyle(accent && enabled ? Color.white : palette.label)
-                .lineLimit(1).minimumScaleFactor(0.8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(accent && enabled ? palette.accent : palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.4)
-        .accessibilityIdentifier(id)
+    private func action(_ title: String, id: String, enabled: Bool, run: @escaping () -> Void) -> some View {
+        Button(title, action: run)
+            .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
+            .disabled(!enabled)
+            .accessibilityIdentifier(id)
     }
 }
