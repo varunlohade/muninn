@@ -190,7 +190,6 @@ extension KeyboardModel {
         host?.playClick()
         notesOpen = false
         writeOpen = false
-        catalog.open = false
         whoPaid = nil
         lookup = nil
         deps.store.recordLearned(Learned(subject: o.subject, line: o.line, kind: o.learnedKind, date: deps.now()))

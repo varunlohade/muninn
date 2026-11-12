@@ -158,8 +158,6 @@ final class KeyboardModel: ObservableObject {
     /// Nothing is typed, so the bar shows ready chips.
     @Published var fieldEmpty = true
     @Published var unpaidCount: Int?
-    /// The catalog panel and the "Share catalog" chip (CatalogPanel.swift).
-    @Published var catalog = CatalogPanelState()
     /// A meaning, an answer or a chart for what the last sentence asks ("what does btw mean"). See KeyboardModel+Explain.
     @Published var explainOffer: ExplainOffer?
     /// The explain card or the visual panel, in place of the keys. Nil when the keys show.
@@ -267,7 +265,6 @@ final class KeyboardModel: ObservableObject {
     func releaseCaches() {
         Self.language = nil
         Self.loadingLanguage = false
-        CatalogThumbs.shared.removeAll()
         ExplainDictionary.shared.purge()
         closeExplain()
     }
@@ -566,7 +563,6 @@ final class KeyboardModel: ObservableObject {
         reloadShortcuts()
         guard paired else { return }
         reloadSnapshot()
-        reloadCatalog()
         // hasStrings and changeCount do not trigger the paste prompt; only reading the string does.
         let pasteboard = deps.pasteboard
         copiedAvailable = pasteboard.hasStrings && pasteboard.changeCount != deps.store.lastPasteboardChange
@@ -629,10 +625,8 @@ final class KeyboardModel: ObservableObject {
         trackpadTouch = nil
         trackpad = false
         notesOpen = false
-        catalog.open = false
         whoPaid = nil
         closeExplain()
-        CatalogThumbs.shared.removeAll()
         resetWriting()
         pollTask?.cancel()
         actionTask?.cancel()
@@ -647,7 +641,6 @@ final class KeyboardModel: ObservableObject {
     func toggleNotes() {
         host?.playClick()
         writeOpen = false
-        catalog.open = false
         if !notesOpen { notes = deps.store.notes }
         notesOpen.toggle()
     }
@@ -691,7 +684,6 @@ final class KeyboardModel: ObservableObject {
         let text = typed
         // An explain question or a chart is answered on the phone or by /v1/explain, so it never also goes to /v1/suggest.
         let explaining = updateExplain(text)
-        updateCatalogTrigger(text)
         let wasEmpty = fieldEmpty
         fieldEmpty = text.isEmpty
         // Empty again, as after a send: the ready chips read the app's latest snapshot.
@@ -738,8 +730,6 @@ final class KeyboardModel: ObservableObject {
             }
             let text = (self.host?.contextBeforeInput ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             self.bar = .idle
-            self.catalog.copied = String(copied.prefix(1000))
-            self.updateCatalogTrigger(text)
             self.requestSuggest(text: text, context: String(copied.prefix(1000)), debounce: nil)
             self.checkCopiedTone(String(copied.prefix(1000)))
         }
@@ -955,7 +945,6 @@ final class KeyboardModel: ObservableObject {
     func toggleWrite() {
         host?.playClick()
         notesOpen = false
-        catalog.open = false
         writeTask?.cancel()
         writePanel = .menu
         writeOpen.toggle()
@@ -1177,9 +1166,9 @@ final class KeyboardModel: ObservableObject {
                                     bar: bar, copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp,
                                     smart: smart.map { BarItems.Smart(chip: $0, access: writer.access($0.place, hasFullAccess: hasFullAccess)) },
                                     added: added?.label, fieldEmpty: fieldEmpty, moneyTrigger: SmartDetect.moneyTrigger(typed),
-                                    catalog: catalog.barItem, explain: explainItems,
+                                    explain: explainItems,
                                     ready: .init(copiedAvailable: copiedAvailable, toBill: toBill, nextUp: nextUp, today: appointments,
-                                                 unpaidCount: unpaidCount, watch: watch, catalogCount: catalog.items.count),
+                                                 unpaidCount: unpaidCount, watch: watch),
                                     predictions: predictions, now: deps.now()))
     }
 
@@ -1198,7 +1187,6 @@ final class KeyboardModel: ObservableObject {
         case .whoPaid: openWhoPaid()
         case .today: showToday()
         case .notes: toggleNotes()
-        case .catalog(let item): openCatalog(item)
         case .predict(let word): usePrediction(word)
         case .explain: tapExplainChip()
         case .explainMore: openExplainCard()

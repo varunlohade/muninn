@@ -10,7 +10,6 @@ struct QuickLabel: Equatable {
     static func of(_ item: BarItems.Item) -> QuickLabel {
         if case .chip(let chip)? = item.action { return of(chip, item: item) }
         if case .smart? = item.action { return QuickLabel(trigger: item.trigger, verb: item.short ?? item.title) }
-        if case .catalog? = item.action, item.trigger != nil { return QuickLabel(trigger: item.trigger, verb: item.short.map { "Share \($0)" } ?? item.title) }
         if item.id == "explain", let t = item.trigger { return QuickLabel(trigger: t, verb: item.title) }
         if let d = item.detail, item.action != nil, d.count <= 14 { return QuickLabel(verb: item.title, value: d) }
         return QuickLabel(verb: item.title)
@@ -57,7 +56,7 @@ struct QuickRow: View {
     /// Money and setup actions are the ones that do something; Undo, Cancel and words are not accented.
     static func isAction(_ item: BarItems.Item) -> Bool {
         switch item.action {
-        case .chip, .bill, .smart, .catalog, .explain, .confirm, .retry, .useCopied, .whoPaid: return true
+        case .chip, .bill, .smart, .explain, .confirm, .retry, .useCopied, .whoPaid: return true
         default: return false
         }
     }

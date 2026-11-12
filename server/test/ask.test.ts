@@ -66,8 +66,8 @@ const TABLE: Row[] = [
 // One owner with a catalog item, Ana unpaid and Bo paid.
 async function world(opts: Parameters<typeof setup>[0] = {}) {
   const s = setup(opts);
-  const { token } = s.device();
-  await s.call(token, 'POST', '/v1/catalog', { name: 'Haircut', price: 45 });
+  const { token, userId } = s.device();
+  s.db.addItem(userId, { name: 'Haircut', price_cents: 4500, currency: 'USD' });
   await s.call(token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', client_name: 'Ana' });
   const bo = await (await s.call(token, 'POST', '/v1/actions/invoice', { amount: 60, item: 'Color', client_name: 'Bo' })).json();
   await s.call(null, 'POST', '/webhooks/paypal', paidEvent(bo.id), webhookHeaders);

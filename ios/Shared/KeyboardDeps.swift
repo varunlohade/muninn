@@ -109,13 +109,6 @@ struct KeyboardDeps {
     var sleep: (Duration) async throws -> Void
     /// The phone's calendar and reminders, for smart chips.
     var writer: SmartWriter = EventKitWriter()
-    /// The catalog the app cached in the App Group.
-    var catalog: CatalogCache = .live
-    /// Puts a catalog photo on the pasteboard. Needs Full Access.
-    var copyImage: (Data) -> Void = { data in
-        let png = data.starts(with: [0x89, 0x50, 0x4E, 0x47])
-        UIPasteboard.general.setData(data, forPasteboardType: png ? "public.png" : "public.jpeg")
-    }
 
     /// The voice for "Play with voice". Only a tap starts it; tests pass a silent fake.
     var speaker: @MainActor () -> Speaker = { SystemSpeaker() }

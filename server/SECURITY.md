@@ -18,7 +18,7 @@
 ## Key handling
 - `DATA_ENCRYPTION_KEY` is 32 random bytes (64 hex chars) in `.env`. `npm run setup` creates it if it is missing and never prints it.
 - `.env` is git-ignored with mode 0600. Secrets come only from the environment.
-- No PayPal secret and no encryption key goes to any model. The models get only the message text and the owner's catalog.
+- No PayPal secret and no encryption key goes to any model. The models get only the message text and the business profile.
 - `/v1/brief` sends the model summary numbers and the first name of the most late client, nothing else. The server rejects any number in the reply that is not in those facts and falls back to a template.
 - Logs redact keys that look like tokens, secrets, names, emails or text.
 

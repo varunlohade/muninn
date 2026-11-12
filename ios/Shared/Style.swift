@@ -169,7 +169,7 @@ struct IconTile: View {
     }
 }
 
-/// The dotted grid behind boards and the catalog panel.
+/// The dotted grid behind boards.
 struct DottedGrid: View {
     var body: some View {
         Canvas { ctx, size in
@@ -200,16 +200,6 @@ struct PixelIcon: View {
         PixelGrid(rows: Self.grids[name] ?? [], palette: ["#": ink, "o": fill, "w": .white])
             .frame(width: size, height: size)
             .accessibilityHidden(true)
-    }
-
-    /// A picture for a catalog item from words in its name: a haircut gets scissors, color a drop.
-    static func forItem(_ name: String) -> Name {
-        let n = name.lowercased()
-        if ["beard", "shave", "razor", "trim"].contains(where: n.contains) { return .razor }
-        if ["color", "colour", "dye", "balayage", "highlight", "paint"].contains(where: n.contains) { return .drop }
-        if ["wash", "style", "blow", "comb", "bridal"].contains(where: n.contains) { return .comb }
-        if ["cut", "hair", "scissor"].contains(where: n.contains) { return .scissors }
-        return .tag
     }
 
     static func fill(for icon: Name) -> Color {

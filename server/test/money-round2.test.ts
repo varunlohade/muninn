@@ -50,8 +50,8 @@ test('rule C: every emailed invoice needs confirm_recipient and confirm_amount, 
 
 test('rule C: a suggested invoice with a typed email always needs a confirm', async () => {
   const s = setup();
-  const { token } = s.device();
-  await s.call(token, 'POST', '/v1/catalog', { name: 'Haircut', price: 45 });
+  const { token, userId } = s.device();
+  s.db.addItem(userId, { name: 'Haircut', price_cents: 4500, currency: 'USD' });
   const r = await (await s.call(token, 'POST', '/v1/suggest', { text: '$45 for the haircut, sam@example.com' })).json();
   assert.equal(r.chips[0].needs_confirm, true);
   assert.equal(r.chips[0].payload.confirm_recipient, undefined);

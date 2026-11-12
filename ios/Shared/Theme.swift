@@ -11,7 +11,7 @@ enum Theme {
         static let bg = dynamic(light: 0xF5F5F2, dark: 0x111110)
         /// Cards: white on paper.
         static let card = dynamic(light: 0xFFFFFF, dark: 0x1C1C1A)
-        /// Rows, chips and catalog items: one step warmer than a card.
+        /// Rows and chips: one step warmer than a card.
         static let surface = dynamic(light: 0xFBFBF8, dark: 0x191917)
         /// The hairline ring that stands in for a border.
         static let edge = dynamic(light: .black.withAlphaComponent(0.08), dark: .white.withAlphaComponent(0.09))
@@ -56,7 +56,7 @@ enum Theme {
         static let darkButtonText = dynamic(light: 0xFFFFFF, dark: 0x171717)
         static let lightButton = dynamic(light: 0xF7F7F3, dark: 0x2A2A27)
         static let quietButton = dynamic(light: 0xFBFBF8, dark: 0x22221F)
-        /// The dotted grid behind boards and the catalog panel.
+        /// The dotted grid behind boards.
         static let dots = dynamic(light: UIColor(red: 38 / 255, green: 35 / 255, blue: 35 / 255, alpha: 0.13), dark: .white.withAlphaComponent(0.10))
 
         private static func dynamic(light: UInt32, dark: UInt32) -> SwiftUI.Color {

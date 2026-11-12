@@ -40,7 +40,7 @@ struct OnboardingView: View {
         case .calendar: "The keyboard adds the events and reminders you type. They stay on this phone."
         case .start: "\(AppConfig.displayName) suggests the invoice while you type."
         case .paypal: paypal.note ?? "Invoices and pay links go to your own PayPal. Or try the demo account first."
-        case .business: "So a client's \"how much?\" gets the right price from your catalog."
+        case .business: "So the keyboard knows what your business does."
         }
     }
     private var stepMotion: Animation { reduceMotion ? Theme.Motion.crossfade : Theme.Motion.onboardingStep }

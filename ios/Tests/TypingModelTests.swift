@@ -139,13 +139,6 @@ final class TypingModelTests: XCTestCase {
     /// A memory warning drops the caches; typing goes on with plain key edges, and the next appear loads the model again.
     func testReleaseCachesDropsCachesAndTypingGoesOn() async throws {
         await until("language model") { KeyboardModel.language != nil }
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("release-caches-\(UUID().uuidString)", isDirectory: true)
-        let catalog = CatalogCache(dir: dir)
-        let png = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))
-        catalog.savePhoto(png, id: "mem1")
-        XCTAssertNotNil(CatalogThumbs.shared.image(id: "mem1", cache: catalog))
-        try FileManager.default.removeItem(at: dir)
-        XCTAssertNotNil(CatalogThumbs.shared.image(id: "mem1", cache: catalog), "served from memory")
         host.text = "what does btw mean"
         model.textChanged()
         model.perform(.explainMore)
@@ -155,7 +148,6 @@ final class TypingModelTests: XCTestCase {
 
         XCTAssertNil(KeyboardModel.language)
         XCTAssertNil(model.explainPanel)
-        XCTAssertNil(CatalogThumbs.shared.image(id: "mem1", cache: catalog), "no decoded thumb left")
         XCTAssertNotNil(ExplainDictionary.shared.lookup("btw"), "the dictionary reads its file again")
         host.text = ""
         host.autocapitalization = .none

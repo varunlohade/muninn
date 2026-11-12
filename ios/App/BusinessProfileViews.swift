@@ -57,7 +57,7 @@ struct BusinessView: View {
     @State private var failed = false
 
     var body: some View {
-        SettingPage(title: "Your business", help: "What does your business do? The keyboard reads a client's \"how much?\" the way you mean it. Prices come only from your catalog.") {
+        SettingPage(title: "Your business", help: "What does your business do? The keyboard reads a client's \"how much?\" the way you mean it.") {
             BusinessQuestion(text: $text)
             if let note {
                 Text(note).font(Theme.Font.label).foregroundStyle(failed ? Theme.Color.due : Theme.Color.paid)

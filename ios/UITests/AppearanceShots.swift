@@ -137,11 +137,6 @@ final class AppearanceShots: XCTestCase {
         back(app)
         app.swipeDown()
 
-        id(app, "nav.catalog").tap()
-        Thread.sleep(forTimeInterval: 1.5)
-        shot("10b-catalog")
-        back(app)
-
         let keyboard = id(app, "home.keyboard")
         app.swipeUp()
         if keyboard.waitForExistence(timeout: 3) {

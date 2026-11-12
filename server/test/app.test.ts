@@ -99,15 +99,11 @@ test('per-user isolation: B cannot read, list, remind or refund A data (404)', a
   const A = s.device();
   const B = s.device();
   const inv = await (await s.call(A.token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', client_name: 'Sam' })).json();
-  const item = (await (await s.call(A.token, 'POST', '/v1/catalog', { name: 'Haircut', price: 45 })).json()).item;
   await s.call(null, 'POST', '/webhooks/paypal', paidEvent(inv.id), webhookHeaders);
 
   assert.equal((await (await s.call(B.token, 'GET', '/v1/payments')).json()).payments.length, 0);
-  assert.equal((await (await s.call(B.token, 'GET', '/v1/catalog')).json()).items.length, 0);
   assert.equal((await s.call(B.token, 'POST', '/v1/actions/remind', { invoice_id: inv.id })).status, 404);
   assert.equal((await s.call(B.token, 'POST', '/v1/actions/refund', { id: inv.id })).status, 404);
-  assert.equal((await s.call(B.token, 'PUT', `/v1/catalog/${item.id}`, { name: 'Mine', price: 1 })).status, 404);
-  assert.equal((await s.call(B.token, 'DELETE', `/v1/catalog/${item.id}`)).status, 404);
   assert.deepEqual((await (await s.call(B.token, 'GET', '/v1/summary')).json()).earned_today, {});
 
   const step1 = await (await s.call(A.token, 'POST', '/v1/actions/refund', { id: inv.id })).json();

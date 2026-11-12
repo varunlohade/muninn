@@ -10,8 +10,6 @@ enum ReadyChips {
         /// Clients who owe money in the app's last snapshot (`WhoPaid.count`). Nil when the app has not written one yet.
         var unpaidCount: Int?
         var watch: Watch?
-        /// How many items the app cached for the catalog panel.
-        var catalogCount = 0
     }
 
     static func build(_ i: Input) -> [BarItems.Item] {
@@ -31,7 +29,6 @@ enum ReadyChips {
         case let n? where n > 0: out.append(Item(id: "whopaid", title: "Who owes you", detail: "\(n) unpaid", action: .whoPaid))
         default: break
         }
-        if i.catalogCount > 0 { out.append(Item(id: "catalog", title: "Catalog", detail: "\(i.catalogCount) item\(i.catalogCount == 1 ? "" : "s")", action: .catalog(nil))) }
         if let w = i.watch {
             out.append(w.paid
                 ? Item(id: "paid", title: "\(w.who) paid \u{2713}", tone: .paid)
