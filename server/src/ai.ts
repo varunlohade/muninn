@@ -23,6 +23,8 @@ export type Ai = {
   extract(text: string, catalog: string, business?: string): Promise<Extraction>;
   reply(text: string, profile: { business_name: string; tone: string; description?: string | null }): Promise<string>;
   brief(facts: string): Promise<string>;
+  /** One short paragraph on what the business sells, from item names and typical prices only. */
+  describe(items: string): Promise<string>;
   /** Same text with spelling and grammar fixed. */
   fix(text: string): Promise<string>;
   refine(text: string, tone: Tone): Promise<string>;
@@ -370,6 +372,19 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
       ];
       const attempt = (m: Model) => async (signal: AbortSignal) => (await chatOnce(m, messages, 120, 'brief', signal)).trim();
       return hedge(attempt(config.llm.primary), attempt(config.llm.fallback), config.llm.hedgeMs);
+    },
+
+    async describe(items) {
+      const content = await chat([
+        {
+          role: 'system',
+          content: 'You get the items a small business was paid for and their typical prices. ' +
+            'Write what the business does, in 1-2 short plain sentences, as the owner would say it ("I design logos and websites for small shops."). ' +
+            'No names, no email addresses, no prices, no numbers. Plain text only.',
+        },
+        { role: 'user', content: items.slice(0, 1500) },
+      ], 120, 'describe');
+      return content.trim().replace(/^"|"$/g, '');
     },
 
     async reply(text, profile) {

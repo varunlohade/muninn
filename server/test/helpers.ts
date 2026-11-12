@@ -141,6 +141,7 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
       if (opts.brief instanceof Error) throw opts.brief;
       return opts.brief ?? facts.split('\n').slice(0, 2).join('\n');
     },
+    async describe(items) { aiCalls.push({ fn: 'describe', args: [items] }); return 'I make logos and websites for small shops.'; },
     async fix(...args) { aiCalls.push({ fn: 'fix', args }); return rewrite(args[0]); },
     async refine(...args) { aiCalls.push({ fn: 'refine', args }); return rewrite(args[0]); },
     async toneCheck(...args) { aiCalls.push({ fn: 'toneCheck', args }); return opts.tone ?? { tone: 'ok', calm: null }; },
