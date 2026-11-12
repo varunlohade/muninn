@@ -26,6 +26,7 @@ import { createAppleVerifier, type AppleVerifier } from './apple.ts';
 import { DEFAULT_BUSINESS_NAME, createPayPalConnect } from './connect.ts';
 import { createMore } from './actions-more.ts';
 import { buildChart, monthStart, zoneOr } from './chart.ts';
+import { createLearner } from './learn.ts';
 import { PasswordBusyError, dummyHash, hashPassword, needsRehash, passwordProblem, verifyPassword } from './password.ts';
 
 export type Deps = {
@@ -257,7 +258,15 @@ export function createApp(deps: Deps) {
   const replyProfile = (userId: string) => ({ ...profileOf(userId), description: businessOf(userId) });
   const requestIdFor = (userId: string, key: string) => sha256(`${userId}:${key}`).slice(0, 36);
   // A connect or disconnect changes whose PayPal sales the chart reads.
-  const connect = createPayPalConnect({ db, cipher, paypal, now, onChange: (userId) => biz.forgetHistory(userId) });
+  // After a connect, Muninn learns the owner's clients and usual items from their own PayPal, in the background.
+  const learner = createLearner({ db, cipher, ai, paypal, now, defaultProfile: DEFAULT_PROFILE });
+  /** The business for the model's context: the owner's words, then the items and prices learned from PayPal. Never client names. */
+  const promptBusinessOf = (userId: string) => [businessOf(userId), learner.context(userId)].filter(Boolean).join(' ');
+  const connect = createPayPalConnect({
+    db, cipher, paypal, now, onChange: (userId) => biz.forgetHistory(userId),
+    onConnected: (userId, account, seller) => { void learner.run(userId, account, seller); },
+    learned: (userId) => learner.summary(userId)?.line ?? null,
+  });
   const integrations = createIntegrations(db, cipher, now, connect.label);
   const slack = createSlack(db, cipher, now);
   const biz = createBusiness({ db, ai, paypal, integrations, dec, now, isConnected: (userId) => !connect.isDemo(userId) });
@@ -686,7 +695,7 @@ export function createApp(deps: Deps) {
     }
 
     const profile = profileOf(userId);
-    const business = businessOf(userId);
+    const business = promptBusinessOf(userId);
     const seen = `${text} ${context ?? ''}`;
     const known = regexFields(userId, q, text, seen);
     const extract = () => {
@@ -887,7 +896,10 @@ export function createApp(deps: Deps) {
       .filter((r) => dec(userId, r.client_name_enc)?.trim().toLowerCase() === want)
       .map((r) => dec(userId, r.client_email_enc)?.trim().toLowerCase())
       .filter((e): e is string => !!e));
-    return emails.size === 1 ? [...emails][0] : null;
+    if (emails.size) return emails.size === 1 ? [...emails][0] : null;
+    // No invoice for this client yet: the email PayPal gave for the one learned client with this name.
+    const learned = learner.clients(userId).filter((c) => c.name?.trim().toLowerCase() === want && c.email);
+    return learned.length === 1 ? learned[0].email : null;
   }
 
   function buildChips(userId: string, intent: string, rawExt: Extraction | null, text: string, context: string, defaultCurrency: string, unsure = false): Chip[] {
@@ -895,22 +907,33 @@ export function createApp(deps: Deps) {
     const ext = rawExt && { ...rawExt, item: grounded(rawExt.item, `${text} ${context}`), client_name: cleanOrNull(rawExt.client_name, 100) };
     // A typed currency wins; a bare $ is in the profile currency.
     const typedCurrency = (config.money.currencies as readonly string[]).includes(ext?.currency ?? '') ? ext!.currency! : null;
-    const currency = typedCurrency ?? defaultCurrency;
+    let currency = typedCurrency ?? defaultCurrency;
     // Copied or typed text names a client: true when that text holds the client's full or first name.
     const namedIn = (t: string, client: string) => !!client && (mentions(t, client) || mentions(t, client.split(/\s+/)[0]));
 
     if (intent === 'create_invoice' || intent === 'pay_link') {
-      const cents = ext?.amount != null ? amountToCents(ext.amount) : null;
+      let cents = ext?.amount != null ? amountToCents(ext.amount) : null;
+      // No amount said: a client Muninn learned from PayPal, named in the owner's own text, brings their usual item
+      // and price as a suggestion. The chip names that item, the pay link confirms too, and the invoice confirm shows every value.
+      const learned = cents === null ? learner.named(userId, text) : null;
+      const usual = learned?.usual && (!typedCurrency || typedCurrency === learned.usual.currency)
+        && (config.money.currencies as readonly string[]).includes(learned.usual.currency) ? learned.usual : null;
+      if (usual) {
+        cents = amountToCents(usual.amount);
+        currency = usual.currency;
+        unsure = true;
+      }
       if (cents === null) return [];
-      const item = ext?.item ? ext.item.charAt(0).toUpperCase() + ext.item.slice(1) : 'Payment';
+      const said = usual ? usual.item : ext?.item;
+      const item = said ? said.charAt(0).toUpperCase() + said.slice(1) : 'Payment';
       const money = formatMoney(cents, currency);
-      const base = { amount: centsToValue(cents), currency, item, client_name: ext?.client_name ?? null };
+      const base = { amount: centsToValue(cents), currency, item, client_name: ext?.client_name ?? (usual ? learned!.name : null) };
       // An email the owner typed, else the one email the owner's records hold for the client named in the owner's
       // text. Never an email the model read from copied client text or made up.
       // Two or more typed emails: the owner picks on the confirm, never the model.
       const emails = typedEmails(text);
       const typed = ext?.client_email && emails.length === 1 && emails[0] === ext.client_email.toLowerCase() ? ext.client_email : null;
-      const email = emails.length > 1 ? null : typed ?? recordEmail(userId, ext?.client_name ?? null, text);
+      const email = emails.length > 1 ? null : typed ?? recordEmail(userId, base.client_name, text) ?? (usual ? learned!.email : null);
       const recipient = email ?? ext?.client_name ?? null;
       // Every invoice gets one confirm tap that shows the amount and the recipient; the server checks both.
       const invoice = chip('invoice', `Invoice ${money} · ${item}${recipient ? ` → ${recipient}` : ''}`, { ...base, client_email: email }, true);
@@ -1318,7 +1341,7 @@ export function createApp(deps: Deps) {
 
     const extract = () => {
       paid++;
-      return ai.extract(text, '', businessOf(userId)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
+      return ai.extract(text, '', promptBusinessOf(userId)).catch((e) => { log('extract_failed', { err: (e as Error).message }); return null; });
     };
     if (route === 'subscribe') {
       if (repeatEnds(text)) return none(confidence, "Repeat billing with an end date isn't ready yet. Send one invoice at a time for now.");
@@ -1329,7 +1352,7 @@ export function createApp(deps: Deps) {
     const intent = ROUTE_INTENT[route];
     if (intent) {
       const q = quick(text);
-      const filled = { text, context: '', q, known: regexFields(userId, q, text, text), currency: profileOf(userId).currency, business: businessOf(userId) };
+      const filled = { text, context: '', q, known: regexFields(userId, q, text, text), currency: profileOf(userId).currency, business: promptBusinessOf(userId) };
       return done(route, confidence, { chips: (await moneyChips(userId, intent, filled, null, extract)) ?? [] });
     }
 
@@ -1387,6 +1410,9 @@ export function createApp(deps: Deps) {
     const p = db.getProfile(userId);
     return p ? { ...p, description: businessOf(userId) || null } : null;
   };
+  // What Muninn learned from the owner's own PayPal: counts and a short summary, no client names.
+  app.get('/v1/paypal/learned', (c) => c.json({ learned: learner.summary(c.get('userId')) }));
+
   app.get('/v1/profile', (c) => c.json({ profile: profileOut(c.get('userId')) }));
   // "What does your business do?": the keyboard reads price questions as questions about this business.
   app.put('/v1/profile/business', async (c) => {

@@ -110,7 +110,8 @@ test('return: PayPal confirms the merchant, the app gets a one-time code, and th
   assert.deepEqual(await done.json(), { result: 'connected', account: 's•••@shop.test' });
   assert.equal((await finish(s, a.token, code)).status, 404, 'the code works once');
   const st = await (await s.call(a.token, 'GET', '/v1/paypal/status')).json() as any;
-  assert.deepEqual(st, { connected: true, demo: false, connect_ready: true, pending: false, email_confirmed: true, payments_receivable: true, account: 's•••@shop.test' });
+  assert.deepEqual(st, { connected: true, demo: false, connect_ready: true, pending: false, email_confirmed: true, payments_receivable: true, account: 's•••@shop.test',
+    learned: 'No PayPal sales in the last 90 days to learn from' });
   // Stored encrypted: the merchant id and email are not in the row as plain text.
   const row = s.db.getPayPalConnection(a.userId)!;
   assert.ok(!JSON.stringify(row).includes('SELLER12345') && !JSON.stringify(row).includes('seller@shop.test'));
@@ -231,7 +232,7 @@ test('demo fallback: a user with no PayPal connected runs on the demo merchant, 
   const s = setup({ partner: fakePartner().partner });
   const a = s.device();
   const st = await (await s.call(a.token, 'GET', '/v1/paypal/status')).json() as any;
-  assert.deepEqual(st, { connected: false, demo: true, connect_ready: true, pending: false, email_confirmed: false, payments_receivable: false, account: null });
+  assert.deepEqual(st, { connected: false, demo: true, connect_ready: true, pending: false, email_confirmed: false, payments_receivable: false, account: null, learned: null });
   const inv = await (await s.call(a.token, 'POST', '/v1/actions/invoice', { amount: 45, item: 'Haircut', client_name: 'Sam' })).json() as any;
   assert.equal(inv.demo, true);
   assert.equal(s.db.getInvoice(a.userId, inv.id)!.pp_account, null);
@@ -372,7 +373,7 @@ test('provider partner: one referral asks for every feature; merchant status rea
     assert.equal(await partner.merchantIdForTracking('mu1'), 'SELLER12345');
     assert.ok(sent.some((x) => x.path === '/v1/customer/partners/PARTNER123/merchant-integrations?tracking_id=mu1'));
     assert.deepEqual(await partner.merchantStatus('SELLER12345'), {
-      merchantId: 'SELLER12345', trackingId: 'mu1', paymentsReceivable: true, emailConfirmed: false, primaryEmail: 'seller@shop.test', permissionsGranted: true, legalName: null, currency: null,
+      merchantId: 'SELLER12345', trackingId: 'mu1', paymentsReceivable: true, emailConfirmed: false, primaryEmail: 'seller@shop.test', permissionsGranted: true, legalName: null, currency: null, country: null,
     });
     assert.equal(await partner.merchantStatus('OTHER000001'), null);
   } finally {

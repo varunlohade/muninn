@@ -73,6 +73,13 @@ CREATE TABLE IF NOT EXISTS paypal_connections (
   merchant_hash TEXT, merchant_enc TEXT, email_enc TEXT, payments_receivable INTEGER NOT NULL DEFAULT 0, email_confirmed INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL, connected_at INTEGER, verified_enc TEXT, code_hash TEXT, code_expires_at INTEGER);
 CREATE UNIQUE INDEX IF NOT EXISTS paypal_connections_merchant ON paypal_connections(merchant_hash) WHERE merchant_hash IS NOT NULL;
+-- Clients and business facts Muninn learned from the owner's connected PayPal. Names, emails and facts are encrypted
+-- with the owner's key; name_hash and email_hash are keyed hashes, so one person is stored once.
+CREATE TABLE IF NOT EXISTS learned_clients (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name_hash TEXT, email_hash TEXT,
+  name_enc TEXT, email_enc TEXT, usual_enc TEXT, updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS learned_clients_user ON learned_clients(user_id);
+CREATE TABLE IF NOT EXISTS learned_facts (user_id TEXT PRIMARY KEY REFERENCES users(id), facts_enc TEXT NOT NULL, learned_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS subscriptions_user ON subscriptions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS refunds_target ON refunds(user_id, target_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS invoices_seed ON invoices(user_id, seed_key) WHERE seed_key IS NOT NULL;
@@ -115,6 +122,10 @@ export type PayPalConnectionRow = {
   email_enc: string | null; payments_receivable: number; email_confirmed: number; created_at: number; connected_at: number | null;
   // After PayPal sends the seller back: the checked merchant (encrypted JSON) and the hash of the one-time code the app must show.
   verified_enc: string | null; code_hash: string | null; code_expires_at: number | null;
+};
+
+export type LearnedClientRow = {
+  id: string; name_hash: string | null; email_hash: string | null; name_enc: string | null; email_enc: string | null; usual_enc: string | null;
 };
 
 export type Db = ReturnType<typeof openDb>;
@@ -345,6 +356,25 @@ export function openDb(path: string) {
       q(`INSERT INTO profiles (user_id, business_name, tone, currency, description_enc) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(user_id) DO UPDATE SET description_enc = excluded.description_enc`)
         .run(userId, defaults.business_name, defaults.tone, defaults.currency, enc);
+    },
+
+    listLearnedClients(userId: string): LearnedClientRow[] {
+      return q('SELECT id, name_hash, email_hash, name_enc, email_enc, usual_enc FROM learned_clients WHERE user_id = ? ORDER BY updated_at DESC, id')
+        .all(userId) as LearnedClientRow[];
+    },
+    /** A row with an id already stored for this user is updated; a new id is added. */
+    putLearnedClient(userId: string, r: LearnedClientRow, at = now()) {
+      q(`INSERT INTO learned_clients (id, user_id, name_hash, email_hash, name_enc, email_enc, usual_enc, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name_hash = excluded.name_hash, email_hash = excluded.email_hash, name_enc = excluded.name_enc,
+           email_enc = excluded.email_enc, usual_enc = excluded.usual_enc, updated_at = excluded.updated_at WHERE learned_clients.user_id = excluded.user_id`)
+        .run(r.id, userId, r.name_hash, r.email_hash, r.name_enc, r.email_enc, r.usual_enc, at);
+    },
+    getLearnedFacts(userId: string): { facts_enc: string; learned_at: number } | undefined {
+      return q('SELECT facts_enc, learned_at FROM learned_facts WHERE user_id = ?').get(userId) as { facts_enc: string; learned_at: number } | undefined;
+    },
+    putLearnedFacts(userId: string, factsEnc: string, at: number) {
+      q(`INSERT INTO learned_facts (user_id, facts_enc, learned_at) VALUES (?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET facts_enc = excluded.facts_enc, learned_at = excluded.learned_at`).run(userId, factsEnc, at);
     },
 
     allItems(): (CatalogItem & { user_id: string })[] {

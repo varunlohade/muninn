@@ -16,7 +16,7 @@ export const CONNECT_OFF = 'Your own PayPal is not open yet. Money runs on the d
 const TRACKING = /^mu[0-9a-f]{32}$/;
 const MERCHANT = /^[A-Z0-9]{8,20}$/;
 const CODE = /^[0-9a-f]{48}$/;
-type Verified = { merchantId: string; email: string | null; receivable: boolean; confirmed: boolean; name?: string | null; currency?: string | null };
+type Verified = { merchantId: string; email: string | null; receivable: boolean; confirmed: boolean; name?: string | null; currency?: string | null; country?: string | null };
 const codeOf = async (c: Context) => {
   const b = await c.req.json().catch(() => null) as { code?: unknown } | null;
   return typeof b?.code === 'string' ? b.code : '';
@@ -49,7 +49,13 @@ export function mask(email: string | null, merchantId: string | null): string | 
   return merchantId ? `•••${merchantId.slice(-4)}` : null;
 }
 
-export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayPalProvider; now: () => number; onChange?: (userId: string) => void }) {
+export function createPayPalConnect(deps: {
+  db: Db; cipher: Cipher; paypal: PayPalProvider; now: () => number; onChange?: (userId: string) => void;
+  /** Runs after a finish connects the owner's own PayPal. It must not block the finish answer. */
+  onConnected?: (userId: string, account: string, seller: { currency: string | null; country: string | null }) => void;
+  /** A short line on what Muninn learned from this owner's PayPal, or null. */
+  learned?: (userId: string) => string | null;
+}) {
   const { db, cipher, paypal, now } = deps;
   const connected = (userId: string) => {
     const r = db.getPayPalConnection(userId);
@@ -71,7 +77,7 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
     const st = await paypal.partner().merchantStatus(merchantId);
     if (!st || (st.trackingId !== null && sha256(st.trackingId) !== row.tracking_hash)) return 'failed';
     if (!st.permissionsGranted) return 'declined';
-    const v: Verified = { merchantId, email: st.primaryEmail, receivable: st.paymentsReceivable, confirmed: st.emailConfirmed, name: st.legalName ?? null, currency: st.currency ?? null };
+    const v: Verified = { merchantId, email: st.primaryEmail, receivable: st.paymentsReceivable, confirmed: st.emailConfirmed, name: st.legalName ?? null, currency: st.currency ?? null, country: st.country ?? null };
     const ok = db.verifyPayPalConnect(row.user_id, row.tracking_hash, cipher.encrypt(row.user_id, JSON.stringify(v)),
       code ? sha256(code) : null, code ? now() + config.paypal.connectCodeTtlMs : null);
     return ok ? 'verified' : 'failed';
@@ -162,6 +168,8 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
       const currency = v.currency && (config.money.currencies as readonly string[]).includes(v.currency) ? v.currency : p?.currency ?? 'USD';
       db.putProfile(userId, { business_name: name, tone: p?.tone ?? 'friendly and short', currency });
     }
+    const acct = account(userId);
+    if (acct) deps.onConnected?.(userId, acct, { currency: v.currency ?? null, country: v.country ?? null });
     return c.json({ result: 'connected', account: label(userId) });
   });
 
@@ -182,6 +190,7 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
     return c.json({
       connected: !!r, demo: !r, connect_ready: ready(), pending: db.getPayPalConnection(userId)?.status === 'pending',
       email_confirmed: !!r?.email_confirmed, payments_receivable: !!r?.payments_receivable, account: label(userId),
+      learned: r ? deps.learned?.(userId) ?? null : null,
     });
   });
 

@@ -13,7 +13,8 @@ export type PayPal = {
   captureOrder(id: string, requestId: string): Promise<{ status: string; captureId: string | null }>;
   refundCapture(captureId: string, value: string, currency: string, requestId: string): Promise<{ id: string; status: string }>;
   verifyWebhook(headers: Record<string, string | undefined>, event: unknown): Promise<boolean>;
-  searchTransactions(start: Date, end: Date): Promise<PayPalTxn[]>;
+  /** cart: also read each payment's cart items (item names and prices). */
+  searchTransactions(start: Date, end: Date, opts?: { cart?: boolean }): Promise<PayPalTxn[]>;
   listDisputes(): Promise<PayPalDispute[]>;
   getDispute(id: string): Promise<PayPalDisputeDetail | null>;
   sendDisputeMessage(id: string, message: string, requestId: string): Promise<void>;
@@ -57,6 +58,9 @@ export type SubscriptionCreated = { id: string; status: string; approveLink: str
 export type PayPalTxn = {
   id: string; event_code: string; date: string; status: string; amount: Money; fee: Money | null;
   payer_name: string | null; payer_email: string | null; invoice_id: string | null; subject: string | null;
+  note?: string | null;
+  /** Cart items, read only when the search asks for cart info. amount: the price of one. */
+  items?: { name: string; amount: Money | null; quantity: number }[];
 };
 export type PayPalDispute = { id: string; status: string; reason: string; amount: Money | null; due_date: string | null; created_at: string; stage: string | null };
 export type PayPalDisputeDetail = PayPalDispute & {
@@ -84,6 +88,8 @@ export type MerchantStatus = {
   legalName?: string | null;
   /** The seller's primary currency (ISO 4217), when PayPal returns one. */
   currency?: string | null;
+  /** The seller's country (ISO 3166-1 alpha-2), when PayPal returns one. */
+  country?: string | null;
 };
 // Partner Referrals v2 and the merchant-integrations lookups, always on the platform's own credentials.
 export type PayPalPartner = {
@@ -206,7 +212,13 @@ function createClient(creds: Creds, accessToken: () => Promise<string>, seller: 
 
   const money = (m: { value?: string; currency_code?: string } | undefined): Money | null =>
     m?.value && m.currency_code ? { value: m.value, currency: m.currency_code } : null;
-  const dispute = (d: any): PayPalDispute => ({
+  const cartItems = (cart: any): NonNullable<PayPalTxn['items']> => (cart?.item_details ?? [])
+    .filter((it: any) => typeof it?.item_name === 'string' && it.item_name.trim())
+    .map((it: any) => {
+      const quantity = Math.max(1, Number(it.item_quantity) || 1);
+      return { name: it.item_name.trim(), amount: money(it.item_unit_price) ?? (quantity === 1 ? money(it.item_amount) : null), quantity };
+    });
+  const dispute =(d: any): PayPalDispute => ({
     id: String(d.dispute_id), status: String(d.status ?? 'UNKNOWN'), reason: String(d.reason ?? 'UNKNOWN'),
     amount: money(d.dispute_amount), due_date: d.seller_response_due_date ?? null, created_at: String(d.create_time ?? ''),
     stage: d.dispute_life_cycle_stage ?? null,
@@ -314,12 +326,12 @@ function createClient(creds: Creds, accessToken: () => Promise<string>, seller: 
     },
 
     // Transaction Search allows at most 31 days per query and 500 rows per page.
-    async searchTransactions(start, end) {
+    async searchTransactions(start, end, opts) {
       const out: PayPalTxn[] = [];
       const iso = (d: Date) => `${d.toISOString().slice(0, 19)}Z`;
       for (let page = 1, pages = 1; page <= pages && page <= 5; page++) {
         const qs = new URLSearchParams({
-          start_date: iso(start), end_date: iso(end), fields: 'transaction_info,payer_info', page_size: '500', page: String(page),
+          start_date: iso(start), end_date: iso(end), fields: opts?.cart ? 'transaction_info,payer_info,cart_info' : 'transaction_info,payer_info', page_size: '500', page: String(page),
         });
         const r = await rest('GET', `/v1/reporting/transactions?${qs}`);
         pages = Number(r?.total_pages ?? 1);
@@ -334,6 +346,7 @@ function createClient(creds: Creds, accessToken: () => Promise<string>, seller: 
             id: ti.transaction_id, event_code: String(ti.transaction_event_code ?? ''), date: String(ti.transaction_initiation_date ?? ''),
             status: String(ti.transaction_status ?? ''), amount, fee: money(ti.fee_amount),
             payer_name: name, payer_email: pi.email_address ?? null, invoice_id: ti.invoice_id ?? null, subject: ti.transaction_subject ?? null,
+            ...(opts?.cart ? { note: ti.transaction_note ?? null, items: cartItems(t.cart_info) } : {}),
           });
         }
       }
@@ -532,6 +545,7 @@ function createPartner(creds: Creds, accessToken: () => Promise<string>): PayPal
         primaryEmail: typeof r.primary_email === 'string' ? r.primary_email : null, permissionsGranted: granted,
         legalName: typeof r.legal_name === 'string' && r.legal_name.trim() ? r.legal_name.trim() : null,
         currency: typeof r.primary_currency === 'string' && /^[A-Za-z]{3}$/.test(r.primary_currency) ? r.primary_currency.toUpperCase() : null,
+        country: typeof r.country === 'string' && /^[A-Za-z]{2}$/.test(r.country) ? r.country.toUpperCase() : null,
       };
     },
   };
