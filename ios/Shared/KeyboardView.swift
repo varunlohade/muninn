@@ -131,6 +131,7 @@ struct SuggestionBar: View {
     @ObservedObject var model: KeyboardModel
     let palette: Theme.SystemKeyboard.Palette
     typealias M = Theme.SystemKeyboard
+    @State private var showTools = false
 
     var body: some View {
         let items = model.barItems
@@ -172,6 +173,10 @@ struct SuggestionBar: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
+            } else if BarStyle.current != .cards && showTools {
+                toolsRow
+            } else if BarStyle.current != .cards {
+                QuickRow(model: model, items: items, palette: palette, style: BarStyle.current)
             } else {
                 // No scroll view: the bar holds at most three, the first stays whole and later cards shorten their words.
                 // (Inside a keyboard, XCUITest and VoiceOver misplace cards in a horizontal scroll view.)
@@ -191,31 +196,77 @@ struct SuggestionBar: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .clipped()
             }
-            if showsFix, let plan = model.fixPlan {
-                Button(action: model.fix) {
-                    Text(plan.title).font(Theme.Font.sans(14, 500)).lineLimit(1).fixedSize()
+            if quickMode {
+                // QuickType bar: Fix is a plain slot, and Rewrite, Notes and Catalog wait behind "…".
+                if showsFix, let plan = model.fixPlan, !showTools {
+                    Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
+                    Button(action: model.fix) {
+                        Text(plan.title).font(M.prediction).foregroundStyle(palette.label).lineLimit(1).fixedSize()
+                            .padding(.horizontal, 8).frame(maxHeight: .infinity).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(plan.title)
+                    .accessibilityIdentifier("chip.fix")
                 }
-                .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
-                .padding(.horizontal, 4)
-                .accessibilityLabel(plan.title)
-                .accessibilityIdentifier("chip.fix")
-                .transition(.opacity)
-            }
-            if model.paired && !model.notesOpen && !model.catalog.open && !confirming && !explaining {
-                barButton(model.writeOpen ? "keyboard" : "wand.and.stars", id: "write.toggle", label: model.writeOpen ? "Keyboard" : "Rewrite", action: model.toggleWrite)
-            }
-            // Notes live in the App Group, which the keyboard reaches only with Full Access.
-            if model.hasFullAccess && !model.writeOpen && !model.catalog.open && !confirming && !explaining {
-                barButton(model.notesOpen ? "keyboard" : "note.text", id: "notes.toggle", label: model.notesOpen ? "Keyboard" : "Notes", action: model.toggleNotes)
-            }
-            // The catalog cache lives in the App Group, which needs Full Access too. Open, the panel's back button closes it.
-            if model.paired && !model.writeOpen && !model.notesOpen && !model.catalog.open && !confirming && !explaining {
-                barButton("tag", id: "catalog.toggle", label: "Catalog", action: model.toggleCatalog)
+                Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
+                barButton(showTools ? "xmark" : "ellipsis", id: "bar.more", label: showTools ? "Close" : "More") { showTools.toggle() }
+            } else {
+                if showsFix, let plan = model.fixPlan {
+                    Button(action: model.fix) {
+                        Text(plan.title).font(Theme.Font.sans(14, 500)).lineLimit(1).fixedSize()
+                    }
+                    .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
+                    .padding(.horizontal, 4)
+                    .accessibilityLabel(plan.title)
+                    .accessibilityIdentifier("chip.fix")
+                    .transition(.opacity)
+                }
+                if model.paired && !model.notesOpen && !model.catalog.open && !confirming && !explaining {
+                    barButton(model.writeOpen ? "keyboard" : "wand.and.stars", id: "write.toggle", label: model.writeOpen ? "Keyboard" : "Rewrite", action: model.toggleWrite)
+                }
+                // Notes live in the App Group, which the keyboard reaches only with Full Access.
+                if model.hasFullAccess && !model.writeOpen && !model.catalog.open && !confirming && !explaining {
+                    barButton(model.notesOpen ? "keyboard" : "note.text", id: "notes.toggle", label: model.notesOpen ? "Keyboard" : "Notes", action: model.toggleNotes)
+                }
+                // The catalog cache lives in the App Group, which needs Full Access too. Open, the panel's back button closes it.
+                if model.paired && !model.writeOpen && !model.notesOpen && !model.catalog.open && !confirming && !explaining {
+                    barButton("tag", id: "catalog.toggle", label: "Catalog", action: model.toggleCatalog)
+                }
             }
         }
         .padding(.trailing, 2)
         .animation(Theme.Motion.chipAppear, value: items.map(\.id))
         .animation(Theme.Motion.chipAppear, value: showsFix)
+    }
+
+    /// The QuickType bar is showing its slots (not a panel head, the word row or a confirm).
+    private var quickMode: Bool {
+        BarStyle.current != .cards && model.explainPanel == nil && !model.notesOpen && !model.writeOpen && !model.catalog.open
+            && model.confirmPanel == nil && !explaining && !model.barItems.contains { $0.id.hasPrefix("predict.") }
+    }
+
+    /// Behind "…": Rewrite, Notes and Catalog as plain slots.
+    private var toolsRow: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(tools.enumerated()), id: \.offset) { i, t in
+                if i > 0 { Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight) }
+                Button { showTools = false; t.run() } label: {
+                    Text(t.title).font(M.prediction).foregroundStyle(palette.label).lineLimit(1)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(t.id)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var tools: [(title: String, id: String, run: () -> Void)] {
+        var out: [(title: String, id: String, run: () -> Void)] = []
+        if model.paired { out.append(("Rewrite", "write.toggle", model.toggleWrite)) }
+        if model.hasFullAccess { out.append(("Notes", "notes.toggle", model.toggleNotes)) }
+        if model.paired { out.append(("Catalog", "catalog.toggle", model.toggleCatalog)) }
+        return out
     }
 
     /// The catalog's head, per M1-4: back, the name and count, then Share.
