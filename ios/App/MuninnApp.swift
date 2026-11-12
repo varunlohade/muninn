@@ -32,6 +32,8 @@ final class Session: ObservableObject {
     @Published var signInNext = false
     /// Goes up on each log out or delete.
     @Published var logouts = 0
+    /// Home has its first data (summary, payments, PayPal status). The splash waits for it, up to `Splash.cap`.
+    @Published var homeReady = false
     var signingOut = false
     private var rejected: AnyCancellable?
 
@@ -156,6 +158,7 @@ final class Session: ObservableObject {
 struct RootView: View {
     @EnvironmentObject var session: Session
     @Environment(\.scenePhase) private var scenePhase
+    @State private var splash = true
 
     var body: some View {
         NavigationStack {
@@ -166,6 +169,16 @@ struct RootView: View {
         }
         // A log out starts a new stack, so no screen of the last user stays pushed.
         .id(session.logouts)
+        // The screen underneath loads while the splash covers it, so it never shows empty or half-filled.
+        .overlay {
+            if splash { SplashView().transition(.opacity) }
+        }
+        .task {
+            KeyboardSetup.shared.refresh()
+            let home = session.paired && !session.onboarding
+            await Splash.wait { !home || session.homeReady }
+            withAnimation(Theme.Motion.crossfade) { splash = false }
+        }
         // Back from Settings: onboarding and Home see the new keyboard state at once.
         .onChange(of: scenePhase) { _, phase in if phase == .active { KeyboardSetup.shared.refresh() } }
     }

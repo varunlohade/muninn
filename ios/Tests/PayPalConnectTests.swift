@@ -29,6 +29,26 @@ final class PayPalConnectTests: XCTestCase {
         XCTAssertEqual(PayPalConnector.line(for: "anything"), "PayPal did not finish. Try again.")
     }
 
+    func testConnectReadyComesFromTheServerAndAnOlderServerLeavesItOut() throws {
+        let off = try status(#"{"connected":false,"demo":true,"connect_ready":false,"pending":false,"email_confirmed":false,"payments_receivable":false,"account":null}"#)
+        XCTAssertEqual(off.connect_ready, false)
+        let old = try status(#"{"connected":false,"demo":true,"pending":false,"email_confirmed":false,"payments_receivable":false,"account":null}"#)
+        XCTAssertNil(old.connect_ready)
+        XCTAssertEqual(PayPalConnector.offLine, "Your own PayPal is not open yet. Money runs on the demo PayPal sandbox account.")
+        XCTAssertEqual(PayPalConnector.sandboxURL.absoluteString, "https://www.sandbox.paypal.com")
+    }
+
+    @MainActor
+    func testSplashEndsWhenReadyOrAtTheCap() async {
+        var slept: [Duration] = []
+        var ready = false
+        await Splash.wait(sleep: { slept.append($0); if slept.count == 3 { ready = true } }) { ready }
+        XCTAssertEqual(slept.count, 3, "ends as soon as the data is in")
+        slept = []
+        await Splash.wait(sleep: { slept.append($0) }) { false }
+        XCTAssertEqual(slept.reduce(.zero, +), Splash.cap, "never waits past the cap")
+    }
+
     func testSummaryDemoAndConnected() throws {
         XCTAssertEqual(PayPalConnector.summary(nil), "Demo PayPal (sandbox)")
         let demo = try status(#"{"connected":false,"demo":true,"pending":false,"email_confirmed":false,"payments_receivable":false,"account":null}"#)

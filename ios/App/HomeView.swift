@@ -145,7 +145,12 @@ struct HomeView: View {
         .toolbar(.hidden, for: .navigationBar)
         .refreshable { await model.load(); await PayPalConnector.shared.refresh() }
         // Loads again when the account changes: "Welcome back" brings the earlier account's data.
-        .task(id: session.account) { await model.load(); await PayPalConnector.shared.refresh() }
+        .task(id: session.account) {
+            async let paypal: Void = PayPalConnector.shared.refresh()
+            await model.load()
+            await paypal
+            session.homeReady = true
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in calendar.refresh() }
         .overlay {
             if let p = model.raven {
@@ -460,6 +465,8 @@ final class AskModel: ObservableObject {
         case retry(Chip, String?)
         /// Done, and PayPal can undo it: "Paused ✓" with Undo.
         case undoable(String, Chip)
+        /// "Send $20 · Ritika" with no email or phone on file: the owner types it, then the confirm shows.
+        case recipient(Chip)
     }
     @Published var text = ""
     @Published var state: State = .idle
@@ -542,6 +549,14 @@ final class AskModel: ObservableObject {
         state = .confirm(Chip(kind: chip.kind, label: chip.label, payload: payload, needs_confirm: true), email)
     }
 
+    /// The owner typed the payout's email or phone. False when it reads as neither; the field stays.
+    @discardableResult
+    func useRecipient(_ typed: String, for chip: Chip) -> Bool {
+        guard let to = PayoutRecipient.parse(typed) else { return false }
+        state = .confirm(PayoutRecipient.filled(chip, with: to), to)
+        return true
+    }
+
     /// An invoice with no email only makes a link. The confirm then offers Contacts.
     static func canAddContact(_ chip: Chip) -> Bool {
         chip.kind == "invoice" && BarItems.string(chip, "client_email") == nil
@@ -557,6 +572,10 @@ final class AskModel: ObservableObject {
 
     func run(_ chip: Chip, confirmed: String? = nil) {
         if chip.kind == "payments" { return showUnpaid() }
+        if PayoutRecipient.needed(chip) {
+            state = .recipient(chip)
+            return
+        }
         if confirmed == nil, BarItems.asksFirst(chip) {
             state = .confirm(chip, BarItems.recipient(chip))
             return
@@ -617,6 +636,8 @@ struct AskBar: View {
     @FocusState private var focused: Bool
     /// The invoice chip that waits for an email from Contacts.
     @State private var pickingFor: Chip?
+    /// The email or phone typed for a payout that had none.
+    @State private var recipientText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -742,6 +763,19 @@ struct AskBar: View {
                     .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
                     .accessibilityLabel(question)
                     .accessibilityIdentifier("ask.confirm")
+            }
+        case .recipient(let chip):
+            decision(PayoutRecipient.prompt(chip), pill: "Needs your OK") {
+                TextField("", text: $recipientText, prompt: Text("Email or phone").foregroundStyle(Theme.Color.text3))
+                    .font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.emailAddress)
+                    .onSubmit { model.useRecipient(recipientText, for: chip) }
+                    .accessibilityIdentifier("ask.recipient")
+                AskChip(title: "Cancel", detail: nil) { model.state = .idle; recipientText = "" }
+                Button("Use") { model.useRecipient(recipientText, for: chip) }
+                    .buttonStyle(TactileButton(kind: .dark, small: true, wide: false))
+                    .disabled(PayoutRecipient.parse(recipientText) == nil)
+                    .accessibilityIdentifier("ask.recipient.use")
             }
         case .ask(let chip, let question):
             decision(question, pill: "Needs your OK") {

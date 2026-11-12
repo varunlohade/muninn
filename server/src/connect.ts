@@ -11,6 +11,8 @@ import type { PayPalProvider, Seller } from './paypal.ts';
 // The tracking id is random per Connect tap, so it says nothing about the owner. Only its hash is stored.
 /** The business name a profile has until the owner or PayPal gives one. */
 export const DEFAULT_BUSINESS_NAME = 'my shop';
+/** The one line the app shows while this server cannot connect an own PayPal. */
+export const CONNECT_OFF = 'Your own PayPal is not open yet. Money runs on the demo PayPal sandbox account.';
 const TRACKING = /^mu[0-9a-f]{32}$/;
 const MERCHANT = /^[A-Z0-9]{8,20}$/;
 const CODE = /^[0-9a-f]{48}$/;
@@ -89,11 +91,17 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
     return row?.status === 'pending' && row.created_at + config.paypal.connectTtlMs > now() ? row : null;
   };
 
+  /** Connect needs this server's public address and the platform's own merchant id. Without them the app shows one line, not a button. */
+  const ready = () => !!config.paypal.publicUrl && !!config.paypal.partnerMerchantId;
+
   const routes = new Hono<{ Variables: { userId: string } }>();
 
   routes.post('/v1/paypal/connect', async (c) => {
     const userId = c.get('userId');
-    if (!config.paypal.publicUrl || !config.paypal.partnerMerchantId) return c.json({ error: 'Connect PayPal is not set up on this server' }, 503);
+    if (!ready()) {
+      log('paypal_connect_unavailable', { user_id: userId, public_url: !!config.paypal.publicUrl, partner_id: !!config.paypal.partnerMerchantId });
+      return c.json({ error: CONNECT_OFF }, 503);
+    }
     if (connected(userId)) return c.json({ error: 'PayPal is already connected. Disconnect it first.' }, 409);
     const trackingId = `mu${randomBytes(16).toString('hex')}`;
     if (!db.startPayPalConnect(userId, sha256(trackingId), now())) return c.json({ error: 'PayPal is already connected. Disconnect it first.' }, 409);
@@ -172,7 +180,7 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
       }
     }
     return c.json({
-      connected: !!r, demo: !r, pending: db.getPayPalConnection(userId)?.status === 'pending',
+      connected: !!r, demo: !r, connect_ready: ready(), pending: db.getPayPalConnection(userId)?.status === 'pending',
       email_confirmed: !!r?.email_confirmed, payments_receivable: !!r?.payments_receivable, account: label(userId),
     });
   });

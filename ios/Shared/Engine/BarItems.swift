@@ -12,6 +12,8 @@ enum BarItems {
         /// Runs the same chip again with the same key, after a check found it never went through.
         case retry(Chip, confirmed: String?)
         case cancelConfirm
+        /// The typed email or phone fills a payout that had none; its confirm shows next.
+        case useRecipient
         case undo
         case openCalm
         /// On-device actions: add an event, a reminder or a note, then undo it.
@@ -129,6 +131,11 @@ enum BarItems {
             out.append(Item(id: "cancel", title: "Cancel", action: .cancelConfirm))
         case .ask(let chip, let question):
             out.append(Item(id: "confirm", title: question, tone: .accent, action: .chip(chip)))
+            out.append(Item(id: "cancel", title: "Cancel", action: .cancelConfirm))
+        case .recipient(let chip, let typed):
+            // The keys type here, not into the chat. Use shows once it reads as an email or a phone number.
+            out.append(Item(id: "recipient", title: typed.isEmpty ? PayoutRecipient.prompt(chip) : typed, tone: typed.isEmpty ? .secondary : .accent))
+            if PayoutRecipient.parse(typed) != nil { out.append(Item(id: "use", title: "Use", action: .useRecipient)) }
             out.append(Item(id: "cancel", title: "Cancel", action: .cancelConfirm))
         case .done(let text):
             out.append(Item(id: "done", title: text, tone: .secondary))

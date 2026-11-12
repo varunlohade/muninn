@@ -31,8 +31,8 @@ export type PayPal = {
   recordRefund(id: string, r: { date: string; value: string; currency: string; method: string }, requestId: string): Promise<{ refundId: string }>;
   /** Every currency the account holds. Read-only. */
   getBalances(): Promise<Balance[]>;
-  /** Sends money to one email. MONEY: the caller confirms recipient, amount and currency first. */
-  createPayout(p: { email: string; value: string; currency: string; note: string }, requestId: string): Promise<{ batchId: string; status: string }>;
+  /** Sends money to one email or phone number. MONEY: the caller confirms recipient, amount and currency first. */
+  createPayout(p: { email?: string; phone?: string; value: string; currency: string; note: string }, requestId: string): Promise<{ batchId: string; status: string }>;
   /** The one item of a payout batch, or null while PayPal has not made it yet. */
   getPayoutItem(batchId: string): Promise<{ itemId: string; status: string } | null>;
   /** Only an UNCLAIMED item can be cancelled; the money goes back to the sender. */
@@ -429,7 +429,7 @@ function createClient(creds: Creds, accessToken: () => Promise<string>, seller: 
     async createPayout(p, requestId) {
       const r = await rest('POST', '/v1/payments/payouts', {
         sender_batch_header: { sender_batch_id: requestId, email_subject: 'You have a payment', email_message: p.note.slice(0, 1000) },
-        items: [{ recipient_type: 'EMAIL', receiver: p.email, amount: { value: p.value, currency: p.currency }, note: p.note.slice(0, 4000), sender_item_id: requestId.slice(0, 63) }],
+        items: [{ recipient_type: p.phone ? 'PHONE' : 'EMAIL', receiver: p.phone ?? p.email, amount: { value: p.value, currency: p.currency }, note: p.note.slice(0, 4000), sender_item_id: requestId.slice(0, 63) }],
       }, requestId);
       const batchId = String(r?.batch_header?.payout_batch_id ?? '');
       if (!batchId) throw new PayPalError('PayPal returned no payout batch id', 502);

@@ -39,7 +39,8 @@ struct OnboardingView: View {
         case .makeDefault: setup.state == .notFirst ? KeyboardState.reorderSteps : "So it opens first in every chat."
         case .calendar: "The keyboard adds the events and reminders you type. They stay on this phone."
         case .start: "\(AppConfig.displayName) suggests the invoice while you type."
-        case .paypal: paypal.note ?? "Invoices and pay links go to your own PayPal. Or try the demo account first."
+        case .paypal: paypal.note ?? (paypal.status != nil && !paypal.canConnect ? PayPalConnector.offLine
+            : "Invoices and pay links go to your own PayPal. Or try the demo account first.")
         case .business: "So a client's \"how much?\" gets the right price from your catalog."
         }
     }
@@ -68,6 +69,7 @@ struct OnboardingView: View {
         .onAppear { if session.signInNext { step = .start } }
         // An owner who already said what the business does (a reconnect, a recovered account) is not asked again.
         .task(id: step) {
+            if step == .paypal { await paypal.refresh() }
             guard step == .business, let p = try? await APIClient.shared().profile(), !(p.description ?? "").isEmpty else { return }
             session.finishOnboarding()
         }
@@ -209,13 +211,20 @@ struct OnboardingView: View {
                     .accessibilityIdentifier("onboarding.calendar.later")
             case .paypal:
                 // Skippable: the demo account works, and Home offers Connect again.
-                Button(paypal.busy ? "One moment\u{2026}" : "Sign in with PayPal") { Task { if await paypal.connect() { await complete(.paypal) } } }
-                    .buttonStyle(PrimaryButton())
-                    .opacity(paypal.busy ? 0.5 : 1)
-                    .disabled(paypal.busy)
-                    .accessibilityIdentifier("onboarding.paypal")
-                quietButton("Use demo account") { Task { await advance(from: .paypal) } }
-                    .accessibilityIdentifier("onboarding.paypal.demo")
+                if paypal.canConnect {
+                    Button(paypal.busy ? "One moment\u{2026}" : "Sign in with PayPal") { Task { if await paypal.connect() { await complete(.paypal) } } }
+                        .buttonStyle(PrimaryButton())
+                        .opacity(paypal.busy ? 0.5 : 1)
+                        .disabled(paypal.busy)
+                        .accessibilityIdentifier("onboarding.paypal")
+                    quietButton("Use demo account") { Task { await advance(from: .paypal) } }
+                        .accessibilityIdentifier("onboarding.paypal.demo")
+                } else {
+                    // The server cannot connect an own PayPal: the demo account is the way on.
+                    Button("Use demo account") { Task { await advance(from: .paypal) } }
+                        .buttonStyle(PrimaryButton())
+                        .accessibilityIdentifier("onboarding.paypal.demo")
+                }
             case .business:
                 Button(busy ? "Saving\u{2026}" : "Next") { Task { await saveBusiness() } }
                     .buttonStyle(PrimaryButton())
