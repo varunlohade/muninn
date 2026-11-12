@@ -170,19 +170,21 @@ struct SuggestionBar: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: Theme.Space.xs) {
-                        PixelRaven(scale: 1.7).padding(.trailing, 2)
-                        ForEach(items) { item in
-                            TaskChip(item: item, palette: palette, action: item.action.map { a in { model.perform(a) } })
-                                .accessibilityIdentifier("chip.\(item.id)")
-                                .transition(.opacity)
-                        }
+                // No scroll view: the bar holds at most three, the first stays whole and later cards shorten their words.
+                // (Inside a keyboard, XCUITest and VoiceOver misplace cards in a horizontal scroll view.)
+                HStack(spacing: Theme.Space.xs) {
+                    PixelRaven(scale: 1.7).padding(.trailing, 2)
+                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                        TaskChip(item: item, palette: palette, action: item.action.map { a in { model.perform(a) } })
+                            .layoutPriority(Double(items.count - i))
+                            .accessibilityIdentifier("chip.\(item.id)")
+                            .transition(.opacity)
                     }
-                    .padding(.horizontal, Theme.Space.xs)
-                    .frame(maxHeight: .infinity)
+                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, Theme.Space.xs)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .clipped()
             }
             if showsFix, let plan = model.fixPlan {
                 Button(action: model.fix) {
@@ -285,7 +287,7 @@ struct SuggestionBar: View {
     private func barButton(_ systemImage: String, id: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage).font(M.icon).foregroundStyle(model.panelOpen ? Theme.Color.text1 : palette.label)
-                .frame(width: 38).frame(maxHeight: .infinity).contentShape(Rectangle())
+                .frame(width: 34).frame(maxHeight: .infinity).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -315,13 +317,22 @@ struct SuggestionBar: View {
         let palette: Theme.SystemKeyboard.Palette
         let action: (() -> Void)?
 
+        /// Second steps (Explain more, Undo, Cancel) are small quiet buttons, so the main card and they both fit.
+        static let small: Set<String> = ["explain.more", "undo", "cancel"]
+
         var body: some View {
-            if let action {
+            if let action, Self.small.contains(item.id) {
+                Button(item.title, action: action)
+                    .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
+            } else if let action {
                 Button(action: action) {
-                    TaskCardLabel(icon: Self.icon(item), iconFill: Self.fill(item), title: item.title, detail: sub, titleColor: tint)
+                    // A long answer is cut to one short line; the whole text is still read out.
+                    TaskCardLabel(icon: Self.icon(item), iconFill: Self.fill(item), title: Self.short(item.title, 24), detail: sub.map { Self.short($0, 30) },
+                                  titleColor: tint)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(ChipPress())
+                .accessibilityLabel([item.title, item.detail].compactMap { $0 }.joined(separator: ", "))
             } else {
                 Text(item.title).font(Theme.Font.sans(14, 500)).foregroundStyle(tint)
                     .lineLimit(item.id == "error" || item.id == "retry" ? 2 : 1).minimumScaleFactor(0.75)
@@ -331,9 +342,9 @@ struct SuggestionBar: View {
         }
 
         /// The detail, else the typed words that caused the chip, quoted.
-        private var sub: String? { item.detail ?? item.trigger.map { "\u{201C}\(Self.short($0))\u{201D}" } }
+        private var sub: String? { item.detail ?? item.trigger.map { "\u{201C}\(Self.short($0, 22))\u{201D}" } }
 
-        static func short(_ t: String) -> String { t.count > 22 ? String(t.prefix(20)).trimmingCharacters(in: .whitespaces) + "\u{2026}" : t }
+        static func short(_ t: String, _ n: Int) -> String { t.count > n ? String(t.prefix(n - 2)).trimmingCharacters(in: .whitespaces) + "\u{2026}" : t }
 
         private var tint: Color {
             switch item.tone {
