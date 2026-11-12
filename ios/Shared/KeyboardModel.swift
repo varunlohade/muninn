@@ -640,6 +640,7 @@ final class KeyboardModel: ObservableObject {
         updateFixable()
         updatePredictions()
         if let u = undo, !(host?.contextBeforeInput ?? "").hasSuffix(u.replacement) { undo = nil }
+        if !paired { fieldEmpty = typed.isEmpty }
         guard paired, suggestsWhileTyping else { return }
         if case .working = bar { return }
         if case .confirm = bar { return }

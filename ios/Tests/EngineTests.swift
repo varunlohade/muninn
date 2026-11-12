@@ -169,10 +169,23 @@ final class BarItemsTests: XCTestCase {
               copiedAvailable: false, toBill: nil, nextUp: nil)
     }
 
-    func testNoFullAccessIsOneInfoLine() {
+    func testNoFullAccessIsOneInfoLineOnAnEmptyField() {
         var s = state()
         s.hasFullAccess = false
+        s.fieldEmpty = true
         XCTAssertEqual(BarItems.build(s).map(\.id), ["info"])
+    }
+
+    func testWithoutFullAccessOrPairingTheWordRowStillShows() {
+        for (full, paired) in [(false, false), (true, false)] {
+            var s = state()
+            s.hasFullAccess = full
+            s.paired = paired
+            s.predictions = Predictions.slots(typed: "hel", correction: nil, completions: ["hello"])
+            XCTAssertEqual(BarItems.build(s).map(\.id), ["predict.0", "predict.1"])
+            s.predictions = []
+            XCTAssertEqual(BarItems.build(s).map(\.id), [], "typed text, no word at the cursor: the bar stays quiet")
+        }
     }
 
     func testIdleOffersAtMostThree() {

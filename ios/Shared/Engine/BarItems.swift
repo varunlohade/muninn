@@ -66,8 +66,12 @@ enum BarItems {
     }
 
     static func build(_ s: State) -> [Item] {
-        if !s.hasFullAccess { return [Item(id: "info", title: "Allow Full Access in Settings for \(AppConfig.keyboardName)", tone: .secondary)] }
-        if !s.paired { return [Item(id: "info", title: "Open \(AppConfig.displayName) to pair", tone: .secondary)] }
+        // The word row works on the phone alone. The setup line waits for an empty field.
+        if !s.hasFullAccess || !s.paired {
+            if !s.predictions.isEmpty { return predictionItems(s.predictions) }
+            guard s.fieldEmpty else { return [] }
+            return [Item(id: "info", title: s.hasFullAccess ? "Open \(AppConfig.displayName) to pair" : "Allow Full Access in Settings for \(AppConfig.keyboardName)", tone: .secondary)]
+        }
         if let u = s.undo {
             return [Item(id: "written", title: u.label, tone: .paid), Item(id: "undo", title: "Undo", action: .undo)]
         }
@@ -95,9 +99,7 @@ enum BarItems {
             if smart.isEmpty, let a = s.toBill { out.append(Item(id: "bill", title: "Invoice \(a.who)", action: .bill(a))) }
             if smart.isEmpty, let a = s.nextUp { out.append(Item(id: "next", title: "Next: \(a.who) \(a.time)", tone: .secondary)) }
             out = Array(out.prefix(3))
-            if out.isEmpty {
-                out = s.predictions.enumerated().map { Item(id: "predict.\($0.offset)", title: $0.element.title, action: .predict($0.element.word)) }
-            }
+            if out.isEmpty { out = predictionItems(s.predictions) }
         case .chips(let chips, let fromCopied):
             for chip in chips.prefix(max(1, 3 - out.count)) {
                 out.append(Item(id: chip.kind, title: title(chip), detail: detail(chip, fromCopied: fromCopied), action: .chip(chip),
@@ -123,6 +125,10 @@ enum BarItems {
             out.append(Item(id: "retry", title: "It didn't go through. Tap to try again.", tone: .due, action: .retry(chip, confirmed: confirmed)))
         }
         return out
+    }
+
+    static func predictionItems(_ slots: [Predictions.Slot]) -> [Item] {
+        slots.enumerated().map { Item(id: "predict.\($0.offset)", title: $0.element.title, action: .predict($0.element.word)) }
     }
 
     /// Each smart chip, or the one line that says which permission it waits for. The line opens nothing: a keyboard cannot.
