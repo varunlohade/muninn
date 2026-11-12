@@ -7,7 +7,7 @@ import { createCipher } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
 import { createLearner, learnFrom } from '../src/learn.ts';
 import type { PayPal, PayPalPartner, PayPalProvider, PayPalTxn } from '../src/paypal.ts';
-import { setup, sleep } from './helpers.ts';
+import { setup, sleep, webhookHeaders } from './helpers.ts';
 
 config.paypal.publicUrl = 'https://muninn.test';
 config.paypal.partnerMerchantId = 'PARTNER123';
@@ -168,4 +168,55 @@ test('learn: "invoice sam" suggests Sam\'s usual item and price, the pay link co
   // A typed amount wins; the reason stays the owner's own words.
   const typed = await (await s.call(a.token, 'POST', '/v1/suggest', { text: 'invoice sam $50' })).json() as any;
   assert.ok(!typed.chips.some((c: any) => c.payload?.item === 'Logo design'), JSON.stringify(typed.chips));
+});
+
+const learnedRows = (s: ReturnType<typeof setup>, userId: string) => ({
+  clients: s.db.listLearnedClients(userId).length, facts: !!s.db.getLearnedFacts(userId),
+});
+
+test('learn: disconnect forgets the learned clients and items', async () => {
+  const { s, a } = await connected(SALES());
+  await sleep(20);
+  assert.deepEqual(learnedRows(s, a.userId), { clients: 2, facts: true });
+  assert.equal((await s.call(a.token, 'POST', '/v1/paypal/disconnect')).status, 200);
+  assert.deepEqual(learnedRows(s, a.userId), { clients: 0, facts: false });
+  assert.equal((await (await s.call(a.token, 'GET', '/v1/paypal/learned')).json() as any).learned, null);
+  // With nothing learned, "invoice sam" suggests no learned price.
+  const r = await (await s.call(a.token, 'POST', '/v1/suggest', { text: 'invoice sam' })).json() as any;
+  assert.ok(!r.chips.some((c: any) => c.payload?.item === 'Logo design'));
+});
+
+test('learn: a PayPal consent revoke forgets the learned clients and items', async () => {
+  const { s, a } = await connected(SALES());
+  await sleep(20);
+  assert.deepEqual(learnedRows(s, a.userId), { clients: 2, facts: true });
+  const revoked = { event_type: 'MERCHANT.PARTNER-CONSENT.REVOKED', resource: { merchant_id: 'SELLER12345' } };
+  assert.deepEqual(await (await s.call(null, 'POST', '/webhooks/paypal', revoked, webhookHeaders)).json(), { ok: true, handled: true });
+  assert.deepEqual(learnedRows(s, a.userId), { clients: 0, facts: false });
+});
+
+test('learn: account delete (the server side of the wipe) removes the learned clients and items', async () => {
+  const { s, a } = await connected(SALES());
+  await sleep(20);
+  assert.deepEqual(learnedRows(s, a.userId), { clients: 2, facts: true });
+  assert.equal((await s.call(a.token, 'DELETE', '/v1/account', undefined, { 'X-User-Action': 'tap' })).status, 200);
+  assert.equal((s.db.raw.prepare('SELECT COUNT(*) AS n FROM learned_clients WHERE user_id = ?').get(a.userId) as { n: number }).n, 0);
+  assert.equal((s.db.raw.prepare('SELECT COUNT(*) AS n FROM learned_facts WHERE user_id = ?').get(a.userId) as { n: number }).n, 0);
+});
+
+test('learn: an import still running when the owner disconnects stores nothing', async () => {
+  const db = openDb(':memory:');
+  const cipher = createCipher(randomBytes(32));
+  const userId = db.createUser();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const pp = { async searchTransactions() { await gate; return SALES(); } } as unknown as PayPal;
+  const paypal = { forAccount: () => pp } as unknown as PayPalProvider;
+  const l = createLearner({ db, cipher, ai: { async describe() { return 'Logos.'; } } as any, paypal, now: () => Date.UTC(2026, 10, 12), defaultProfile: { business_name: 'my shop', tone: 'friendly', currency: 'USD' } });
+  const run = l.run(userId, 'acct');
+  l.forget(userId);
+  release();
+  await run;
+  assert.equal(db.listLearnedClients(userId).length, 0);
+  assert.equal(db.getLearnedFacts(userId), undefined);
 });

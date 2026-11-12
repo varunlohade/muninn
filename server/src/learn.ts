@@ -112,6 +112,8 @@ export function createLearner({ db, cipher, ai, paypal, now, defaultProfile }: D
   const nameKey = (userId: string, n: string) => cipher.lookupHash('learned-name', `${userId}:${n.toLowerCase()}`);
   const emailKey = (userId: string, e: string) => cipher.lookupHash('learned-email', `${userId}:${e}`);
   const running = new Set<string>();
+  // Bumped by forget(), so an import still running when the owner disconnects stores nothing.
+  const generation = new Map<string, number>();
 
   /** Adds each client once: a stored client with the same email, else the same name, is updated in place. */
   function upsertClients(userId: string, found: LearnedClient[]) {
@@ -139,6 +141,7 @@ export function createLearner({ db, cipher, ai, paypal, now, defaultProfile }: D
   async function run(userId: string, account: string | null, seller: { currency?: string | null; country?: string | null } = {}) {
     if (!account || running.has(userId)) return;
     running.add(userId);
+    const gen = generation.get(userId) ?? 0;
     try {
       const pp = paypal.forAccount(userId, account);
       const end = now();
@@ -148,6 +151,7 @@ export function createLearner({ db, cipher, ai, paypal, now, defaultProfile }: D
         txns.push(...await pp.searchTransactions(new Date(from), new Date(to), { cart: true }));
       }
       const l = learnFrom(txns);
+      if ((generation.get(userId) ?? 0) !== gen) return log('paypal_learn_dropped', { user_id: userId });
       upsertClients(userId, l.clients);
       const facts: LearnedFacts = { payments: l.payments, currency: seller.currency ?? l.currency, country: seller.country ?? null, items: l.items };
       db.putLearnedFacts(userId, cipher.encrypt(userId, JSON.stringify(facts)), now());
@@ -215,5 +219,12 @@ export function createLearner({ db, cipher, ai, paypal, now, defaultProfile }: D
     };
   }
 
-  return { run, facts, clients, named, context, summary };
+  /** Disconnect or a revoke: what was learned from that PayPal goes, and an import still running stores nothing. */
+  function forget(userId: string) {
+    generation.set(userId, (generation.get(userId) ?? 0) + 1);
+    if (generation.size > 10_000) generation.clear();
+    db.removeLearned(userId);
+  }
+
+  return { run, forget, facts, clients, named, context, summary };
 }

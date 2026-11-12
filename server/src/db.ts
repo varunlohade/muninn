@@ -369,6 +369,11 @@ export function openDb(path: string) {
            email_enc = excluded.email_enc, usual_enc = excluded.usual_enc, updated_at = excluded.updated_at WHERE learned_clients.user_id = excluded.user_id`)
         .run(r.id, userId, r.name_hash, r.email_hash, r.name_enc, r.email_enc, r.usual_enc, at);
     },
+    /** Forgets everything learned from the owner's PayPal. */
+    removeLearned(userId: string) {
+      q('DELETE FROM learned_clients WHERE user_id = ?').run(userId);
+      q('DELETE FROM learned_facts WHERE user_id = ?').run(userId);
+    },
     getLearnedFacts(userId: string): { facts_enc: string; learned_at: number } | undefined {
       return q('SELECT facts_enc, learned_at FROM learned_facts WHERE user_id = ?').get(userId) as { facts_enc: string; learned_at: number } | undefined;
     },

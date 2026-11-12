@@ -266,6 +266,7 @@ export function createApp(deps: Deps) {
     db, cipher, paypal, now, onChange: (userId) => biz.forgetHistory(userId),
     onConnected: (userId, account, seller) => { void learner.run(userId, account, seller); },
     learned: (userId) => learner.summary(userId)?.line ?? null,
+    onDisconnected: (userId) => learner.forget(userId),
   });
   const integrations = createIntegrations(db, cipher, now, connect.label);
   const slack = createSlack(db, cipher, now);
@@ -579,6 +580,7 @@ export function createApp(deps: Deps) {
   app.delete('/v1/account', (c) => {
     if (c.req.header('x-user-action') !== 'tap') return c.json({ error: 'account delete runs only from an explicit user tap' }, 428);
     const userId = c.get('userId');
+    learner.forget(userId);
     db.deleteAccount(userId);
     biz.forgetHistory(userId);
     log('account_deleted', { user_id: userId });

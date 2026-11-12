@@ -55,6 +55,8 @@ export function createPayPalConnect(deps: {
   onConnected?: (userId: string, account: string, seller: { currency: string | null; country: string | null }) => void;
   /** A short line on what Muninn learned from this owner's PayPal, or null. */
   learned?: (userId: string) => string | null;
+  /** Runs after a disconnect or a revoke removes the owner's PayPal. */
+  onDisconnected?: (userId: string) => void;
 }) {
   const { db, cipher, paypal, now } = deps;
   const connected = (userId: string) => {
@@ -198,6 +200,7 @@ export function createPayPalConnect(deps: {
   routes.post('/v1/paypal/disconnect', (c) => {
     const userId = c.get('userId');
     const removed = db.removePayPalConnection(userId);
+    deps.onDisconnected?.(userId);
     deps.onChange?.(userId);
     log('paypal_disconnected', { user_id: userId, removed });
     return c.json({ connected: false, demo: true });
@@ -209,7 +212,7 @@ export function createPayPalConnect(deps: {
     if (!merchantId) return false;
     if (type === 'MERCHANT.PARTNER-CONSENT.REVOKED') {
       const userId = db.removePayPalByMerchant(accountKey(cipher, merchantId));
-      if (userId) { log('paypal_revoked', { user_id: userId }); deps.onChange?.(userId); }
+      if (userId) { log('paypal_revoked', { user_id: userId }); deps.onDisconnected?.(userId); deps.onChange?.(userId); }
       return !!userId;
     }
     if (type === 'MERCHANT.ONBOARDING.COMPLETED') {
