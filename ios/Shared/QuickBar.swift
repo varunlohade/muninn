@@ -1,12 +1,5 @@
 import SwiftUI
 
-/// Which bar look ships. `.cards` is the task-card bar; b1 to b3 are the QuickType-based options for the owner to pick.
-enum BarStyle { case cards, b1, b2, b3 }
-
-extension BarStyle {
-    static let current: BarStyle = .b3
-}
-
 /// One slot's words, verb first: "Invoice Sam" then the key value "$45" in medium weight.
 /// An optional quoted trigger sits before it in a lighter tone: "“tomorrow 3pm” → Add to calendar".
 struct QuickLabel: Equatable {
@@ -39,13 +32,12 @@ struct QuickLabel: Equatable {
     }
 }
 
-/// The QuickType-based bar: the system's height and 17 pt type, one line per slot, thin dividers, no cards.
-/// The action slot is in the accent colour; the rest stay label-coloured. At most three slots.
+/// The QuickType-based bar (B3, the owner's pick): the system's height and 17 pt type, one line per slot, thin dividers,
+/// no cards. Each slot is as wide as its words, from the left. The action slot is accent-coloured. At most three slots.
 struct QuickRow: View {
     @ObservedObject var model: KeyboardModel
     let items: [BarItems.Item]
     let palette: Theme.SystemKeyboard.Palette
-    let style: BarStyle
     typealias M = Theme.SystemKeyboard
 
     var body: some View {
@@ -55,10 +47,9 @@ struct QuickRow: View {
             ForEach(Array(shown.enumerated()), id: \.element.id) { i, item in
                 if i > 0 { Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight) }
                 slot(item, accent: i == primary)
-                    .layoutPriority(style == .b2 && i == primary ? 1 : 0)
                     .accessibilityIdentifier("chip.\(item.id)")
             }
-            if style == .b3 { Spacer(minLength: 0) }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
     }
@@ -80,13 +71,8 @@ struct QuickRow: View {
         Button { if let a = item.action { model.perform(a) } } label: {
             text.font(M.prediction)
                 .lineLimit(1).truncationMode(.tail)
-                .padding(.horizontal, style == .b2 && accent ? 12 : 8)
-                .frame(height: 34)
-                .background {
-                    if style == .b2 && accent { Capsule().fill(palette.accent.opacity(model.isDark ? 0.22 : 0.12)) }
-                }
-                .padding(.horizontal, style == .b2 && accent ? 4 : 0)
-                .frame(maxWidth: style == .b3 ? nil : .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 8)
+                .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

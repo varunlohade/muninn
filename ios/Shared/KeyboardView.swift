@@ -125,8 +125,8 @@ struct WhoPaidStrip: View {
     }
 }
 
-/// Sits where iOS shows predictive text, at the same height. Actions show as task cards ("Invoice $45 / Sam");
-/// the word row stays plain text like Apple's. Nothing here animates beyond a quick fade: people see it all day.
+/// Sits where iOS shows predictive text, at the same height and type: one line per slot, thin dividers, no cards.
+/// Each slot fits its words ("Invoice Sam $45"); the action slot is accent-coloured. Rewrite, Notes and Catalog wait behind "…".
 struct SuggestionBar: View {
     @ObservedObject var model: KeyboardModel
     let palette: Theme.SystemKeyboard.Palette
@@ -163,6 +163,8 @@ struct SuggestionBar: View {
                     .accessibilityIdentifier("confirm.title")
                 Spacer(minLength: Theme.Space.xs)
                 StatusPill(text: "Needs your OK", tone: .due).padding(.trailing, Theme.Space.xs)
+            } else if showTools {
+                toolsRow
             } else if items.allSatisfy({ $0.id.hasPrefix("predict.") }) && !items.isEmpty {
                 // The word row: plain, centred, with 1 pt dividers, like Apple's.
                 HStack(spacing: 0) {
@@ -173,28 +175,8 @@ struct SuggestionBar: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-            } else if BarStyle.current != .cards && showTools {
-                toolsRow
-            } else if BarStyle.current != .cards {
-                QuickRow(model: model, items: items, palette: palette, style: BarStyle.current)
             } else {
-                // No scroll view: the bar holds at most three, the first stays whole and later cards shorten their words.
-                // (Inside a keyboard, XCUITest and VoiceOver misplace cards in a horizontal scroll view.)
-                HStack(spacing: Theme.Space.xs) {
-                    // Three cards need the room; the raven sits out.
-                    if items.count < 3 { PixelRaven(scale: 1.7).padding(.trailing, 2) }
-                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                        TaskChip(item: item, palette: palette, action: item.action.map { a in { model.perform(a) } })
-                            // Actions keep their room before plain lines such as "Waiting on $45".
-                            .layoutPriority(Double(items.count - i) + (item.action == nil ? 0 : 10))
-                            .accessibilityIdentifier("chip.\(item.id)")
-                            .transition(.opacity)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, Theme.Space.xs)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                .clipped()
+                QuickRow(model: model, items: items, palette: palette)
             }
             if quickMode {
                 // QuickType bar: Fix is a plain slot, and Rewrite, Notes and Catalog wait behind "…".
@@ -211,16 +193,7 @@ struct SuggestionBar: View {
                 Rectangle().fill(palette.divider).frame(width: 1, height: M.dividerHeight)
                 barButton(showTools ? "xmark" : "ellipsis", id: "bar.more", label: showTools ? "Close" : "More") { showTools.toggle() }
             } else {
-                if showsFix, let plan = model.fixPlan {
-                    Button(action: model.fix) {
-                        Text(plan.title).font(Theme.Font.sans(14, 500)).lineLimit(1).fixedSize()
-                    }
-                    .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
-                    .padding(.horizontal, 4)
-                    .accessibilityLabel(plan.title)
-                    .accessibilityIdentifier("chip.fix")
-                    .transition(.opacity)
-                }
+                // A panel is open: its own way back to the keys.
                 if model.paired && !model.notesOpen && !model.catalog.open && !confirming && !explaining {
                     barButton(model.writeOpen ? "keyboard" : "wand.and.stars", id: "write.toggle", label: model.writeOpen ? "Keyboard" : "Rewrite", action: model.toggleWrite)
                 }
@@ -239,10 +212,9 @@ struct SuggestionBar: View {
         .animation(Theme.Motion.chipAppear, value: showsFix)
     }
 
-    /// The QuickType bar is showing its slots (not a panel head, the word row or a confirm).
+    /// The bar is showing its slots or the word row (not a panel head or a confirm).
     private var quickMode: Bool {
-        BarStyle.current != .cards && model.explainPanel == nil && !model.notesOpen && !model.writeOpen && !model.catalog.open
-            && model.confirmPanel == nil && !explaining && !model.barItems.contains { $0.id.hasPrefix("predict.") }
+        model.explainPanel == nil && !model.notesOpen && !model.writeOpen && !model.catalog.open && model.confirmPanel == nil && !explaining
     }
 
     /// Behind "…": Rewrite, Notes and Catalog as plain slots.
@@ -364,75 +336,6 @@ struct SuggestionBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-        }
-    }
-
-    /// A task card: an icon tile, the action, and what it is about. A line with no action is plain text.
-    struct TaskChip: View {
-        let item: BarItems.Item
-        let palette: Theme.SystemKeyboard.Palette
-        let action: (() -> Void)?
-
-        /// Second steps (Explain more, Undo, Cancel) are small quiet buttons, so the main card and they both fit.
-        static let small: Set<String> = ["explain.more", "undo", "cancel"]
-
-        var body: some View {
-            if let action, Self.small.contains(item.id) {
-                Button(item.title, action: action)
-                    .buttonStyle(TactileButton(kind: .quiet, small: true, wide: false))
-            } else if let action {
-                Button(action: action) {
-                    // A long answer is cut to one short line; the whole text is still read out.
-                    TaskCardLabel(icon: Self.icon(item), iconFill: Self.fill(item), title: Self.short(item.title, 24), detail: sub.map { Self.short($0, 30) },
-                                  titleColor: tint)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(ChipPress())
-                .accessibilityLabel([item.title, item.detail].compactMap { $0 }.joined(separator: ", "))
-            } else {
-                Text(item.title).font(Theme.Font.sans(14, 500)).foregroundStyle(tint)
-                    .lineLimit(item.id == "error" || item.id == "retry" ? 2 : 1).minimumScaleFactor(0.75)
-                    .padding(.horizontal, Theme.Space.xxs)
-                    .frame(maxHeight: .infinity)
-            }
-        }
-
-        /// The detail, else the typed words that caused the chip, quoted.
-        private var sub: String? { item.detail ?? item.trigger.map { "\u{201C}\(Self.short($0, 22))\u{201D}" } }
-
-        static func short(_ t: String, _ n: Int) -> String { t.count > n ? String(t.prefix(n - 2)).trimmingCharacters(in: .whitespaces) + "\u{2026}" : t }
-
-        private var tint: Color {
-            switch item.tone {
-            case .label, .accent: Theme.Color.text1
-            case .secondary: Theme.Color.text2
-            case .paid: Theme.Color.paid
-            case .due: Theme.Color.due
-            }
-        }
-
-        static func icon(_ item: BarItems.Item) -> PixelIcon.Name {
-            switch item.id {
-            case "invoice", "bill": .invoice
-            case "paylink", "copied": .link
-            case "remind", "whopaid": .bell
-            case "subscribe", "today", "next": .calendar
-            case "catalog": .tag
-            case "notes": .note
-            case "paid", "done", "added", "written": .check
-            case "calm": .chat
-            default: item.id.hasPrefix("explain") ? .spark : .spark
-            }
-        }
-
-        static func fill(_ item: BarItems.Item) -> Color {
-            switch icon(item) {
-            case .bell, .tag, .note: Color(hex: 0xF4D35E)
-            case .check: Color(hex: 0xA6E39A)
-            case .calendar: Color(hex: 0xDAE9FB)
-            case .spark: Color(hex: 0xF7D49B)
-            default: .white
-            }
         }
     }
 }

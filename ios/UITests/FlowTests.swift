@@ -9,6 +9,15 @@ final class FlowTests: XCTestCase {
 
     override func setUp() { continueAfterFailure = false }
 
+    /// Rewrite, Notes and Catalog sit behind the bar's "…" slot; this opens it first when the button is hidden.
+    private func tapTool(_ app: XCUIApplication, _ identifier: String) {
+        let tool = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", identifier)).firstMatch
+        let more = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", "bar.more")).firstMatch
+        if !tool.exists, more.waitForExistence(timeout: 3) { more.tap() }
+        XCTAssertTrue(tool.waitForExistence(timeout: 5), "no \(identifier) behind the bar's …")
+        tool.tap()
+    }
+
     /// Tests that send text to /v1/suggest (paid model calls) run only with TEST_RUNNER_LIVE=1.
     private func requireLive() throws {
         try XCTSkipUnless(env["LIVE"] == "1", "live model call; set TEST_RUNNER_LIVE=1")
@@ -553,8 +562,7 @@ final class FlowTests: XCTestCase {
         let toggle = element(messages, "identifier == %@", "notes.toggle")
         let prices = element(messages, "label BEGINSWITH %@", "Prices: cut $45")
         let policy = element(messages, "label BEGINSWITH %@", "Cancellation: 24h")
-        XCTAssertTrue(toggle.waitForExistence(timeout: 3), messages.debugDescription)
-        toggle.tap()
+        tapTool(messages, "notes.toggle")
         XCTAssertTrue(prices.waitForExistence(timeout: 3), messages.debugDescription)
         Thread.sleep(forTimeInterval: 0.5)
         shot("35-keyboard-notes-panel")
@@ -563,11 +571,11 @@ final class FlowTests: XCTestCase {
         XCTAssertEqual(search.value as? String, "Prices: cut $45, color $120, blowout $35")
         Thread.sleep(forTimeInterval: 0.5)
         shot("36-keyboard-note-inserted")
-        toggle.tap()
+        tapTool(messages, "notes.toggle")
         policy.tap()
         let both = "Prices: cut $45, color $120, blowout $35 Cancellation: 24h notice or 50% fee"
         XCTAssertEqual(search.value as? String, both)
-        toggle.tap()
+        tapTool(messages, "notes.toggle")
         let add = element(messages, "identifier == %@", "notes.add")
         if add.isEnabled { add.tap() }
         XCTAssertEqual(element(messages, "identifier == %@", "note.0").label, both, "+ saves the text before the cursor")
@@ -680,7 +688,7 @@ final class FlowTests: XCTestCase {
         Thread.sleep(forTimeInterval: 6.5)
         XCTAssertFalse(id(app, "chip.undo").exists, "Undo goes away after about 5 s")
 
-        id(app, "write.toggle").tap()
+        tapTool(app, "write.toggle")
         XCTAssertTrue(id(app, "write.professional").waitForExistence(timeout: 5))
         for tone in ["polite", "friendly", "shorter", "firmer", "grammar"] { XCTAssertTrue(id(app, "write.\(tone)").exists, tone) }
         Thread.sleep(forTimeInterval: 0.5)
@@ -696,7 +704,7 @@ final class FlowTests: XCTestCase {
 
         clearLab(app, text)
         typeOnKeys(app, "me and him is coming at noon")
-        id(app, "write.toggle").tap()
+        tapTool(app, "write.toggle")
         id(app, "write.grammar").tap()
         let grammarUse = id(app, "write.use")
         let grammarFine = element(app, "label BEGINSWITH %@", "The grammar looks good")

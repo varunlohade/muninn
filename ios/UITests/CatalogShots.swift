@@ -9,6 +9,15 @@ final class CatalogShots: XCTestCase {
 
     override func setUp() { continueAfterFailure = false }
 
+    /// Rewrite, Notes and Catalog sit behind the bar's "…" slot; this opens it first when the button is hidden.
+    private func tapTool(_ app: XCUIApplication, _ identifier: String) {
+        let tool = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", identifier)).firstMatch
+        let more = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", "bar.more")).firstMatch
+        if !tool.exists, more.waitForExistence(timeout: 3) { more.tap() }
+        XCTAssertTrue(tool.waitForExistence(timeout: 5), "no \(identifier) behind the bar's …")
+        tool.tap()
+    }
+
     private func shot(_ name: String) {
         Thread.sleep(forTimeInterval: 0.8)
         let png = XCUIScreen.main.screenshot().pngRepresentation
@@ -155,9 +164,7 @@ final class CatalogShots: XCTestCase {
         XCTAssertTrue(ours.exists, "Muninn keyboard not shown")
         paste("Hi Ana! Here are our prices:", into: field)
 
-        let toggle = element(messages, "catalog.toggle")
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "no catalog button in the bar")
-        toggle.tap()
+        tapTool(messages, "catalog.toggle")
         let cut = element(messages, "catalog.item.Haircut")
         XCTAssertTrue(cut.waitForExistence(timeout: 5), String(messages.debugDescription.suffix(3000)))
         cut.tap()
