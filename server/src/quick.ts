@@ -228,7 +228,8 @@ export function askQuick(text: string): AskQuick {
 }
 
 // A repeat bill: "every month", "monthly", "weekly", "every year". "every 2 weeks" is not read, so no chip guesses it.
-const INTERVAL = /\b(?:every\s+(week|month|year)|(week|month|year)ly|annually)\b/gi;
+// "a month", "per month", "each month" count too; "a month ago" does not.
+const INTERVAL = /\b(?:(?:every|a|per|each)\s+(week|month|year)(?!\s+ago)|(week|month|year)ly|annually)\b/gi;
 // Words that change the interval or end the bill after a count. A plan here has one plain interval and no end, so these give no chip.
 const COUNT = '(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)';
 const NOT_PLAIN = new RegExp(`\\b(?:bi|semi)[\\s-]?(?:week|month|year|annual)|\\btwice\\b|\\bevery\\s+(?:other|second|third|${COUNT})\\b`, 'i');
@@ -246,6 +247,26 @@ export function intervalOf(text: string): 'week' | 'month' | 'year' | null {
 
 /** The text with its interval words removed, so "$40 every month" reads as one plain amount. */
 export const withoutInterval = (text: string) => text.replace(INTERVAL, ' ');
+
+export type RepeatAsk = { name: string; amount: number; currency: string | null; verb: boolean };
+const REPEAT_SHAPE = /^(?:(?<verb>bill|charge|invoice)\s+)?(?<name>\p{L}[\p{L}'’-]*)\s+(?<money>(?:(?:usd|eur|gbp|cad|aud)\s?)?[$€£]?\s?\d[\d,.]*(?:\s?(?:[$€£]|usd|eur|gbp|cad|aud|dollars?|bucks|euros?))?)\s*[.!]?$/iu;
+
+/**
+ * "bill ana $40 every month", "charge ana 40 monthly", "ana $40 a month": one name, one amount, one plain interval.
+ * `verb` is false for the bare "ana $40 a month", so the caller checks the name is a known client. Null otherwise.
+ */
+export function repeatAsk(text: string): RepeatAsk | null {
+  const s = lastSentence(text);
+  if (!intervalOf(s)) return null;
+  const g = withoutInterval(s).replace(/\s+/g, ' ').trim().match(REPEAT_SHAPE)?.groups;
+  if (!g || NOT_A_NAME.has(g.name.toLowerCase()) || /^(?:bill|charge|invoice)$/i.test(g.name)) return null;
+  const q = quick(g.money);
+  const bare = g.money.match(/^\d+(?:\.\d{1,2})?$/);
+  const amount = q.amount ?? (bare ? Number(bare[0]) : null);
+  if (amount === null || amount <= 0) return null;
+  const name = g.name[0].toUpperCase() + g.name.slice(1).toLowerCase();
+  return { name, amount, currency: q.currency, verb: !!g.verb };
+}
 
 /** "add a note: buy shampoo" gives "buy shampoo". Text with no note prefix comes back whole. */
 export const noteText = (text: string) => text.trim().replace(NOTE_PREFIX, '').trim();
@@ -544,6 +565,20 @@ const PLAN_WORD = /\b(?:plans?|repeat (?:bills?|billing)|subscriptions?|monthly|
 const PLANS_LIST = /^(?:(?:what|which|show(?: me)?|list|see|any)\b.*\b(?:plans|repeat bills|subscriptions)\b|(?:my\s+)?(?:plans|repeat bills|subscriptions)\??$)/i;
 
 export type PlanVerb = 'list' | 'pause' | 'resume' | 'cancel' | 'status';
+
+const NOT_PLAN_OWNER = new Set(['my', 'the', 'a', 'an', 'all', 'this', 'that', 'our', 'your', 'his', 'her', 'their', 'its', 'every', 'monthly', 'weekly', 'yearly']);
+const PLAN_OWNER = [
+  /(?<name>\p{L}[\p{L}-]*)['’]s\s+(?:[$€£]?\d[\d,.]*\s+)?(?:plans?|repeat (?:bills?|billing)|subscriptions?|monthly|weekly|yearly|membership)\b/iu,
+  /\b(?:pause|suspend|resume|restart|unpause|reactivate|stop|end|cancel|kill)\s+(?<name>\p{L}[\p{L}-]*)\s+(?:plans?|repeat|subscriptions?|monthly|weekly|yearly|membership)\b/iu,
+];
+
+/** The client a plan sentence is about: "pause ana's plan" gives "Ana". Null when it names no one. */
+export function planOwner(text: string): string | null {
+  const s = lastSentence(text);
+  if (!PLAN_WORD.test(s)) return null;
+  const name = PLAN_OWNER.map((re) => s.match(re)?.groups?.name).find((n) => n && !NOT_PLAN_OWNER.has(n.toLowerCase()));
+  return name ? name[0].toUpperCase() + name.slice(1).toLowerCase() : null;
+}
 
 /** "what plans do I have", "pause ana's plan", "restart ana's plan", "stop ana's plan for good", "how is ana's plan". */
 export function planVerb(text: string): PlanVerb | null {

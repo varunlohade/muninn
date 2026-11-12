@@ -14,7 +14,7 @@ import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './mo
 import { log } from './log.ts';
 import { clean } from './text.ts';
 import {
-  afterRemindName, askQuick, commandIntent, deviceSignal, deviceTitle, deviceTrigger, intervalOf, lastSentence, mentions, moneyTrigger, nameIn, noteText, onlyKnownWords, quick, repeatEnds,
+  afterRemindName, askQuick, commandIntent, deviceSignal, deviceTitle, deviceTrigger, intervalOf, lastSentence, mentions, moneyTrigger, nameIn, noteText, onlyKnownWords, quick, repeatAsk, repeatEnds,
   moneyRequest, saidAll, typedEmails, withoutInterval, detectLookup, type Quick,
 } from './quick.ts';
 import { ASK_AT, SHOW_AT, chipLabel, createSearch, importance, invoiceState, mentionsItemWord, orderState } from './search.ts';
@@ -656,6 +656,13 @@ export function createApp(deps: Deps) {
     }
     if (extra) return done(extra, 'more', 1);
 
+    // "bill ana $40 every month": a repeat bill, never a one-off invoice. Regex only, no model call.
+    const repeat = context ? null : await repeatChips(userId, text);
+    if (repeat) {
+      path = 'regex_intent';
+      return done(repeat, 'subscribe', 1);
+    }
+
     // A lookup of the owner's own records: regex settles it with no paid call when the phrase and the name are clear.
     const look = context ? null : lookupChip(userId, text);
     if (look && look.score >= SHOW_AT) {
@@ -927,7 +934,7 @@ export function createApp(deps: Deps) {
       }
       if (cents === null) return [];
       const said = usual ? usual.item : ext?.item;
-      const item = said ? said.charAt(0).toUpperCase() + said.slice(1) : 'Payment';
+      const item = said ? said.charAt(0).toUpperCase() + said.slice(1) : 'Services';
       const money = formatMoney(cents, currency);
       const base = { amount: centsToValue(cents), currency, item, client_name: ext?.client_name ?? (usual ? learned!.name : null) };
       // An email the owner typed, else the one email the owner's records hold for the client named in the owner's
@@ -963,9 +970,18 @@ export function createApp(deps: Deps) {
       const cents = ext?.amount != null ? amountToCents(ext.amount) : null;
       const left = (r: InvoiceRow | OrderRow) => r.amount_cents - db.refundState(userId, r.id).doneCents;
       const paid = [...db.listInvoices(userId), ...db.listOrders(userId)].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED' && left(r) > 0);
-      const hit = onlyOne(paid.filter((r) => sameClient(userId, r, want) && (cents === null || cents <= left(r))));
+      const theirs = paid.filter((r) => sameClient(userId, r, want) && (cents === null || cents <= left(r)));
+      const hit = onlyOne(theirs);
       const client = hit ? dec(userId, hit.client_name_enc) ?? '' : '';
-      if (!hit || !(namedIn(text, client) || namedIn(context, client))) return [];
+      if (!hit || !(namedIn(text, client) || namedIn(context, client))) {
+        // No refundable PayPal payment (or several): say why, never silence. Only a name the owner typed is shown.
+        const typed = ext?.client_name && (namedIn(text, ext.client_name) || namedIn(context, ext.client_name)) ? ext.client_name.split(/\s+/)[0] : null;
+        const who = typed ? typed.charAt(0).toUpperCase() + typed.slice(1) : null;
+        if (!who) return [];
+        if (theirs.length > 1) return [chip('show', `${who} has ${theirs.length} paid payments`, { line: `${who} has ${theirs.length} paid payments. Open ${who} in Muninn to pick one.` })];
+        const label = `No paid payment from ${who} to refund`;
+        return [chip('show', label, { line: `${label}. Only a payment made through PayPal can be refunded here.` })];
+      }
       const refundCents = cents ?? left(hit);
       const who = biz.namer(userId)(hit) ?? hit.item;
       return [chip('refund', `Refund ${formatMoney(refundCents, hit.currency)} · ${who}`, { id: hit.id, amount: centsToValue(refundCents) })];
@@ -973,7 +989,21 @@ export function createApp(deps: Deps) {
     return [];
   }
 
-  const EVERY: Record<Interval, string> = { week: 'weekly', month: 'monthly', year: 'yearly' };
+  const PER: Record<Interval, string> = { week: '/wk', month: '/mo', year: '/yr' };
+  /** The one known client (invoices, pay links or repeat bills) with this full or first name, or null. */
+  function knownClient(userId: string, name: string): string | null {
+    const want = name.trim().toLowerCase();
+    const names = [...clientNames(userId), ...db.listSubscriptions(userId, 200).map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n)];
+    const hits = new Set(names.map((n) => n.trim()).filter((n) => n.toLowerCase() === want || n.split(/\s+/)[0].toLowerCase() === want));
+    return hits.size === 1 ? [...hits][0] : null;
+  }
+  /** "bill ana $40 every month", "ana $40 a month": the repeat bill chip, or null. The bare form needs a known client. */
+  async function repeatChips(userId: string, text: string): Promise<Chip[] | null> {
+    const rep = repeatAsk(text);
+    if (!rep || (!rep.verb && !knownClient(userId, rep.name))) return null;
+    const out = await subscribeChips(userId, text, async () => null);
+    return out.length ? out : null;
+  }
   /**
    * The repeat bill chip. The interval comes only from the regex. The amount is the regex amount when every other
    * word is known, else the model reads it too. The client is named in the owner's text or left out; the email is
@@ -986,7 +1016,10 @@ export function createApp(deps: Deps) {
     const q = quick(plain);
     const clients = clientNames(userId);
     const known = new Set(clients.filter((n) => mentions(text, n)));
-    let ext: Extraction | null = q.amount !== null && onlyKnownWords(plain, clients)
+    const rep = repeatAsk(text);
+    let ext: Extraction | null = rep
+      ? { client_name: knownClient(userId, rep.name) ?? rep.name, client_email: q.email, amount: rep.amount, currency: rep.currency, item: null }
+      : q.amount !== null && onlyKnownWords(plain, clients)
       ? { client_name: known.size === 1 ? [...known][0] : null, client_email: q.email, amount: q.amount, currency: q.currency, item: null }
       : null;
     if (!ext) {
@@ -1006,7 +1039,7 @@ export function createApp(deps: Deps) {
     const itemName = grounded(ext.item, text);
     const item = itemName ? itemName.charAt(0).toUpperCase() + itemName.slice(1) : 'Repeat payment';
     const who = name ?? email;
-    return [chip('subscribe', `Repeat ${formatMoney(cents, currency)} ${EVERY[interval]}${who ? ` · ${who}` : ''}`,
+    return [chip('subscribe', `Bill ${formatMoney(cents, currency)}${PER[interval]}${who ? ` · ${who}` : ''}`,
       { amount: centsToValue(cents), currency, interval, item, client_name: name, client_email: email }, true)];
   }
 
@@ -1315,6 +1348,8 @@ export function createApp(deps: Deps) {
     const none = (confidence: number, line = NOT_SURE, err?: string) => done('none', confidence, { line }, err);
     const extra = more.payout(userId, text) ?? await more.suggest(userId, text, 'ask');
     if (extra) return done('action' as AskRoute, 1, { chips: extra });
+    const repeat = await repeatChips(userId, text);
+    if (repeat) return done('subscribe', 1, { chips: repeat });
 
     const aq = askQuick(text);
     if (aq.none) return none(1, NOT_SURE);

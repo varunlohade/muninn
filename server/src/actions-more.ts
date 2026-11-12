@@ -16,7 +16,7 @@ import { log } from './log.ts';
 import { Amount, Currency, centsToValue, formatMoney, valueToCents } from './money.ts';
 import { PayPalError, type PayPalProvider } from './paypal.ts';
 import {
-  balanceAsk, chartAsk, disputeVerb, invoiceVerb, mentions, payoutAsk, planVerb, quick, type DisputeVerb, type InvoiceVerb, type PayoutAsk, type PlanVerb,
+  balanceAsk, chartAsk, disputeVerb, invoiceVerb, mentions, payoutAsk, planOwner, planVerb, quick, type DisputeVerb, type InvoiceVerb, type PayoutAsk, type PlanVerb,
 } from './quick.ts';
 import { clean } from './text.ts';
 
@@ -139,7 +139,11 @@ export function createMore(d: MoreDeps) {
     // Two plans for one client: a typed amount picks one; otherwise nothing is guessed.
     const typed = quick(text).amount;
     if (hits.length > 1 && typed !== null) hits = hits.filter((r) => r.amount_cents === Math.round(typed * 100));
-    if (!hits.length) return null;
+    if (!hits.length) {
+      // "pause ana's plan" when Ana has no running plan: say so, never silence.
+      const who = verb === 'status' ? null : planOwner(text);
+      return who ? [lineChip(`${who} has no repeat bill`, `${who} has no repeat bill. Try: bill ${who} $40 monthly`)] : null;
+    }
     const first = nameOf(hits[0]) ?? 'This client';
     if (hits.length > 1) return [lineChip(`${first} has ${hits.length} repeat bills`, `${first} has ${hits.length} repeat bills. Add the amount, like "pause ${first.split(' ')[0]}'s ${formatMoney(hits[0].amount_cents, hits[0].currency)} plan".`)];
     const r = hits[0];
@@ -202,6 +206,7 @@ export function createMore(d: MoreDeps) {
   /** Paid outside PayPal (recorded), so a refund can only be recorded too. A PayPal payment has a capture to refund. */
   const recordedPaid = (r: InvoiceRow) => !r.capture_id && ['MARKED_AS_PAID', 'PARTIALLY_REFUNDED'].includes(r.status);
   const today = () => new Date(d.now()).toISOString().slice(0, 10);
+  const shortDate = (t: number) => new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 
   function invoiceChips(userId: string, text: string, v: InvoiceVerb): Chip[] | null {
     const nameOf = d.biz.namer(userId);
@@ -227,16 +232,22 @@ export function createMore(d: MoreDeps) {
     const open = namedIn(text, all.filter(openInvoice), nameOf).filter((r) => cents === null || r.amount_cents === cents);
     if (!open.length) return null;
     const name = nameOf(open[0])!;
-    if (open.length > 1) return [lineChip(`${name} has ${open.length} open invoices`, `${name} has ${open.length} open invoices. Add the amount, like "mark ${name.split(' ')[0]} paid ${formatMoney(open[0].amount_cents, open[0].currency)}".`)];
-    const r = open[0];
+    // Several open invoices: the chip takes the latest, and its confirm names that one (amount, item, date).
+    // The list line stays as a second chip.
+    const r = open.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+    const several = open.length > 1;
     const money = formatMoney(r.amount_cents, r.currency);
+    const which = several ? `${money} ${r.item} invoice (${shortDate(r.created_at)})` : `${money} invoice`;
+    const list = several
+      ? [lineChip(`${name} has ${open.length} open invoices`, `${name} has ${open.length} open invoices. Add the amount, like "mark ${name.split(' ')[0]} paid ${money}".`)]
+      : [];
     const confirm = { confirm_client: name, confirm_amount: centsToValue(r.amount_cents), confirm_currency: r.currency };
     if (v.verb === 'mark_paid') {
       return [actionChip('invoice_mark_paid', `Mark paid ${money} · ${name}`, { invoice_id: r.id, method: v.method ?? 'OTHER' }, confirm,
-        `Mark ${name}'s ${money} invoice paid${v.methodWord ? ` (${v.methodWord})` : ''}? No money moves.`)];
+        `Mark ${name}'s ${which} paid${v.methodWord ? ` (${v.methodWord})` : ''}? No money moves.`), ...list];
     }
     const told = r.client_email_enc ? `PayPal tells ${name}.` : 'No email goes out.';
-    return [actionChip('invoice_cancel', `Cancel invoice ${money} · ${name}`, { invoice_id: r.id }, confirm, `Cancel ${name}'s ${money} invoice? ${told} Can't undo.`)];
+    return [actionChip('invoice_cancel', `Cancel invoice ${money} · ${name}`, { invoice_id: r.id }, confirm, `Cancel ${name}'s ${which}? ${told} Can't undo.`), ...list];
   }
 
   /** The invoice and its 409 answer when the confirm did not show this client, amount and currency. */

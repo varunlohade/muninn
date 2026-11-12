@@ -263,8 +263,9 @@ test('invoices: cancel says who PayPal tells and cannot be undone; two open invo
 
   await invoiceFor(s, token, 'Ana', 30);
   await invoiceFor(s, token, 'Ana', 60);
-  const two = (await suggest(s, token, "cancel ana's invoice")).chips[0];
-  assert.equal(two.kind, 'show');
+  // Two open invoices: the chip takes the latest and its confirm names it; the list line comes second.
+  const two = (await suggest(s, token, "cancel ana's invoice")).chips;
+  assert.deepEqual(two.map((c: any) => [c.kind, c.label]), [['invoice_cancel', 'Cancel invoice $60 · Ana'], ['show', 'Ana has 2 open invoices']]);
   const [one] = (await suggest(s, token, "cancel ana's $60 invoice")).chips;
   assert.equal(one.payload.question, "Cancel Ana's $60 invoice? No email goes out. Can't undo.");
 });

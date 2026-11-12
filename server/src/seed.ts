@@ -175,3 +175,114 @@ export function seedDemoHistory(o: { db: Db; cipher: Cipher; userId: string; now
   }
   return out;
 }
+
+// ---- Demo shots: the PayPal state the recorded demo needs, on the demo user only. Safe to re-run.
+// 1. One clear open invoice for Sam; Sam's other open demo invoices are cancelled (no email goes out).
+// 2. One PayPal payment from Sam that can be refunded: a $45 pay link a sandbox buyer approves, then captured.
+// 3. An ACTIVE $40/month repeat bill for Ana, after a sandbox buyer approves it.
+// Steps 2 and 3 need a buyer's approval in the sandbox: the first run prints the link, a re-run finishes the step.
+export const SHOT_SAM: readonly [string, string] = CLIENTS.sam;
+export const SHOT_ANA: readonly [string, string] = ['Ana Ruiz', 'ana.ruiz@example.com'];
+const SHOT_INVOICE_KEY = 'shot-sam-haircut';
+const OPEN_PLAN = ['ACTIVE', 'SUSPENDED', 'APPROVAL_PENDING'];
+
+export async function demoShots(o: { db: Db; cipher: Cipher; paypal: PayPal; userId: string; now: number; dryRun: boolean }): Promise<string[]> {
+  const { db, cipher, paypal, userId, now, dryRun } = o;
+  const out: string[] = [];
+  const say = (line: string) => out.push(`${dryRun ? 'DRY ' : ''}${line}`);
+  const nameOf = (enc: string | null) => (enc ? cipher.decrypt(userId, enc) : null);
+  // "Sam" or "Sam Okafor": the first name is what the owner types.
+  const isSam = (enc: string | null) => nameOf(enc)?.trim().split(/\s+/)[0].toLowerCase() === 'sam';
+  const reqId = (key: string) => sha256(`${userId}:${key}`).slice(0, 36);
+  const [sam, samEmail] = SHOT_SAM;
+  const [ana, anaEmail] = SHOT_ANA;
+
+  // 1. Sam's one clear open invoice.
+  let shot = db.invoiceBySeedKey(userId, SHOT_INVOICE_KEY);
+  if (shot && !shot.paid_at && shot.status !== 'CANCELLED') say(`sam invoice: ok ${shot.id} $45 Haircut (${shot.status})`);
+  else if (shot) say(`sam invoice: ${shot.id} is ${shot.status}; delete its row or mark it unpaid to reuse it`);
+  else if (dryRun) say('sam invoice: would create a $45 Haircut invoice for Sam Okafor (no email)');
+  else {
+    const requestId = reqId(`demo-shot:${SHOT_INVOICE_KEY}`);
+    const inv = await paypal.createDatedInvoice({
+      value: '45.00', currency: 'USD', item: 'Haircut', clientName: sam, clientEmail: samEmail, businessName: DEMO_PROFILE.business_name,
+      invoiceDate: ymd(now), dueDate: ymd(now + 7 * DAY), reference: DEMO_REFERENCE, invoiceNumber: `MD-${requestId.slice(0, 12).toUpperCase()}`,
+    }, requestId);
+    db.insertInvoice({
+      id: inv.id, user_id: userId, status: inv.status, amount_cents: 4500, currency: 'USD', item: 'Haircut',
+      client_name_enc: cipher.encrypt(userId, sam), client_email_enc: cipher.encrypt(userId, samEmail), pay_link: inv.payLink,
+      due_at: Date.parse(`${inv.dueDate}T00:00:00Z`) + DAY, created_at: now, source: 'demo_seed', seed_key: SHOT_INVOICE_KEY,
+    });
+    shot = db.invoiceBySeedKey(userId, SHOT_INVOICE_KEY)!;
+    say(`sam invoice: created ${shot.id} $45 Haircut`);
+  }
+  // Sam's other open invoices on the demo merchant. A connected account's rows (pp_account set) are never touched.
+  const extra = db.listInvoices(userId, 1000).filter((r) => r.id !== shot?.id && !r.paid_at && !['CANCELLED', 'REFUNDED'].includes(r.status)
+    && r.pp_account === null && isSam(r.client_name_enc));
+  for (const r of extra) {
+    if (dryRun) { say(`sam extra: would cancel ${r.id} ${centsToValue(r.amount_cents)} ${r.item}`); continue; }
+    if (r.id.startsWith('INV2-')) {
+      const now2 = await paypal.getInvoice(r.id);
+      if (now2.status !== 'CANCELLED') await paypal.cancelInvoice(r.id, false, reqId(`demo-shot:cancel:${r.id}`));
+    }
+    db.setInvoiceStatus(userId, r.id, 'CANCELLED', null, null);
+    say(`sam extra: cancelled ${r.id} ${centsToValue(r.amount_cents)} ${r.item}`);
+  }
+  if (!extra.length) say('sam extra: none open');
+
+  // 2. A refundable PayPal payment from Sam: a captured pay link (an order), or an invoice paid through PayPal.
+  const samRows = [...db.listInvoices(userId, 1000), ...db.listOrders(userId, 1000)].filter((r) => r.pp_account === null && isSam(r.client_name_enc));
+  const refundable = samRows.find((r) => r.paid_at && r.capture_id && r.capture_id !== 'recorded_payment' && !['REFUNDED'].includes(r.status));
+  const pending = db.listOrders(userId, 1000).find((r) => r.pp_account === null && isSam(r.client_name_enc) && !r.paid_at && ['CREATED', 'APPROVED'].includes(r.status));
+  if (refundable) say(`sam payment: ok ${refundable.id} ${centsToValue(refundable.amount_cents)} captured (${refundable.capture_id})`);
+  else if (pending && dryRun) say(`sam payment: would try to capture ${pending.id}; if not approved yet, approve it here with a sandbox buyer: ${pending.approve_link}`);
+  else if (pending) {
+    try {
+      const cap = await paypal.captureOrder(pending.id, `capture-${pending.id}`);
+      db.setOrderStatus(userId, pending.id, cap.status, cap.status === 'COMPLETED' ? now : null, cap.captureId);
+      say(`sam payment: captured ${pending.id} (${cap.status}, ${cap.captureId})`);
+    } catch (e) {
+      say(`sam payment: ${pending.id} not approved yet (${(e as Error).message}). Approve with a sandbox buyer, then re-run: ${pending.approve_link}`);
+    }
+  } else if (dryRun) say('sam payment: would make a $45 Haircut pay link for Sam Okafor and print its approve link');
+  else {
+    const order = await paypal.createOrder({ value: '45.00', currency: 'USD', item: 'Haircut' }, reqId('demo-shot:sam-order'));
+    db.insertOrder({
+      id: order.id, user_id: userId, status: order.status, amount_cents: 4500, currency: 'USD', item: 'Haircut',
+      client_name_enc: cipher.encrypt(userId, sam), approve_link: order.approveLink, created_at: now,
+    });
+    say(`sam payment: made ${order.id}. Approve with a sandbox buyer, then re-run: ${order.approveLink}`);
+  }
+
+  // 3. Ana's $40 monthly repeat bill.
+  const plans = db.listSubscriptions(userId, 1000).filter((r) => r.pp_account === null && nameOf(r.client_name_enc) === ana
+    && r.amount_cents === 4000 && r.currency === 'USD' && r.interval === 'month' && OPEN_PLAN.includes(r.status));
+  const plan = plans.find((r) => r.status === 'ACTIVE') ?? plans.find((r) => r.status === 'SUSPENDED') ?? plans[0];
+  if (plan?.status === 'ACTIVE') say(`ana plan: ok ${plan.id} $40/mo ACTIVE`);
+  else if (plan?.status === 'SUSPENDED') say(`ana plan: ${plan.id} is paused; say "resume ana's plan" to restart it`);
+  else if (plan && dryRun) say(`ana plan: would check ${plan.id} on PayPal; if not approved yet, approve it with a sandbox buyer: ${plan.approve_link}`);
+  else if (plan) {
+    const st = await paypal.getSubscription(plan.id);
+    if (st.status === 'ACTIVE') {
+      db.setSubscriptionActive(userId, plan.id, now);
+      say(`ana plan: ${plan.id} is ACTIVE now`);
+    } else say(`ana plan: ${plan.id} is ${st.status}. Approve with a sandbox buyer, then re-run: ${plan.approve_link}`);
+  } else if (dryRun) say('ana plan: would make a $40/mo repeat bill for Ana Ruiz and print its approve link');
+  else {
+    const planKey = 'USD:4000:month';
+    const cached = db.getBillingPlan(userId, planKey);
+    const sub = await paypal.createSubscription({
+      value: '40.00', currency: 'USD', interval: 'month', clientEmail: null,
+      productId: cached?.product_id ?? db.anyBillingProduct(userId), planId: cached?.plan_id ?? null,
+      productRequestId: reqId('billing-product'), planRequestId: reqId(`billing-plan:${planKey}`),
+    }, reqId('demo-shot:ana-plan'));
+    db.putBillingPlan(userId, planKey, sub.productId, sub.planId);
+    db.insertSubscription({
+      id: sub.id, user_id: userId, status: sub.status, amount_cents: 4000, currency: 'USD', interval: 'month', item: 'Repeat payment',
+      client_name_enc: cipher.encrypt(userId, ana), client_email_enc: cipher.encrypt(userId, anaEmail), approve_link: sub.approveLink,
+      plan_id: sub.planId, created_at: now,
+    });
+    say(`ana plan: made ${sub.id} (${sub.status}). Approve with a sandbox buyer, then re-run: ${sub.approveLink}`);
+  }
+  return out;
+}

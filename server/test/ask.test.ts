@@ -33,9 +33,10 @@ const TABLE: Row[] = [
   { text: 'invoice $45 for the haircut, sam@example.com', route: 'invoice', want: 'invoice', paid: 2, calls: ['askRoute', 'extract'] },
   { text: 'bill Sam for the haircut', group: 'money', route: 'invoice', want: 'invoice', paid: 3, calls: ['askGroup', 'askRoute', 'extract'] },
   { text: 'pay link for the haircut, $45', route: 'paylink', want: 'paylink', paid: 2, calls: ['askRoute', 'extract'] },
-  { text: 'bill Sam $40 monthly', route: 'subscribe', want: 'subscribe', paid: 2, calls: ['askRoute', 'extract'] },
-  { text: 'charge ana 90 every month', group: 'money', route: 'subscribe', want: 'subscribe', paid: 3, calls: ['askGroup', 'askRoute', 'extract'] },
-  { text: 'bill Ana $40 weekly', route: 'subscribe', want: 'subscribe', paid: 1, calls: ['askRoute'] },
+  // A plain "bill <name> <money> <interval>" is read by the regex: no model call.
+  { text: 'bill Sam $40 monthly', route: 'subscribe', want: 'subscribe', paid: 0, calls: [] },
+  { text: 'charge ana 90 every month', group: 'money', route: 'subscribe', want: 'subscribe', paid: 0, calls: [] },
+  { text: 'bill Ana $40 weekly', route: 'subscribe', want: 'subscribe', paid: 0, calls: [] },
   { text: 'bill Sam $40 again', route: 'subscribe', want: 'none', paid: 1, calls: ['askRoute'] },
   { text: 'remind Ana', group: 'money', route: 'remind', want: 'remind', paid: 2, calls: ['askGroup', 'askRoute'] },
   { text: 'nudge her about the invoice', group: 'money', route: 'remind', want: 'remind', paid: 3, calls: ['askGroup', 'askRoute', 'extract'] },
@@ -143,7 +144,8 @@ test('ask: money routes return the same chips as /v1/suggest, with the confirm r
 
   // A refund or reminder never guesses the client.
   const r = await world({ group: { group: 'money' }, route: { route: 'refund' }, ext: { client_name: 'Maya', client_email: null, amount: null, item: null } });
-  assert.deepEqual((await r.ask('refund Maya')).result.chips, []);
+  // With no paid payment from Maya, a plain hint says so: never silence, never a refund chip.
+  assert.deepEqual((await r.ask('refund Maya')).result.chips.map((c: any) => [c.kind, c.label]), [['show', 'No paid payment from Maya to refund']]);
   const ok = await world({ group: { group: 'money' }, route: { route: 'refund' } });
   const refund = (await ok.ask('refund Bo')).result.chips;
   assert.deepEqual(refund.map((c: any) => [c.kind, c.label]), [['refund', 'Refund $60 · Bo']]);
@@ -160,18 +162,18 @@ test('ask: a repeat bill chip names the amount, interval and only a client the o
   };
   // The model's email is not one the owner typed, so it is dropped; the typed $40 beats the model's 45.
   const [sam] = await chipsFor('bill Sam $40 monthly', undefined);
-  assert.deepEqual([sam.kind, sam.label, sam.needs_confirm], ['subscribe', 'Repeat $40 monthly · Sam', true]);
+  assert.deepEqual([sam.kind, sam.label, sam.needs_confirm], ['subscribe', 'Bill $40/mo · Sam', true]);
   assert.deepEqual(sam.payload, { amount: '40.00', currency: 'USD', interval: 'month', item: 'Repeat payment', client_name: 'Sam', client_email: null });
 
   const [ana] = await chipsFor('charge ana 90 every month', { client_name: 'Ana', client_email: null, amount: 90, currency: null, item: null }, 'money');
-  assert.deepEqual([ana.label, ana.payload.interval, ana.payload.amount, ana.needs_confirm], ['Repeat $90 monthly · Ana', 'month', '90.00', true]);
+  assert.deepEqual([ana.label, ana.payload.interval, ana.payload.amount, ana.needs_confirm], ['Bill $90/mo · Ana', 'month', '90.00', true]);
 
   // A name the owner did not type never becomes the recipient.
   const [nobody] = await chipsFor('bill €40 every week', { client_name: 'Maya', client_email: 'maya@x.test', amount: 40, currency: 'EUR', item: null });
-  assert.deepEqual([nobody.label, nobody.payload.client_name, nobody.payload.client_email, nobody.payload.currency], ['Repeat €40 weekly', null, null, 'EUR']);
+  assert.deepEqual([nobody.label, nobody.payload.client_name, nobody.payload.client_email, nobody.payload.currency], ['Bill €40/wk', null, null, 'EUR']);
 
   const [typed] = await chipsFor('bill jo@example.com $25 every year', { client_name: null, client_email: 'jo@example.com', amount: 25, currency: null, item: 'plan' });
-  assert.deepEqual([typed.label, typed.payload.client_email, typed.payload.interval], ['Repeat $25 yearly · jo@example.com', 'jo@example.com', 'year']);
+  assert.deepEqual([typed.label, typed.payload.client_email, typed.payload.interval], ['Bill $25/yr · jo@example.com', 'jo@example.com', 'year']);
 
   // Two intervals: no chip guesses one, and the owner is asked how often.
   const two = await world({ route: { route: 'subscribe' } });
