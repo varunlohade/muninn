@@ -118,8 +118,9 @@ struct StatusPill: View {
 }
 
 /// The signature headline: the first clause in ink, the rest in ink 2.
-func twoTone(_ first: String, _ rest: String, ink: Color = Theme.Color.text1, ink2: Color = Theme.Color.text2) -> Text {
-    Text(first).foregroundColor(ink) + Text(rest.isEmpty ? "" : " " + rest).foregroundColor(ink2)
+/// `breaks` puts the second clause on its own line.
+func twoTone(_ first: String, _ rest: String, ink: Color = Theme.Color.text1, ink2: Color = Theme.Color.text2, breaks: Bool = false) -> Text {
+    Text(first).foregroundColor(ink) + Text(rest.isEmpty ? "" : (breaks ? "\n" : " ") + rest).foregroundColor(ink2)
 }
 
 /// A task card: an icon tile, a title and a grey sub-line ("Invoice $45 / Sam"). Keyboard chips and previews use it.
@@ -133,10 +134,7 @@ struct TaskCardLabel: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            PixelIcon(name: icon, fill: iconFill, size: 24)
-                .frame(width: 30, height: 30)
-                .background(Theme.Color.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
+            IconTile(icon: icon, fill: iconFill)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(Theme.Font.sans(14, 500)).foregroundStyle(titleColor).lineLimit(1)
                 if let detail { Text(detail).font(Theme.Font.sans(11.5)).foregroundStyle(Theme.Color.text2).lineLimit(1) }
@@ -145,6 +143,20 @@ struct TaskCardLabel: View {
         .padding(.leading, 6).padding(.trailing, 14)
         .frame(height: height)
         .cardSurface(radius: 10, fill: Theme.Color.surface)
+    }
+}
+
+/// A 30 pt white tile with a pixel icon, for rows and chips.
+struct IconTile: View {
+    let icon: PixelIcon.Name
+    var fill: Color = .white
+    var size: CGFloat = 30
+
+    var body: some View {
+        PixelIcon(name: icon, fill: fill, size: size * 0.8)
+            .frame(width: size, height: size)
+            .background(Theme.Color.card, in: RoundedRectangle(cornerRadius: size * 0.23, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: size * 0.23, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
     }
 }
 
@@ -179,6 +191,25 @@ struct PixelIcon: View {
         PixelGrid(rows: Self.grids[name] ?? [], palette: ["#": ink, "o": fill, "w": .white])
             .frame(width: size, height: size)
             .accessibilityHidden(true)
+    }
+
+    /// A picture for a catalog item from words in its name: a haircut gets scissors, color a drop.
+    static func forItem(_ name: String) -> Name {
+        let n = name.lowercased()
+        if ["beard", "shave", "razor", "trim"].contains(where: n.contains) { return .razor }
+        if ["color", "colour", "dye", "balayage", "highlight", "paint"].contains(where: n.contains) { return .drop }
+        if ["wash", "style", "blow", "comb", "bridal"].contains(where: n.contains) { return .comb }
+        if ["cut", "hair", "scissor"].contains(where: n.contains) { return .scissors }
+        return .tag
+    }
+
+    static func fill(for icon: Name) -> Color {
+        switch icon {
+        case .drop: Color(hex: 0xE9806E)
+        case .razor: Color(hex: 0x9BD2F2)
+        case .comb, .tag, .bell: Color(hex: 0xF4D35E)
+        default: .white
+        }
     }
 
     static let grids: [Name: [String]] = [

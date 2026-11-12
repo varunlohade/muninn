@@ -1,60 +1,64 @@
 import SwiftUI
 
-/// "Who hasn't paid": the total, then one card per client with Remind and Copy link.
+/// "Who owes you": the total, then one row per client with Copy link and Nudge.
 /// Remind only asks: `remind` gets the card's one chip, and the caller shows the confirm.
 struct UnpaidListView: View {
     let clients: [UnpaidClient]
-    /// The card colour. The Ask bar is a card itself, so its cards sit one step lighter.
-    var fill = Theme.Color.card
+    /// The row colour: the surface tone on Home, paper inside the Ask bar.
+    var fill = Theme.Color.surface
     let remind: (Chip) -> Void
     @State private var copied: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
-            Text(WhoPaid.header(clients)).font(Theme.Font.cardTitle).foregroundStyle(clients.isEmpty ? Theme.Color.paid : Theme.Color.text1)
-                .padding(.horizontal, Theme.Space.xs)
-                .accessibilityIdentifier("unpaid.header")
-            ForEach(clients) { c in card(c) }
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Who owes you").font(Theme.Font.section).foregroundStyle(Theme.Color.text1)
+                Spacer()
+                Text(WhoPaid.header(clients)).font(Theme.Font.label).monospacedDigit()
+                    .foregroundStyle(clients.isEmpty ? Theme.Color.paid : Theme.Color.text2)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                    .accessibilityIdentifier("unpaid.header")
+            }
+            .padding(.horizontal, 2).padding(.bottom, 2)
+            ForEach(clients) { c in row(c) }
         }
     }
 
-    private func card(_ c: UnpaidClient) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            HStack(alignment: .top, spacing: Theme.Space.xs) {
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(c.name).font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1).lineLimit(1)
-                    HStack(spacing: Theme.Space.xs) {
-                        Text("\(c.item) \u{00B7} \(c.late)").font(Theme.Font.label)
-                            .foregroundStyle(c.daysLate > 0 ? Theme.Color.due : Theme.Color.text2).lineLimit(1)
-                        if c.veryLate {
-                            Text("Very late").font(Theme.Font.sans(11, 600)).foregroundStyle(Theme.Color.bg)
-                                .padding(.horizontal, Theme.Space.xs).frame(height: 20)
-                                .background(Theme.Color.due, in: Capsule())
-                                .accessibilityIdentifier("unpaid.verylate.\(c.name)")
-                        }
+    private func row(_ c: UnpaidClient) -> some View {
+        HStack(spacing: Theme.Space.s) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: Theme.Space.xs) {
+                    Text(c.name).font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1).lineLimit(1)
+                    if c.veryLate {
+                        StatusPill(text: "Very late", tone: .due)
+                            .accessibilityIdentifier("unpaid.verylate.\(c.name)")
                     }
                 }
-                Spacer(minLength: Theme.Space.xs)
-                Text(c.money).font(Theme.Font.cardTitle).monospacedDigit().foregroundStyle(Theme.Color.text1)
+                Text("\(c.item), \(c.late.lowercased())").font(Theme.Font.sans(12.5))
+                    .foregroundStyle(c.daysLate > 0 ? Theme.Color.due : Theme.Color.text2).lineLimit(1)
             }
-            HStack(spacing: Theme.Space.xs) {
-                if let chip = c.remind {
-                    AskChip(title: "Nudge", detail: nil) { remind(chip) }
-                        .accessibilityIdentifier("unpaid.remind.\(c.name)")
+            Spacer(minLength: Theme.Space.xxs)
+            Text(c.money).font(Theme.Font.sans(15, 500)).monospacedDigit().foregroundStyle(Theme.Color.text1).padding(.trailing, 2)
+            if let link = c.link {
+                Button {
+                    UIPasteboard.general.string = link
+                    copied = c.id
+                } label: {
+                    Image(systemName: copied == c.id ? "checkmark" : "link").font(.system(size: 13, weight: .medium))
                 }
-                if let link = c.link {
-                    AskChip(title: copied == c.id ? "Copied" : "Copy link", detail: nil) {
-                        UIPasteboard.general.string = link
-                        copied = c.id
-                    }
-                    .accessibilityIdentifier("unpaid.copy.\(c.name)")
-                }
+                .buttonStyle(QuietButton(small: true, wide: false))
+                .accessibilityLabel(copied == c.id ? "Copied" : "Copy link")
+                .accessibilityIdentifier("unpaid.copy.\(c.name)")
+            }
+            if let chip = c.remind {
+                Button("Nudge") { remind(chip) }
+                    .buttonStyle(QuietButton(small: true, wide: false))
+                    .accessibilityIdentifier("unpaid.remind.\(c.name)")
             }
         }
-        .padding(Theme.Metric.cardPadding)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(fill, in: RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
+        .padding(.leading, 14).padding(.trailing, 10).padding(.vertical, 8)
+        .frame(minHeight: Theme.Metric.rowHeight)
+        .cardSurface(radius: Theme.Metric.rowRadius, fill: fill)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("unpaid.card.\(c.name)")
     }

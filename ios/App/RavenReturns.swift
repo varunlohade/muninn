@@ -14,11 +14,14 @@ struct RavenReturns: View {
         ZStack {
             Theme.Color.bg.opacity(0.82).ignoresSafeArea().onTapGesture(perform: done)
             VStack(spacing: 0) {
-                Text("\(payment.client_name ?? "Client") paid!")
-                    .font(Theme.Font.body).foregroundStyle(Theme.Color.text1)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
-                    .background(Theme.Color.button, in: Capsule())
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: Theme.Space.xs) {
+                    PixelRaven(scale: 1.6)
+                    Text("\(payment.client_name ?? "Client") paid")
+                        .font(Theme.Font.sans(15, 500)).foregroundStyle(Theme.Color.text1)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .cardSurface(radius: Theme.Metric.buttonRadius, fill: Theme.Color.surface)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 ZStack {
                     if !reduceMotion {
                         LoopPath()
@@ -28,19 +31,30 @@ struct RavenReturns: View {
                     }
                 }
                 .frame(height: 170)
-                ZStack(alignment: .bottomLeading) {
-                    PaperView(payment: payment, width: 260)
-                    Text("PAID")
-                        .font(Theme.Font.paper(18)).tracking(3)
-                        .foregroundStyle(Theme.Color.paid)
-                        .padding(.horizontal, 10).padding(.vertical, 4)
-                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.Color.paid, lineWidth: 2))
-                        .rotationEffect(.degrees(-8))
-                        .scaleEffect(stamped || reduceMotion ? 1 : 1.35)
-                        .opacity(stamped ? 1 : 0)
-                        .padding(14)
-                        .accessibilityIdentifier("raven.stamp")
+                // The receipt: amount, a dashed line, what it was for. The Paid pill lands on it.
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Receipt").font(Theme.Font.sans(12)).foregroundStyle(Theme.Color.text2)
+                        Spacer()
+                        StatusPill(text: "Paid", tone: .paid)
+                            .scaleEffect(stamped || reduceMotion ? 1 : 1.35)
+                            .opacity(stamped ? 1 : 0)
+                            .accessibilityIdentifier("raven.stamp")
+                    }
+                    Text(formatMoney(payment.amount, payment.currency)).font(Theme.Font.sans(30)).monospacedDigit().tracking(-0.6)
+                        .foregroundStyle(Theme.Color.text1)
+                    DashedLine()
+                    HStack(alignment: .top) {
+                        Text("\(payment.item)\n\(payment.client_name ?? "")")
+                        Spacer()
+                        Text("PayPal").multilineTextAlignment(.trailing)
+                    }
+                    .font(Theme.Font.sans(12.5)).foregroundStyle(Theme.Color.text2)
                 }
+                .padding(.horizontal, 14).padding(.top, 16).padding(.bottom, 12)
+                .frame(width: 230)
+                .cardSurface()
+                .rotationEffect(.degrees(-4))
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(.horizontal, 32)
