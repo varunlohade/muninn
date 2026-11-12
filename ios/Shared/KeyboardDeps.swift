@@ -22,7 +22,7 @@ protocol KeyboardAPI {
     func explain(_ text: String) async throws -> ExplainResponse
     func explainVisual(_ topic: String) async throws -> Data
     func chart(back: Int, ahead: Int) async throws -> ChartData
-    func shareDrawing(_ png: Data) async throws -> String
+    func shareDrawing(_ png: Data, preview: Data?, title: String) async throws -> String
 }
 
 /// The intro demo has no PayPal actions beyond its scripted ones.
@@ -33,7 +33,7 @@ extension KeyboardAPI {
     func moreRead(_ path: String) async throws -> MoreResponse { throw APIError.message("Open \(AppConfig.displayName) for this one") }
     func explain(_ text: String) async throws -> ExplainResponse { throw APIError.message("No explain in the intro") }
     func explainVisual(_ topic: String) async throws -> Data { throw APIError.message("No explain in the intro") }
-    func shareDrawing(_ png: Data) async throws -> String { throw APIError.message("No sharing in the intro") }
+    func shareDrawing(_ png: Data, preview: Data?, title: String) async throws -> String { throw APIError.message("No sharing in the intro") }
     func chart(back: Int, ahead: Int) async throws -> ChartData { throw APIError.message("Open \(AppConfig.displayName) for this one") }
 }
 

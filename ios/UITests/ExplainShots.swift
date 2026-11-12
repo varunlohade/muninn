@@ -136,11 +136,21 @@ final class ExplainShots: XCTestCase {
         waitDrawn("log")
         shot("03-explain-log-drawing")
 
-        element(messages, "visual.export").tap()
+        // One tap on Send: the upload runs now, then the caption and the short link replace the typed request.
+        element(messages, "visual.send").tap()
+        let note = element(messages, "visual.note")
+        let linked = NSPredicate(format: "label BEGINSWITH %@", "Link added")
+        let linkBy = Date().addingTimeInterval(8)
+        while !(note.exists && linked.evaluate(with: note)), Date() < linkBy { Thread.sleep(forTimeInterval: 0.2) }
+        XCTAssertTrue(note.exists && linked.evaluate(with: note), "no Link added note: \(note.exists ? note.label : "none")")
+        let typed = field.value as? String ?? ""
+        XCTAssertTrue(typed.contains("log function, explained: http") && typed.contains("/d/"), "no caption and link in the field: \(typed)")
+        shot("04-send-link-inserted")
+        // Send as image waits in the small menu.
+        element(messages, "visual.more").tap()
         XCTAssertTrue(element(messages, "visual.send.image").waitForExistence(timeout: 3))
-        XCTAssertTrue(element(messages, "visual.send.link").exists)
         Thread.sleep(forTimeInterval: 0.3)
-        shot("04-send-choices")
+        shot("04b-send-menu")
         element(messages, "visual.export.back").tap()
         element(messages, "explain.close").tap()
 

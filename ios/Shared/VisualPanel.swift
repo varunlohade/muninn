@@ -29,11 +29,17 @@ struct VisualPanelView: View {
             .clipShape(RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
             .overlay(alignment: .bottom) {
                 if let note = state.note {
-                    Text(note).font(M.smallMode.weight(.medium)).foregroundStyle(.white)
-                        .padding(.horizontal, Theme.Space.s).padding(.vertical, 6)
-                        .background(Color.black.opacity(0.75), in: Capsule())
-                        .padding(.bottom, Theme.Space.xs)
-                        .accessibilityIdentifier("visual.note")
+                    VStack(spacing: 1) {
+                        Text(note).font(M.smallMode.weight(.medium)).foregroundStyle(.white)
+                            .accessibilityIdentifier("visual.note")
+                        if let hint = state.hint {
+                            Text(hint).font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
+                                .accessibilityIdentifier("visual.hint")
+                        }
+                    }
+                    .padding(.horizontal, Theme.Space.s).padding(.vertical, 6)
+                    .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .padding(.bottom, Theme.Space.xs)
                 }
             }
             stepLine
@@ -123,12 +129,11 @@ struct VisualPanelView: View {
         .padding(.horizontal, Theme.Space.xxs)
     }
 
-    /// Send and Insert. Send opens the two ways to send.
+    /// Send (one tap: caption and link into the message), the small menu with Send as image, and Insert.
     @ViewBuilder private var buttons: some View {
         HStack(spacing: M.keyGap) {
             if state.exporting {
                 ExplainButton(title: "Send as image", id: "visual.send.image", palette: palette) { model.sendVisual(.image) }
-                ExplainButton(title: "Send as link", id: "visual.send.link", palette: palette) { model.sendVisual(.link) }
                 Button(action: model.toggleExport) {
                     Image(systemName: "xmark").font(M.icon).foregroundStyle(palette.label)
                         .frame(width: 48, height: M.keyHeight)
@@ -138,12 +143,24 @@ struct VisualPanelView: View {
                 .accessibilityLabel("Back")
                 .accessibilityIdentifier("visual.export.back")
             } else {
-                ExplainButton(title: "Send", id: "visual.export", palette: palette, action: model.toggleExport)
-                    .disabled(!drawn || state.sending != nil).opacity(drawn ? 1 : 0.5)
+                ExplainButton(title: "Send", id: "visual.send", palette: palette) { model.sendVisual(.link) }
+                    .disabled(!drawn || busy).opacity(drawn ? 1 : 0.5)
+                Button(action: model.toggleExport) {
+                    Image(systemName: "ellipsis").font(M.icon).foregroundStyle(palette.label)
+                        .frame(width: 48, height: M.keyHeight)
+                        .background(palette.key, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(!drawn || busy).opacity(drawn ? 1 : 0.5)
+                .accessibilityLabel("More ways to send")
+                .accessibilityIdentifier("visual.more")
                 ExplainButton(title: "Insert", id: "visual.insert", accent: true, palette: palette, action: model.insertExplain)
             }
         }
     }
+
+    /// A send the owner tapped is running. The upload that starts by itself does not block Send.
+    private var busy: Bool { state.sending == .link || state.sending == .image }
 
     private var drawn: Bool {
         switch state.status {
