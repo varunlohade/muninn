@@ -193,6 +193,25 @@ export function commandIntent(text: string): 'send_reminder' | 'create_invoice' 
   return /^(bill|invoice)$/i.test(m[1]) ? 'create_invoice' : 'send_reminder';
 }
 
+/**
+ * The words after "remind <name>": "" for "remind Jordan pls", "to bring the leash" for "remind Emma to bring the
+ * leash". `name` may be typed in full or by first name. Null for "nudge" and "chase", which always mean money, and
+ * when the name does not follow "remind".
+ */
+export function afterRemindName(text: string, name: string): string | null {
+  const m = /^\s*remind\s+(\S.*)$/iu.exec(lastSentence(text));
+  if (!m) return null;
+  const first = name.trim().split(/\s+/)[0];
+  for (const n of [name.trim(), first]) {
+    const hit = new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:'s)?(?![\\p{L}\\p{N}])`, 'iu').exec(m[1]);
+    if (n.length >= 2 && hit) {
+      const rest = m[1].slice(hit[0].length).trim();
+      return /^(?:please|pls|plz|now|again|today|asap|thanks|thx)?[\s.!?,]*$/i.test(rest) ? '' : rest;
+    }
+  }
+  return null;
+}
+
 /** The typed words a money chip came from: "$45 for the haircut", "45 dollars". Null when there is no amount. */
 export function moneyTrigger(text: string): string | null {
   const m = text.match(/(?:[$€£]\s?\d+(?:[.,]\d{1,2})?|\b\d+(?:[.,]\d{1,2})?\s?(?:[$€£]|usd|eur|gbp|dollars?|bucks|euros?)\b)(?:\s+for\s+(?:the\s+|a\s+|an\s+|my\s+)?\p{L}+)?/iu);

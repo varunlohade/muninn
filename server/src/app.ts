@@ -14,7 +14,7 @@ import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './mo
 import { log } from './log.ts';
 import { clean } from './text.ts';
 import {
-  askQuick, commandIntent, deviceSignal, deviceTitle, deviceTrigger, intervalOf, lastSentence, mentions, moneyTrigger, nameIn, noteText, onlyKnownWords, quick, repeatEnds,
+  afterRemindName, askQuick, commandIntent, deviceSignal, deviceTitle, deviceTrigger, intervalOf, lastSentence, mentions, moneyTrigger, nameIn, noteText, onlyKnownWords, quick, repeatEnds,
   typedEmails, withoutInterval, detectLookup, type Quick,
 } from './quick.ts';
 import { ASK_AT, SHOW_AT, catalogItemFor, chipLabel, createSearch, importance, invoiceState, mentionsItemWord, namesItem, orderState } from './search.ts';
@@ -631,8 +631,10 @@ export function createApp(deps: Deps) {
 
     const q = quick(text, context ?? '');
     const items = db.listItems(userId);
-    // A message that names a catalog item ("and 2 extra hours?") is a money signal even with no money word.
-    if (q.none && !namesItem(`${text} ${context ?? ''}`, items.map((i) => i.name))) {
+    // A message that names a catalog item ("and 2 extra hours?") is a money signal even with no money word,
+    // and so is an owner command: "nudge Jordan", "chase Jordan".
+    const command = context ? null : commandIntent(text);
+    if (q.none && !command && !namesItem(`${text} ${context ?? ''}`, items.map((i) => i.name))) {
       // No money signal. Plain chat stops here with no call; an action-ish sentence gets one jev question.
       if (context || !deviceSignal(text)) return done([], 'none', 1);
       path = 'jev_device';
@@ -668,8 +670,7 @@ export function createApp(deps: Deps) {
 
     // An owner command that names its action needs no jev question: "bill Kowalski ..." is an invoice, and
     // "remind Emma ..." is a reminder when one known unpaid client is named.
-    const command = context ? null : commandIntent(text);
-    if (command === 'create_invoice' || (command === 'send_reminder' && known.send_reminder && reminderAboutMoney(userId, text))) {
+    if (command === 'create_invoice' || (command === 'send_reminder' && known.send_reminder && reminderAboutMoney(userId, text, known.send_reminder.client_name))) {
       const chips = await moneyChips(userId, command, filled, extracting, extract);
       path = timings.extract_ms !== undefined ? 'extract_only' : 'regex_intent';
       parallel = false;
@@ -807,15 +808,17 @@ export function createApp(deps: Deps) {
     const invoices = db.listInvoices(userId);
     const orders = db.listOrders(userId);
     const clients = clientNames(userId);
-    const named = (rows: (InvoiceRow | OrderRow)[]) => {
-      const names = new Set(rows.map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n && mentions(seen, n)));
+    const named = (rows: (InvoiceRow | OrderRow)[], firstName = false) => {
+      const said = (n: string) => mentions(seen, n) || (firstName && mentions(seen, n.trim().split(/\s+/)[0]));
+      const names = new Set(rows.map((r) => dec(userId, r.client_name_enc)).filter((n): n is string => !!n && said(n)));
       return names.size === 1 ? [...names][0] : null;
     };
     const amount = q.amount !== null && onlyKnownWords(text, [...items.map((i) => i.name), ...clients]);
     const base: Extraction = { client_name: named([...invoices, ...orders]), client_email: q.email, amount: q.amount, currency: q.currency, item: null };
     const unpaid = invoices.filter((r) => !r.paid_at && r.status !== 'CANCELLED');
     const paid = [...invoices, ...orders].filter((r) => r.paid_at && r.capture_id && r.status !== 'REFUNDED');
-    const remindName = named(unpaid);
+    // "remind Jordan" names Jordan Ray: a reminder, like its chip, accepts a first name.
+    const remindName = named(unpaid, true);
     const refundName = named(paid);
     return {
       create_invoice: amount && hasItem && q.email ? base : null,
@@ -825,11 +828,19 @@ export function createApp(deps: Deps) {
     };
   }
 
-  // "remind Emma to bring the leash" is no payment reminder: the fast path needs a money word, a price,
-  // or a word of an unpaid invoice's item ("remind Emma about last week's walks" for a dog walk).
-  const MONEY_WORD = /\b(pay|paid|payment|payments|invoice|invoices|bill|bills|owe|owes|owed|owing|due|overdue|balance)\b|[$€£]|\d/i;
-  const reminderAboutMoney = (userId: string, text: string) =>
-    MONEY_WORD.test(text) || mentionsItemWord(text, db.listInvoices(userId).filter((r) => !r.paid_at && r.status !== 'CANCELLED').map((r) => r.item));
+  // "nudge Emma" and "chase Emma" always mean money. "remind Jordan" with nothing after the name is a Nudge too.
+  // "remind Emma to bring the leash" or "remind Emma that we meet at 5" is personal: after "to" or "that" only a
+  // money word or a word of an unpaid invoice's item counts, and a bare number is a time, not a price.
+  // Anything else after the name ("about the invoice", "she owes me") needs a money word, a price or an item word.
+  const MONEY_WORD = /\b(pay|paid|payment|payments|invoice|invoices|bill|bills|owe|owes|owed|owing|due|overdue|balance)\b|[$€£]/i;
+  const reminderAboutMoney = (userId: string, text: string, name: string | null | undefined) => {
+    const rest = name ? afterRemindName(text, name) : null;
+    if (rest === '') return true;
+    if (!/^\s*remind\b/i.test(lastSentence(text))) return true;
+    const about = rest ?? text;
+    const money = MONEY_WORD.test(about) || (!/^(?:to|that)\b/i.test(about) && /\d/.test(about));
+    return money || mentionsItemWord(about, db.listInvoices(userId).filter((r) => !r.paid_at && r.status !== 'CANCELLED').map((r) => r.item));
+  };
 
   const chip = (kind: string, label: string, payload: Record<string, unknown>, needsConfirm = false): Chip =>
     ({ kind, label: clean(label), payload, needs_confirm: needsConfirm });

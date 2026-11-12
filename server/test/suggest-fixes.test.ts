@@ -68,3 +68,25 @@ test('suggest: "remind <unpaid client> ..." and "bill <client> ..." skip the int
   const other = await (await s.call(token, 'POST', '/v1/suggest', { text: 'remind Zed to bring the forms tomorrow' })).json();
   assert.equal(other.chips.length, 0);
 });
+
+test('suggest: remind, nudge or chase an unpaid client by name; a personal reminder stays quiet', async () => {
+  // The intent model says none, so every chip here comes from the rule itself.
+  const s = setup({ cls: { intent: 'none' }, ext: { client_name: null, client_email: null, amount: null, item: null } });
+  const { token } = s.device();
+  assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', { amount: '120.00', item: 'Logo design', client_name: 'Jordan Ray' })).status, 200);
+  assert.equal((await s.call(token, 'POST', '/v1/actions/invoice', { amount: '40.00', item: 'Dog walk (30 min)', client_name: 'Emma' })).status, 200);
+  const kinds = async (text: string) =>
+    ((await (await s.call(token, 'POST', '/v1/suggest', { text })).json()).chips as { kind: string }[]).map((c) => c.kind);
+
+  for (const text of ['remind Jordan', 'remind jordan pls', 'nudge Jordan', 'chase Jordan', 'remind Jordan Ray',
+    'remind Jordan about the invoice', 'remind Jordan she owes me', 'nudge Emma', 'chase Emma', 'nudge Emma to bring the leash',
+    "remind Emma about last week's walks"]) {
+    assert.deepEqual(await kinds(text), ['remind'], text);
+  }
+  for (const text of ['remind Emma to bring the leash', 'remind Emma that we meet at 5', 'remind me to call mom', 'remind Jordan to call me back']) {
+    assert.deepEqual(await kinds(text), [], text);
+  }
+  // A name that is no unpaid client: the model decides, and here it says none.
+  assert.deepEqual(await kinds('nudge Zed'), []);
+  assert.deepEqual(await kinds('remind Zed about the invoice'), []);
+});
