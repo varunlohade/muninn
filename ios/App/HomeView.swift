@@ -298,10 +298,8 @@ struct HomeView: View {
                     Group {
                         if keyboard.state == .needsFullAccess {
                             Text(KeyboardState.finishSetupLine)
-                        } else if keyboard.state == .notFirst {
-                            Text("Drag it to the top in Settings")
                         } else if !keyboard.state.isOn {
-                            Text("Make it your default keyboard")
+                            Text("Two switches in Settings")
                         } else if let b = model.broughtBack {
                             Text("Brought back ") + Text(b.money).foregroundStyle(Theme.Color.paid).font(Theme.Font.sans(13, 500))
                                 + Text(" from \(b.chats) chat\(b.chats == 1 ? "" : "s")")

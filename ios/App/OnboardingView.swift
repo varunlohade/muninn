@@ -16,6 +16,7 @@ struct OnboardingView: View {
     @State private var business = ""
     @State private var checked = false
     @State private var busy = false
+    @State private var keyboardUp = false
     @ObservedObject private var paypal = PayPalConnector.shared
     #if DEBUG
     @State private var showDevPairing = false
@@ -25,7 +26,7 @@ struct OnboardingView: View {
         switch step {
         case .intro: ""
         case .keyboard: "Turn on the keyboard"
-        case .makeDefault: "Make it your default"
+        case .makeDefault: KeyboardState.needsFullAccess.homeTitle
         case .calendar: "Allow Calendar & Reminders"
         case .start: "Get paid from any chat"
         case .paypal: "Sign in with PayPal"
@@ -36,7 +37,7 @@ struct OnboardingView: View {
         switch step {
         case .intro: ""
         case .keyboard: "Three taps in Settings. Then come back."
-        case .makeDefault: setup.state == .notFirst ? KeyboardState.reorderSteps : "So it opens first in every chat."
+        case .makeDefault: "Switch to \(AppConfig.displayName) once below, so the app sees it."
         case .calendar: "The keyboard adds the events and reminders you type. They stay on this phone."
         case .start: "\(AppConfig.displayName) suggests the invoice while you type."
         case .paypal: paypal.note ?? "Invoices and pay links go to your own PayPal. Or try the demo account first."
@@ -76,9 +77,11 @@ struct OnboardingView: View {
             DevPairingSheet { showDevPairing = false; Task { await complete(.start) } }
         }
         #endif
-        // RootView checks the keyboard each time the app comes back from Settings.
+        // RootView checks the keyboard each time the app comes back from Settings; the guide checks each second.
+        // Each step moves on by itself once it sees its part done. Order in the list never holds a step.
         .onChange(of: setup.state) { _, state in
             if step == .keyboard, state != .notAdded, !checked { Task { await complete(.keyboard) } }
+            if step == .makeDefault, state.isOn, !checked { Task { await complete(.makeDefault) } }
         }
     }
 
@@ -97,7 +100,9 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
                 // The signature two-tone headline: the step in ink, what it does in ink 2.
                 twoTone(title.hasSuffix(".") ? title : title + ".", line)
-                    .font(step == .start ? Theme.Font.headline : Theme.Font.title).tracking(-0.3)
+                    // With the try-it keyboard up, a smaller title keeps the steps in view.
+                    .font(step == .start ? Theme.Font.headline : step == .makeDefault && keyboardUp ? Theme.Font.sans(20, 400) : Theme.Font.title)
+                    .tracking(-0.3)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("onboarding.title")
                 if step == .keyboard { keyboardSteps }
@@ -134,6 +139,8 @@ struct OnboardingView: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, Theme.Space.s)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.Color.bg.ignoresSafeArea())
     }
@@ -164,7 +171,11 @@ struct OnboardingView: View {
     }
 
     private var keyboardSteps: some View {
-        NumberedSteps(lines: ["Tap Keyboards.", "Turn on \(AppConfig.keyboardName).", "Turn on Allow Full Access."])
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            NumberedSteps(lines: KeyboardState.settingsSteps)
+            Text(KeyboardState.settingsFallback).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder private var actions: some View {
@@ -193,11 +204,11 @@ struct OnboardingView: View {
                         .buttonStyle(PrimaryButton())
                         .accessibilityIdentifier("onboarding.default.next")
                 }
-                // Not first is a hint, never a blocker: the keyboard works, so Next stays one tap away.
-                if setup.state == .notFirst {
-                    quietButton("Next") { Task { await complete(.makeDefault) } }
-                        .accessibilityIdentifier("onboarding.default.next")
-                } else {
+                // iOS tells the app about Full Access only once the keyboard opens. If it never does, the owner's word goes on.
+                if setup.state == .needsFullAccess {
+                    quietButton("It's done") { setup.ownerSaysDone() }
+                        .accessibilityIdentifier("onboarding.default.done")
+                } else if !setup.state.isOn {
                     quietButton("Not now") { Task { await advance(from: .makeDefault) } }
                         .accessibilityIdentifier("onboarding.default.later")
                 }
@@ -283,7 +294,7 @@ struct OnboardingView: View {
     private func next(after done: Step) -> Step? {
         switch done {
         case .intro: Self.keyboardStep
-        case .keyboard: .makeDefault
+        case .keyboard: KeyboardSetup.shared.state.isOn ? Self.afterKeyboard : .makeDefault
         case .makeDefault: Self.afterKeyboard
         case .calendar: .start
         case .start: .paypal
@@ -295,8 +306,14 @@ struct OnboardingView: View {
     /// The calendar step shows only while Calendar or Reminders has never been asked.
     @MainActor static var afterKeyboard: Step { CalendarModel.shared.neverAsked ? .calendar : .start }
 
-    /// The default step always shows once the keyboard is added: iOS cannot tell the app the keyboard's place in the list.
-    @MainActor static var keyboardStep: Step { KeyboardSetup.shared.state == .notAdded ? .keyboard : .makeDefault }
+    /// Added but not seen with Full Access yet: the finish step. Already on: past both keyboard steps.
+    @MainActor static var keyboardStep: Step {
+        switch KeyboardSetup.shared.state {
+        case .notAdded: .keyboard
+        case .needsFullAccess: .makeDefault
+        case .notFirst, .ready: afterKeyboard
+        }
+    }
 }
 
 /// One dot per step. The current one is a longer pill.
@@ -379,7 +396,7 @@ struct EnableKeyboardSteps: View {
             // No step number here: the guide numbers its own steps.
             Card {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    Text(setup.state == .ready ? "Make it your default" : setup.state.homeTitle)
+                    Text(setup.state.homeTitle)
                         .font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
                     if setup.state == .needsFullAccess {
                         Text(KeyboardState.finishSetupLine).font(Theme.Font.body).foregroundStyle(Theme.Color.text2)
@@ -387,6 +404,11 @@ struct EnableKeyboardSteps: View {
                     }
                     KeyboardDefaultGuide()
                     OpenSettingsButton()
+                    if setup.state == .needsFullAccess {
+                        Button("It's done") { setup.ownerSaysDone() }
+                            .buttonStyle(QuietButton())
+                            .accessibilityIdentifier("keyboard.done")
+                    }
                 }
             }
             StepCard(number: 3, title: "Optional: skip the paste prompt") {

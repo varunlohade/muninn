@@ -60,7 +60,7 @@ final class AppearanceShots: XCTestCase {
             id(app, "onboarding.later").tap()
         }
         // A phone that has the keyboard already gets the make-default step instead.
-        for later in ["onboarding.default.later", "onboarding.default.next"] where id(app, later).waitForExistence(timeout: 2) {
+        for later in ["onboarding.default.later", "onboarding.default.done", "onboarding.default.next"] where id(app, later).waitForExistence(timeout: 2) {
             shot("03b-onboarding-make-default")
             id(app, later).tap()
             break
