@@ -1,6 +1,6 @@
 import type { Cipher } from './crypto.ts';
 import { randomToken, sha256 } from './crypto.ts';
-import type { Db } from './db.ts';
+import type { Db, InvoiceRow } from './db.ts';
 import type { PayPal } from './paypal.ts';
 import { centsToValue } from './money.ts';
 
@@ -122,6 +122,64 @@ export async function seedDemo(o: { db: Db; cipher: Cipher; paypal: PayPal; user
       db.setInvoiceStatus(userId, row.id, 'MARKED_AS_PAID', paidAt, null);
       out.recorded++;
     }
+  }
+  return out;
+}
+
+// --history: six full months and this month so far of recorded payments, a rising trend with noise, for the chart's
+// projection. Demo user only: onNewUser never calls this, so a new user starts without it. Local rows only (no PayPal
+// invoice exists), so nothing here can be reminded, taken back or refunded through PayPal.
+export const HISTORY_MONTHS = 6;
+// Each month's refunded sale, by months before this one: the first sale of that month, refunded in full.
+const HISTORY_REFUNDS = [4, 2];
+const pick = (key: string) => parseInt(sha256(key).slice(0, 8), 16) / 2 ** 32;
+
+export type HistoryResult = { created: number; reused: number; refunds: number };
+
+export function seedDemoHistory(o: { db: Db; cipher: Cipher; userId: string; now: number }): HistoryResult {
+  const { db, cipher, userId, now } = o;
+  const out: HistoryResult = { created: 0, reused: 0, refunds: 0 };
+  const today = startOfDay(now);
+  const d = new Date(now);
+  const clients = Object.keys(CLIENTS) as (keyof typeof CLIENTS)[];
+  for (let back = HISTORY_MONTHS; back >= 0; back--) {
+    const first = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - back, 1);
+    const month = ymd(first).slice(0, 7);
+    // About $2,000 six months ago, rising to about $3,500 last month, give or take 10%.
+    const target = Math.round((2000 + 300 * (HISTORY_MONTHS - back)) * (0.9 + 0.2 * pick(`${month}:target`))) * 100;
+    let sum = 0;
+    for (let n = 0; n < 80 && target - sum >= 3500; n++) {
+      const key = `hist-${month}-${n}`;
+      const item = DEMO_CATALOG[Math.floor(pick(`${key}:item`) * DEMO_CATALOG.length)];
+      const cents = item.price * 100;
+      if (sum + cents > target) continue;
+      sum += cents;
+      const paidAt = first + Math.floor(pick(`${key}:day`) * 27) * DAY + 15 * 3600_000;
+      // This month: only the days already gone.
+      if (paidAt >= today) continue;
+      if (db.invoiceBySeedKey(userId, key)) { out.reused++; continue; }
+      const [name, email] = CLIENTS[clients[Math.floor(pick(`${key}:client`) * clients.length)]];
+      const id = `DEMO-HIST-${sha256(`${DEMO_REFERENCE}:${userId}:${key}`).slice(0, 16).toUpperCase()}`;
+      const created = paidAt - Math.floor(pick(`${key}:wait`) * 4) * DAY;
+      db.insertInvoice({
+        id, user_id: userId, status: 'MARKED_AS_PAID', amount_cents: cents, currency: 'USD', item: item.name,
+        client_name_enc: cipher.encrypt(userId, name), client_email_enc: cipher.encrypt(userId, email), pay_link: null,
+        due_at: created + 8 * DAY, created_at: created, source: 'demo_seed', seed_key: key,
+      });
+      db.setInvoiceStatus(userId, id, 'MARKED_AS_PAID', paidAt, null);
+      out.created++;
+    }
+  }
+  for (const back of HISTORY_REFUNDS) {
+    const month = ymd(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - back, 1)).slice(0, 7);
+    const inv = db.raw.prepare(`SELECT * FROM invoices WHERE user_id = ? AND seed_key LIKE ? ORDER BY paid_at LIMIT 1`).get(userId, `hist-${month}-%`) as InvoiceRow | undefined;
+    if (!inv || db.refundState(userId, inv.id).doneCents > 0) continue;
+    db.insertRefund({
+      id: `${inv.id}-R`, user_id: userId, target_kind: 'invoice', target_id: inv.id, amount_cents: inv.amount_cents, currency: 'USD',
+      capture_id: 'recorded_payment', token_hash: sha256(`${DEMO_REFERENCE}:refund:${inv.id}`), expires_at: 0, status: 'done',
+    });
+    db.raw.prepare('UPDATE refunds SET created_at = ? WHERE id = ?').run(inv.paid_at! + 3 * DAY, `${inv.id}-R`);
+    out.refunds++;
   }
   return out;
 }

@@ -4,6 +4,8 @@ import { buildChart, monthStart, monthWindows, project, projectRange, zoneOr } f
 import { chartAsk } from '../src/quick.ts';
 import type { PayPalTxn } from '../src/paypal.ts';
 import { setup } from './helpers.ts';
+import { ensureDemoUser, seedDemo, seedDemoHistory } from '../src/seed.ts';
+import { sha256 } from '../src/crypto.ts';
 
 // 2026-11-12 10:00 UTC: November is the month so far; October is the last full month.
 const AT = Date.UTC(2026, 10, 12, 10);
@@ -304,4 +306,38 @@ test('/v1/chart: estimate months carry low and high strings; actual months do no
   assert.ok(Number(est[1].high) - Number(est[1].low) > Number(est[0].high) - Number(est[0].low));
   for (const m of c.months.filter((m: any) => m.kind !== 'estimate')) assert.equal(m.low, undefined);
   assert.deepEqual(c.projection.range, { level: 0.8, method: 'residual_sd' });
+});
+
+test('demo history: the demo user gets six months and a range; a new signup, even with the demo seed, gets none', async () => {
+  const seeds: Promise<unknown>[] = [];
+  const s: ReturnType<typeof setup> = setup({
+    now: () => AT,
+    onNewUser: (userId) => seeds.push(seedDemo({ db: s.db, cipher: s.cipher, paypal: s.mockPayPal, userId, now: AT })),
+  });
+  const demo = ensureDemoUser(s.db);
+  const first = seedDemoHistory({ db: s.db, cipher: s.cipher, userId: demo.userId, now: AT });
+  assert.ok(first.created > 40 && first.refunds === 2, JSON.stringify(first));
+  assert.deepEqual(seedDemoHistory({ db: s.db, cipher: s.cipher, userId: demo.userId, now: AT }), { created: 0, reused: first.created, refunds: 0 });
+
+  const c = await (await s.call(demo.token, 'GET', '/v1/chart')).json();
+  assert.equal(c.enough_history, true);
+  assert.equal(c.projection.based_on_months, 6);
+  const actual = c.months.filter((m: any) => m.kind === 'actual').map((m: any) => Number(m.value));
+  assert.ok(actual.every((v: number) => v >= 1500 && v <= 4000), JSON.stringify(actual));
+  assert.ok(actual[5] > actual[0]);
+  const est = c.months.filter((m: any) => m.kind === 'estimate');
+  assert.equal(est.length, 3);
+  for (const m of est) assert.ok(Number(m.low) <= Number(m.value) && Number(m.value) <= Number(m.high), JSON.stringify(m));
+
+  const r = await s.call(null, 'POST', '/v1/auth/email/signup', { email: 'new.owner@example.com', password: 'a long enough password 42' });
+  assert.equal(r.status, 200);
+  const { device_token } = await r.json();
+  await Promise.all(seeds);
+  assert.equal(seeds.length, 1, 'the per-user demo seed ran');
+  const fresh = await (await s.call(device_token, 'GET', '/v1/chart')).json();
+  assert.equal(fresh.enough_history, false);
+  assert.equal(fresh.projection, null);
+  assert.ok(fresh.months.filter((m: any) => m.kind === 'actual').every((m: any) => m.value === '0.00'));
+  const userId = s.db.userForTokenHash(sha256(device_token))!;
+  assert.equal((s.db.raw.prepare("SELECT COUNT(*) AS n FROM invoices WHERE user_id = ? AND seed_key LIKE 'hist-%'").get(userId) as { n: number }).n, 0);
 });
