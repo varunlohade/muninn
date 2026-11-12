@@ -16,6 +16,7 @@ struct OnboardingView: View {
     @State private var business = ""
     @State private var checked = false
     @State private var busy = false
+    @State private var keyboardUp = false
     @ObservedObject private var paypal = PayPalConnector.shared
     #if DEBUG
     @State private var showDevPairing = false
@@ -99,7 +100,9 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
                 // The signature two-tone headline: the step in ink, what it does in ink 2.
                 twoTone(title.hasSuffix(".") ? title : title + ".", line)
-                    .font(step == .start ? Theme.Font.headline : Theme.Font.title).tracking(-0.3)
+                    // With the try-it keyboard up, a smaller title keeps the steps in view.
+                    .font(step == .start ? Theme.Font.headline : step == .makeDefault && keyboardUp ? Theme.Font.sans(20, 400) : Theme.Font.title)
+                    .tracking(-0.3)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("onboarding.title")
                 if step == .keyboard { keyboardSteps }
@@ -136,6 +139,8 @@ struct OnboardingView: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, Theme.Space.s)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.Color.bg.ignoresSafeArea())
     }
@@ -166,7 +171,11 @@ struct OnboardingView: View {
     }
 
     private var keyboardSteps: some View {
-        NumberedSteps(lines: KeyboardState.settingsSteps)
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            NumberedSteps(lines: KeyboardState.settingsSteps)
+            Text(KeyboardState.settingsFallback).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder private var actions: some View {

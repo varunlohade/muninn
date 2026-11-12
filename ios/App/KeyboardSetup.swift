@@ -29,6 +29,9 @@ enum KeyboardState: Equatable {
     /// The two switches on the page that `UIApplication.openSettingsURLString` opens.
     static let settingsSteps = ["Tap Keyboards.", "Turn on \(AppConfig.keyboardName).", "Turn on Allow Full Access."]
 
+    /// The settings URL usually opens the app's own page. If it opens the main page, this is the path.
+    static let settingsFallback = "If Settings opens on its main page: Apps › \(AppConfig.displayName)."
+
     static let finishSetupLine = "Turn on Allow Full Access, then switch to \(AppConfig.displayName) once"
 
     /// Under the try-it field while the app waits for the keyboard's heartbeat.
@@ -99,6 +102,8 @@ struct KeyboardDefaultGuide: View {
                 if i > 0 { DashedLine() }
                 NumberedLine(number: i + 1, text: text)
             }
+            Text(KeyboardState.settingsFallback).font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                .fixedSize(horizontal: false, vertical: true)
             Group {
                 if setup.state.isOn {
                     Label("\(AppConfig.displayName) is on", systemImage: "checkmark.circle.fill")

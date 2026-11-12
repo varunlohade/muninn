@@ -62,6 +62,7 @@ final class KeyboardSetupTests: XCTestCase {
         XCTAssertNil(KeyboardState.ready.settingsButton)
         XCTAssertEqual(KeyboardState.settingsSteps, ["Tap Keyboards.", "Turn on Muninn Keyboard.", "Turn on Allow Full Access."])
         XCTAssertFalse(KeyboardState.settingsSteps.joined().contains("top"))
+        XCTAssertEqual(KeyboardState.settingsFallback, "If Settings opens on its main page: Apps › Muninn.")
     }
 
     /// The bug in build 7: the keyboard never opened, so no heartbeat came and setup asked forever.
