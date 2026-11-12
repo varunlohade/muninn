@@ -39,6 +39,19 @@ final class WalkthroughTests: XCTestCase {
         return out
     }
 
+    /// How many AI calls the fake server has seen. The paste's own suggest call must finish before the next answer is set,
+    /// or it takes the answer meant for the last key.
+    private func aiCalls() -> Int {
+        let data = fakeCall("GET", "_log")
+        return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["ai"].flatMap { $0 as? [Any] }?.count ?? 0
+    }
+
+    private func waitForAICalls(above count: Int) {
+        let deadline = Date().addingTimeInterval(6)
+        while aiCalls() <= count, Date() < deadline { Thread.sleep(forTimeInterval: 0.25) }
+        Thread.sleep(forTimeInterval: 0.4)
+    }
+
     private func next(_ json: String) { fakeCall("POST", "_next", json) }
 
     /// Rewrite, Notes and Catalog sit behind the bar's "…" slot; this opens it first when the button is hidden.
@@ -93,9 +106,10 @@ final class WalkthroughTests: XCTestCase {
         let paste = label(messages, "label == %@", "Paste")
         if !paste.waitForExistence(timeout: 2) { field.tap(); field.press(forDuration: 1.2) }
         XCTAssertTrue(paste.waitForExistence(timeout: 3), messages.debugDescription)
+        let before = aiCalls()
         paste.tap()
         // The paste makes its own suggest call; set the fake answer after it, for the call on the last key.
-        Thread.sleep(forTimeInterval: 2)
+        waitForAICalls(above: before)
         if let answer { next(answer) }
         typeKeys(String(text.last!))
     }
