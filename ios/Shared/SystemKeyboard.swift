@@ -154,8 +154,8 @@ struct SystemKeysView: View {
                         .accessibilityHidden(true)
                 }
                 TouchSurface(
-                    began: { id, pt in if let k = KeyboardGeometry.key(at: pt.offsetBy(M.barHeight - 6), in: keys) { model.touchBegan(id, k) } },
-                    moved: { id, pt in if let k = KeyboardGeometry.key(at: pt.offsetBy(M.barHeight - 6), in: keys) { model.touchMoved(id, k) } },
+                    began: { id, pt in if let k = KeyboardGeometry.key(at: pt.offsetBy(M.barHeight - 6), in: keys) { model.touchBegan(id, k, at: pt) } },
+                    moved: { id, pt in if let k = KeyboardGeometry.key(at: pt.offsetBy(M.barHeight - 6), in: keys) { model.touchMoved(id, k, at: pt) } },
                     ended: { id, _ in model.touchEnded(id) },
                     cancelled: { id in model.touchCancelled(id) }
                 )
@@ -183,7 +183,8 @@ struct KeyCapView: View {
         let isReturnAccent = key.kind == .ret && model.returnStyle.accent
         RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous)
             .fill(isReturnAccent ? palette.accent : pressed && !isChar ? palette.keyPressed : palette.key)
-            .overlay { label.foregroundStyle(isReturnAccent ? .white : palette.label) }
+            .overlay { label.foregroundStyle(isReturnAccent ? .white : palette.label).opacity(model.trackpad ? 0 : 1) }
+            .animation(.easeOut(duration: 0.15), value: model.trackpad)
             .opacity(hidden ? 0 : 1)
             .accessibilityElement()
             .accessibilityLabel(key.a11y)

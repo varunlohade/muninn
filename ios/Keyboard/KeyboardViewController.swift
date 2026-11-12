@@ -77,6 +77,7 @@ final class KeyboardViewController: UIInputViewController, TextHost {
     var enablesReturnKeyAutomatically: Bool { textDocumentProxy.enablesReturnKeyAutomatically ?? false }
     func insert(_ text: String) { textDocumentProxy.insertText(text) }
     func deleteBackward() { textDocumentProxy.deleteBackward() }
+    func adjustCursor(by offset: Int) { textDocumentProxy.adjustTextPosition(byCharacterOffset: offset) }
     func nextKeyboard() { advanceToNextInputMode() }
     func playClick() { UIDevice.current.playInputClick() }
 }

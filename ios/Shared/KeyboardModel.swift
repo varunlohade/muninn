@@ -14,6 +14,8 @@ protocol TextHost: AnyObject {
     var enablesReturnKeyAutomatically: Bool { get }
     func insert(_ text: String)
     func deleteBackward()
+    /// Moves the cursor by this many characters; negative is left.
+    func adjustCursor(by offset: Int)
     func nextKeyboard()
     func playClick()
 }
@@ -139,6 +141,8 @@ final class KeyboardModel: ObservableObject {
     @Published var isDark = false
     @Published var pressedKeys: Set<String> = []
     @Published var calloutKeyID: String?
+    /// The space bar is held: the finger moves the cursor and the key labels fade, like iOS.
+    @Published var trackpad = false
     @Published var returnStyle = ReturnStyle(.default)
     @Published var hasFullAccess = false
     @Published var paired = false
@@ -197,20 +201,32 @@ final class KeyboardModel: ObservableObject {
     private var lastShiftTap: Date?
     private var lastSpaceTap: Date?
     private var deleteTask: Task<Void, Never>?
+    private var points: [ObjectIdentifier: CGPoint] = [:]
+    private var spaceHold: Task<Void, Never>?
+    private var trackpadTouch: ObjectIdentifier?
+    private var trackpadX: CGFloat = 0
+    static let spaceHoldDelay: Duration = .milliseconds(400)
+    /// How far the finger moves for the cursor to move one character.
+    static let cursorStep: CGFloat = 9
 
     func display(_ c: String) -> String { layout == .letters && shift != .off ? c.uppercased() : c }
 
-    func touchBegan(_ id: ObjectIdentifier, _ key: KeyCap) {
+    func touchBegan(_ id: ObjectIdentifier, _ key: KeyCap, at point: CGPoint = .zero) {
+        guard trackpadTouch == nil else { return }
         host?.playClick()
         // A new touch commits any letter still held by another finger, like iOS.
         for (other, k) in active where other != id { if case .char = k.kind { commit(k); release(other) } }
         active[id] = key
         pressedKeys.insert(key.id)
         if case .char = key.kind { calloutKeyID = key.id }
+        points[id] = point
         if key.kind == .delete { deleteDown() }
+        if key.kind == .space { holdSpace(id) }
     }
 
-    func touchMoved(_ id: ObjectIdentifier, _ key: KeyCap) {
+    func touchMoved(_ id: ObjectIdentifier, _ key: KeyCap, at point: CGPoint = .zero) {
+        points[id] = point
+        if trackpadTouch == id { moveCursor(to: point.x); return }
         guard let current = active[id], current.id != key.id, case .char = current.kind, case .char = key.kind else { return }
         pressedKeys.remove(current.id)
         active[id] = key
@@ -221,6 +237,7 @@ final class KeyboardModel: ObservableObject {
     func touchEnded(_ id: ObjectIdentifier) {
         guard let key = active[id] else { return }
         release(id)
+        if trackpadTouch == id { endTrackpad(); return }
         if key.kind == .delete { deleteTask?.cancel(); return }
         commit(key)
     }
@@ -228,6 +245,34 @@ final class KeyboardModel: ObservableObject {
     func touchCancelled(_ id: ObjectIdentifier) {
         if active[id]?.kind == .delete { deleteTask?.cancel() }
         release(id)
+        if trackpadTouch == id { endTrackpad() }
+    }
+
+    /// Holding space turns the keys into a trackpad. Letting go types no space.
+    private func holdSpace(_ id: ObjectIdentifier) {
+        spaceHold?.cancel()
+        let sleep = deps.sleep
+        spaceHold = Task { [weak self] in
+            try? await sleep(Self.spaceHoldDelay)
+            guard let self, !Task.isCancelled, self.active[id]?.kind == .space else { return }
+            self.trackpadTouch = id
+            self.trackpadX = self.points[id]?.x ?? 0
+            self.trackpad = true
+        }
+    }
+
+    private func moveCursor(to x: CGFloat) {
+        let steps = Int((x - trackpadX) / Self.cursorStep)
+        guard steps != 0 else { return }
+        host?.adjustCursor(by: steps)
+        trackpadX += CGFloat(steps) * Self.cursorStep
+    }
+
+    private func endTrackpad() {
+        trackpadTouch = nil
+        trackpad = false
+        lastSpaceTap = nil
+        afterEdit()
     }
 
     /// VoiceOver activation and tests without touches.
@@ -238,6 +283,8 @@ final class KeyboardModel: ObservableObject {
     }
 
     private func release(_ id: ObjectIdentifier) {
+        points[id] = nil
+        if active[id]?.kind == .space { spaceHold?.cancel() }
         if let k = active.removeValue(forKey: id) {
             pressedKeys.remove(k.id)
             if calloutKeyID == k.id { calloutKeyID = nil }
@@ -396,6 +443,9 @@ final class KeyboardModel: ObservableObject {
     }
 
     func keyboardDisappeared() {
+        spaceHold?.cancel()
+        trackpadTouch = nil
+        trackpad = false
         notesOpen = false
         whoPaid = nil
         resetWriting()

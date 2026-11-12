@@ -14,6 +14,9 @@ final class FakeHost: TextHost {
     var contextBeforeInput: String? { text }
     func insert(_ s: String) { text += s }
     func deleteBackward() { if !text.isEmpty { text.removeLast() } }
+    /// Each cursor move, in order. The cursor itself stays at the end of `text`.
+    private(set) var cursorMoves: [Int] = []
+    func adjustCursor(by offset: Int) { cursorMoves.append(offset) }
     func nextKeyboard() {}
     func playClick() {}
 }

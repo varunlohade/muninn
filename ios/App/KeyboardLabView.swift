@@ -50,5 +50,6 @@ final class LabHost: ObservableObject, TextHost {
     func playClick() {}
     func insert(_ s: String) { text += s }
     func deleteBackward() { if !text.isEmpty { text.removeLast() } }
+    func adjustCursor(by offset: Int) {}
     func nextKeyboard() {}
 }
