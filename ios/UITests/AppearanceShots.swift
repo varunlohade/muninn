@@ -74,6 +74,8 @@ final class AppearanceShots: XCTestCase {
         shot("02-onboarding-dev-pairing")
         app.buttons["Pair"].tap()
         if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
+        // The business question follows the PayPal step; these runs leave it for later.
+        if id(app, "onboarding.business.later").waitForExistence(timeout: 5) { id(app, "onboarding.business.later").tap() }
         dismissPrompts(app)
 
         XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15), app.debugDescription)

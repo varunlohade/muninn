@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 @main
@@ -27,14 +28,23 @@ final class Session: ObservableObject {
     @Published var notice: String?
     /// Goes up when the account behind the app changes, so Home loads again.
     @Published var account = 0
+    /// After a log out, onboarding opens on the sign-in step, not the intro.
+    @Published var signInNext = false
+    /// Goes up on each log out or delete.
+    @Published var logouts = 0
+    var signingOut = false
+    private var rejected: AnyCancellable?
+
+    init() {
+        rejected = NotificationCenter.default.publisher(for: APIClient.tokenRejected)
+            .compactMap { $0.userInfo?["token"] as? String }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] token in Task { await self?.tokenRejected(token) } }
+    }
 
     /// "Get started": the server makes a device account and returns its token. No sign-in, and the token never shows on screen.
     func getStarted() async -> Bool {
-        var server = SharedStore.serverURL
-        #if DEBUG
-        // UI tests point a fresh install at the fake server: "-serverURL http://127.0.0.1:8799".
-        if let test = UserDefaults.standard.string(forKey: "serverURL") { server = test }
-        #endif
+        let server = signInServer
         do {
             return save(token: try await APIClient.deviceSignIn(baseURL: server, deviceID: SharedStore.deviceID), server: server)
         } catch APIError.http(429, _) {
@@ -45,6 +55,16 @@ final class Session: ObservableObject {
             self.error = "Cannot reach \(AppConfig.displayName). Check your connection and try again."
         }
         return false
+    }
+
+    /// The server a new sign-in talks to.
+    var signInServer: String {
+        var server = SharedStore.serverURL
+        #if DEBUG
+        // UI tests point a fresh install at the fake server: "-serverURL http://127.0.0.1:8799".
+        if let test = UserDefaults.standard.string(forKey: "serverURL") { server = test }
+        #endif
+        return server
     }
 
     /// What the owner reads after "Continue with Apple". A recovered account says so.
@@ -90,7 +110,7 @@ final class Session: ObservableObject {
     #endif
 
     /// Writes the token to the shared Keychain and reads it back. A failed write shows an error; it never passes silently.
-    private func save(token: String, server: String) -> Bool {
+    func save(token: String, server: String) -> Bool {
         SharedStore.serverURL = server
         let status = SharedStore.setDeviceToken(token)
         guard status == errSecSuccess, SharedStore.deviceToken == token else {
@@ -144,6 +164,8 @@ struct RootView: View {
             }
             .background(Theme.Color.bg.ignoresSafeArea())
         }
+        // A log out starts a new stack, so no screen of the last user stays pushed.
+        .id(session.logouts)
         // Back from Settings: onboarding and Home see the new keyboard state at once.
         .onChange(of: scenePhase) { _, phase in if phase == .active { KeyboardSetup.shared.refresh() } }
     }

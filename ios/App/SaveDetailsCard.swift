@@ -9,6 +9,8 @@ struct SaveDetailsCard: View {
     @EnvironmentObject var session: Session
     @Environment(\.colorScheme) private var colorScheme
     @State private var nonce = ""
+    /// The server's one-time nonce, fetched ahead: Apple's request must be built at once on the tap.
+    @State private var serverNonce: String?
     @State private var busy = false
     @State private var error: String?
 
@@ -24,9 +26,10 @@ struct SaveDetailsCard: View {
                 }
                 SignInWithAppleButton(.continue) { request in
                     error = nil
-                    nonce = Self.randomNonce()
+                    nonce = serverNonce ?? AppleNonce.random()
+                    serverNonce = nil
                     request.requestedScopes = []
-                    request.nonce = Self.sha256(nonce)
+                    request.nonce = AppleNonce.sha256(nonce)
                 } onCompletion: { result in
                     Task { await finished(result) }
                 }
@@ -43,6 +46,7 @@ struct SaveDetailsCard: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("save.card")
+        .task(id: serverNonce == nil) { if serverNonce == nil { serverNonce = await AppleNonce.fetch(baseURL: SharedStore.serverURL) } }
     }
 
     private func finished(_ result: Result<ASAuthorization, Error>) async {
@@ -60,15 +64,5 @@ struct SaveDetailsCard: View {
             error = await session.linkApple(identityToken: token, nonce: nonce)
             busy = false
         }
-    }
-
-    private static func randomNonce() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        return Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-    }
-
-    private static func sha256(_ s: String) -> String {
-        SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }

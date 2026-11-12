@@ -60,6 +60,8 @@ struct VisualState: Equatable {
     var exporting = false
     /// "Play with voice" is on: each step's line is spoken while it draws.
     var voice = false
+    /// A chart or graph (the owner's numbers, or a graph of a formula). It has no voice: read-aloud feels off for a chart.
+    var chart = false
 
     enum Tool: String, Equatable { case hand, draw, eraser }
     /// A short line after a send, such as "Copied. Tap the message box and Paste, then send."
@@ -194,7 +196,7 @@ extension KeyboardModel {
             openBusinessChart(r)
         } else if case .chart(let subject, let scene, let question) = o {
             // Insert types "y = x^2" for a graph, or the data for a chart.
-            openVisual(subject: subject, summary: question.hasPrefix("graph ") ? subject : question, scene: scene, ask: question)
+            openVisual(subject: subject, summary: question.hasPrefix("graph ") ? subject : question, scene: scene, ask: question, chart: true)
         } else {
             explainPanel = .card(o)
         }
@@ -242,8 +244,8 @@ extension KeyboardModel {
     }
 
     /// The visual panel with a scene in hand (a chart read on the phone), or one the server draws for `ask`.
-    private func openVisual(subject: String, summary: String, scene: Data?, ask topic: String) {
-        explainPanel = .visual(VisualState(subject: subject, summary: summary, scene: scene))
+    private func openVisual(subject: String, summary: String, scene: Data?, ask topic: String, chart: Bool = false) {
+        explainPanel = .visual(VisualState(subject: subject, summary: summary, scene: scene, chart: chart))
         visualTask?.cancel()
         if let scene { visualPage?.play(scene); return }
         visualTask = Task { [weak self] in
@@ -263,9 +265,10 @@ extension KeyboardModel {
     /// A chart of the owner's records: the payments list Muninn already keeps (GET /v1/payments, no PayPal call),
     /// drawn on the phone. Insert types the numbers as one line.
     private func openBusinessChart(_ r: BusinessChart.Request) {
-        explainPanel = .visual(VisualState(subject: r.subject, summary: r.subject))
+        explainPanel = .visual(VisualState(subject: r.subject, summary: r.subject, chart: true))
         visualTask?.cancel()
         let now = deps.now()
+        if case .projection(let back, let ahead) = r { return openProjection(back: back, ahead: ahead) }
         visualTask = Task { [weak self] in
             do {
                 guard let api = self?.deps.api() else { return }
@@ -285,6 +288,32 @@ extension KeyboardModel {
         }
     }
 
+    /// Money in by month from PayPal with a marked estimate (GET /v1/chart, read-only), drawn on the phone.
+    private func openProjection(back: Int, ahead: Int) {
+        visualTask = Task { [weak self] in
+            do {
+                guard let api = self?.deps.api() else { return }
+                let data = try await api.chart(back: back, ahead: ahead)
+                guard let self, !Task.isCancelled else { return }
+                let json = ChartScene.projection(data).json()
+                self.updateVisual { $0.scene = json; $0.summary = Self.summary(data) }
+                self.visualPage?.play(json)
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.updateVisual { $0.status = .failed("Could not load your PayPal sales. Try again.") }
+            }
+        }
+    }
+
+    /// "Money in by month (USD): Oct $3k, Nov $1k so far, Dec ~$4k estimate": what Insert types for a projection.
+    nonisolated static func summary(_ d: ChartData) -> String {
+        let months = d.months.map { m in
+            let v = ChartScene.shortMoney(Double(m.value) ?? 0, currency: d.currency)
+            return m.kind == "estimate" ? "\(m.label) ~\(v) estimate" : m.kind == "partial" ? "\(m.label) \(v) so far" : "\(m.label) \(v)"
+        }
+        return d.title + ": " + months.joined(separator: ", ")
+    }
+
     /// "Sales, last 7 days ($): Mon 0, Tue 45": what Insert types for a chart of the owner's records.
     static func summary(_ c: Chart.Request) -> String {
         guard case .data(_, let title, let items) = c else { return "" }
@@ -296,6 +325,13 @@ extension KeyboardModel {
     func visualPageReady(_ page: VisualPage) {
         visualPage = page
         if case .visual(let v) = explainPanel, let scene = v.scene { page.play(scene) }
+    }
+
+    /// The page's web process ended. While it reloads the panel says it is drawing; if it cannot come back, it says so.
+    func visualPageLost(retrying: Bool) {
+        visualPage = nil
+        if narration != nil { stopVoice() }
+        updateVisual { $0.status = retrying ? .loading : .failed("Could not draw that. Try again."); $0.sending = nil; $0.exporting = false }
     }
 
     func visualStep(_ n: Int, of m: Int, say: String? = nil) {
@@ -313,7 +349,7 @@ extension KeyboardModel {
     /// a second tap stops the voice at once. The audio is "ambient", so the silent switch mutes it.
     func toggleVoice() {
         host?.playClick()
-        guard case .visual(let v) = explainPanel else { return }
+        guard case .visual(let v) = explainPanel, !v.chart else { return }
         if v.voice { stopVoice(); return }
         let sync = NarrationSync(speaker: deps.speaker(), sleep: deps.sleep) { [weak self] in self?.visualPage?.next() }
         narration = sync

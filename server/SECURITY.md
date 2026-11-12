@@ -5,6 +5,9 @@
 - Integration config (one row per user and provider).
 - We do not store typed message text. `/v1/suggest` and `/v1/reply` read it, send it to the models, and drop it.
 - Device tokens: we store only a SHA-256 hash.
+- Account emails: encrypted with the user's key, plus a keyed hash (`lookupHash('email', email)`) for login lookups.
+- Passwords: scrypt (N=2^16, r=8, p=2, OWASP's setting, 64-byte key, 64 MB per hash). At most 2 hashes run at once, so the 512 MB server stays safe; others wait up to 10 s, then get 503 with Retry-After and their try back. Each password has a random 16-byte salt. A hash made with older settings is redone at the next good login. Never stored or logged in plain.
+- Stored action answers (the idempotency table) are encrypted with the user's key, because they can name a client.
 - Apple user ids (`sub`): we store only a keyed hash, `HMAC-SHA256(HKDF(DATA_ENCRYPTION_KEY, info = "pro-keyboard/index/v1"), sub)`. We ask Apple for no name and no email.
 
 ## How
@@ -22,8 +25,27 @@
 ## Sign in with Apple
 - `POST /v1/auth/apple` takes the identity token and the raw nonce. It is the only `/v1` route with no device token.
 - The server checks the RS256 signature against Apple's keys (`https://appleid.apple.com/auth/keys`, cached for a day), then `iss`, `aud` (`APPLE_BUNDLE_ID`, default `com.orseliyas.muninn`), `exp`, and that the token's `nonce` is the SHA-256 of the raw nonce.
+- `GET /v1/auth/apple/nonce` gives a random 256-bit nonce, `{"nonce", "expires_in_s": 600}`. The server stores only its SHA-256 and lets it be used once within 10 minutes. The app sends SHA-256(nonce) to Apple and the raw nonce to us. A used or expired nonce is refused. A nonce the server never gave out is refused when `APPLE_NONCE_REQUIRED=1`, or with `NODE_ENV=production` unless `APPLE_NONCE_REQUIRED=0`; otherwise (test and dev) the old app-made nonce still works.
 - Every failure returns the same `401 {"error":"unauthorized"}`. The reason goes only to the server log. The token never goes to the log.
 - A good token finds or creates the user and returns a new device token. The limit is 10 calls a minute per client IP.
+
+## Email + password
+- `POST /v1/auth/email/signup` and `POST /v1/auth/email/login` need no device token. `POST /v1/auth/email/link` adds an email to the signed-in account.
+- The server trims and lowercases the email. A new password needs 8 to 128 characters and must not be on the common-password list. On link, this check runs before the email is looked up.
+- Login gives the same `401 {"error":"wrong email or password"}` for an unknown email and a wrong password, after the same scrypt work.
+- Each try is counted before the password check, so parallel guesses cannot slip past the limits (`auth_failures` table, survives a restart, rows pruned after an hour).
+- One client address gets 5 tries per email in 15 minutes, then waits 15 minutes. Across all addresses an email gets 20 tries an hour; after that each try waits longer (1 s, 2 s, 4 s ... up to 5 minutes). A guesser cannot lock the owner out for long. A right password gives its try back. Emails with no account are limited the same way.
+- Limits: 10 calls a minute per client address on sign-up, login and link (link also per user).
+- Sign-up with an email that has an account: the right password signs in (no second account); a wrong one gets 409. So sign-up does tell whether an email has an account. That stays until email verification exists.
+- TODO: no email verification yet. Anyone can sign up with an address they do not own.
+
+## Accounts and sessions
+- One user can have an Apple account, an email + password, or both. `/v1/auth/apple/link` and `/v1/auth/email/link` add the other way in to the signed-in user. Each Apple id and each email belongs to at most one user (unique indexes).
+- We ask Apple for no email, so the server cannot match a new Apple sign-in to an email account. To join them, the person links while signed in.
+- New accounts (device, Apple and email together) are capped at 300 an hour across the server. The demo seed runs for at most 20 new users an hour; after that a new user starts empty.
+- Every sign-in makes a new 256-bit token. It expires after 90 days. Expired rows are deleted on the user's next sign-in.
+- `POST /v1/auth/logout` deletes the token's row, so it fails with 401 at once. `?all=1` deletes every token of the user.
+- `DELETE /v1/account` (with `X-User-Action: tap`) deletes, in one transaction, every row in every table with a `user_id` column, then the user. It does not revoke the seller's consent at PayPal.
 
 ## Per-user data
 - A device token maps to one `user_id`. One user can have several devices.
@@ -60,7 +82,9 @@
 5. **Replays and double taps.** Idempotency keys and PayPal-Request-Id stop duplicate invoices. Refund tokens work once.
 
 ## Known gaps
-- The rate limiter lives in memory, so it resets on restart and does not span instances.
+- Stored in plain: business name, tone, currency and review link (`profiles`); catalog item names, descriptions, categories and prices; invoice, order and subscription item names, amounts, pay links and PayPal ids; shared drawings (by design). Search, the chart and the models read item names, so encrypting them needs a wider change.
+- The rate limiter lives in memory, so it resets on restart and does not span instances. It keys IPv6 clients by /64. When it holds 10,000 keys it drops expired keys, then the oldest; it never clears all. The password-try counts live in SQLite instead.
+- The per-user key cache keeps at most 1,000 keys (least recently used goes first).
 - There is no key rotation yet. The `v1:` prefix leaves room for it.
 - CORS allows no origins by default. Set `CORS_ORIGINS` for a web client.
 - The server trusts `X-Forwarded-For` only with `TRUST_PROXY=1`, and then only the right-most hop. Behind Cloudflare (Render), set `CLIENT_IP_HEADER=cf-connecting-ip`, because there the right-most hop is the Cloudflare edge. Failed webhook checks count per IP. Verified events have their own budget.

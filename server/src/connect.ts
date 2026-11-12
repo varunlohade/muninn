@@ -4,14 +4,17 @@ import { config } from './config.ts';
 import { sha256, type Cipher } from './crypto.ts';
 import type { Db, PayPalConnectionRow } from './db.ts';
 import { log } from './log.ts';
+import { clean } from './text.ts';
 import type { PayPalProvider, Seller } from './paypal.ts';
 
 // Connect PayPal: Partner Referrals v2. The seller signs in on PayPal, grants this app's permissions, and comes back.
 // The tracking id is random per Connect tap, so it says nothing about the owner. Only its hash is stored.
+/** The business name a profile has until the owner or PayPal gives one. */
+export const DEFAULT_BUSINESS_NAME = 'my shop';
 const TRACKING = /^mu[0-9a-f]{32}$/;
 const MERCHANT = /^[A-Z0-9]{8,20}$/;
 const CODE = /^[0-9a-f]{48}$/;
-type Verified = { merchantId: string; email: string | null; receivable: boolean; confirmed: boolean };
+type Verified = { merchantId: string; email: string | null; receivable: boolean; confirmed: boolean; name?: string | null; currency?: string | null };
 const codeOf = async (c: Context) => {
   const b = await c.req.json().catch(() => null) as { code?: unknown } | null;
   return typeof b?.code === 'string' ? b.code : '';
@@ -44,7 +47,7 @@ export function mask(email: string | null, merchantId: string | null): string | 
   return merchantId ? `•••${merchantId.slice(-4)}` : null;
 }
 
-export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayPalProvider; now: () => number }) {
+export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayPalProvider; now: () => number; onChange?: (userId: string) => void }) {
   const { db, cipher, paypal, now } = deps;
   const connected = (userId: string) => {
     const r = db.getPayPalConnection(userId);
@@ -66,7 +69,7 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
     const st = await paypal.partner().merchantStatus(merchantId);
     if (!st || (st.trackingId !== null && sha256(st.trackingId) !== row.tracking_hash)) return 'failed';
     if (!st.permissionsGranted) return 'declined';
-    const v: Verified = { merchantId, email: st.primaryEmail, receivable: st.paymentsReceivable, confirmed: st.emailConfirmed };
+    const v: Verified = { merchantId, email: st.primaryEmail, receivable: st.paymentsReceivable, confirmed: st.emailConfirmed, name: st.legalName ?? null, currency: st.currency ?? null };
     const ok = db.verifyPayPalConnect(row.user_id, row.tracking_hash, cipher.encrypt(row.user_id, JSON.stringify(v)),
       code ? sha256(code) : null, code ? now() + config.paypal.connectCodeTtlMs : null);
     return ok ? 'verified' : 'failed';
@@ -142,6 +145,15 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
     });
     log('paypal_connect_finished', { user_id: userId, result: ok ? 'connected' : 'taken' });
     if (!ok) return c.json({ error: 'That PayPal account is already connected to another Muninn account.', result: 'taken' }, 409);
+    deps.onChange?.(userId);
+    // Sign in with PayPal fills the business name and currency from PayPal while the owner has not set a name
+    // (no profile yet, or still the default). A name the owner typed is never replaced.
+    const name = v.name ? clean(v.name).slice(0, 80) : '';
+    const p = db.getProfile(userId);
+    if (name && (!p || p.business_name === DEFAULT_BUSINESS_NAME)) {
+      const currency = v.currency && (config.money.currencies as readonly string[]).includes(v.currency) ? v.currency : p?.currency ?? 'USD';
+      db.putProfile(userId, { business_name: name, tone: p?.tone ?? 'friendly and short', currency });
+    }
     return c.json({ result: 'connected', account: label(userId) });
   });
 
@@ -169,6 +181,7 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
   routes.post('/v1/paypal/disconnect', (c) => {
     const userId = c.get('userId');
     const removed = db.removePayPalConnection(userId);
+    deps.onChange?.(userId);
     log('paypal_disconnected', { user_id: userId, removed });
     return c.json({ connected: false, demo: true });
   });
@@ -179,7 +192,7 @@ export function createPayPalConnect(deps: { db: Db; cipher: Cipher; paypal: PayP
     if (!merchantId) return false;
     if (type === 'MERCHANT.PARTNER-CONSENT.REVOKED') {
       const userId = db.removePayPalByMerchant(accountKey(cipher, merchantId));
-      if (userId) log('paypal_revoked', { user_id: userId });
+      if (userId) { log('paypal_revoked', { user_id: userId }); deps.onChange?.(userId); }
       return !!userId;
     }
     if (type === 'MERCHANT.ONBOARDING.COMPLETED') {

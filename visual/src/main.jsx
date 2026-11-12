@@ -61,8 +61,12 @@ function toElements(s, id) {
       return convertToExcalidrawElements([{
         ...base(id, s.color, WIDTH.shape), type: s.type === 'rect' ? 'rectangle' : 'ellipse', x: s.x, y: s.y, width: s.w, height: s.h,
         backgroundColor: fill ? ink(s.color) : 'transparent', fillStyle: fill ?? STYLE.fillStyle,
-        // A filled bar or swatch keeps square corners; an outlined box gets the soft corner.
-        roundness: s.type === 'rect' && !fill ? STYLE.roundness : null,
+        // A filled bar or swatch keeps square corners; an outlined box gets the soft corner. A dashed box (an estimate) stays square.
+        roundness: s.type === 'rect' && !fill && s.stroke !== 'dashed' ? STYLE.roundness : null,
+        strokeStyle: s.stroke === 'dashed' ? 'dashed' : 'solid',
+        // A range band: a pale fill with no edge, behind the estimate bars.
+        ...(s.stroke === 'none' ? { strokeColor: 'transparent' } : {}),
+        ...(typeof s.opacity === 'number' ? { opacity: s.opacity } : {}),
         ...(s.label ? { label: { text: s.label, fontSize: 18, fontFamily: fontFor({ size: 's' }), strokeColor: ink(s.color) } } : {}),
       }], { regenerateIds: false })
     }

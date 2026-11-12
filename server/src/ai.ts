@@ -2,22 +2,26 @@ import { z } from 'zod';
 import { config, ASK_GROUPS, ASK_ROUTES, INTENTS, type AskGroup, type AskRoute, type Intent, type Tone } from './config.ts';
 import { clean } from './text.ts';
 import { log } from './log.ts';
+import { catalogItemFor, vagueItem } from './search.ts';
 import { EXPLAIN_SYSTEM, ExplanationSchema, SceneSchema, VISUAL_SYSTEM, type Explanation, type Scene } from './explain.ts';
 
 export type Classification = { intent: Intent; confidence: number; ms: number };
 export type Extraction = {
   client_name: string | null; client_email: string | null; amount: number | null; currency: string | null; item: string | null;
+  /** How many of the item the client asks about ("5 screens"). Missing or null means one. */
+  quantity?: number | null;
 };
 export type Ai = {
-  classify(text: string): Promise<Classification>;
+  /** business: what the owner's business does, in the owner's words, or empty. */
+  classify(text: string, business?: string): Promise<Classification>;
   /** Ask router step 1: which group of functions the request belongs to. */
   askGroup(text: string): Promise<{ group: AskGroup; confidence: number }>;
   /** Ask router step 2: which function inside the group. */
   askRoute(text: string, group: Exclude<AskGroup, 'none'>): Promise<{ route: AskRoute; confidence: number }>;
   /** A sentence with no money signal: which on-phone action fits it, if any. One jev question. */
   deviceAction(text: string): Promise<{ kind: DeviceAction; confidence: number }>;
-  extract(text: string, catalog: string): Promise<Extraction>;
-  reply(text: string, profile: { business_name: string; tone: string }, catalog: string): Promise<string>;
+  extract(text: string, catalog: string, business?: string): Promise<Extraction>;
+  reply(text: string, profile: { business_name: string; tone: string; description?: string | null }, catalog: string): Promise<string>;
   brief(facts: string): Promise<string>;
   /** Same text with spelling and grammar fixed. */
   fix(text: string): Promise<string>;
@@ -53,12 +57,12 @@ const WRITER = 'You edit chat messages for a small business owner. The user mess
 
 
 const CRITERIA: Record<Intent, string> = {
-  create_invoice: 'The owner tells a client what they owe for a job or item, so the owner should send an invoice.',
+  create_invoice: 'The owner wants to bill or invoice a client for a job or item ("bill Sam for the cut", "bill Kowalski the retainer", "invoice ana@x.com $90"), tells a client what they owe, or the client asks for a bill or invoice.',
   pay_link: 'The owner wants to give the client a quick link to pay now, e.g. "send me a link", "how can I pay you".',
   payment_status: 'The owner asks or wonders whether someone has paid, who paid, or what is still owed.',
-  send_reminder: 'The owner wants to nudge a client about an unpaid or overdue invoice.',
+  send_reminder: 'The owner wants to remind, nudge or chase a client about an unpaid or overdue invoice or a job not paid yet ("remind Emma about last week\'s walks").',
   refund: 'The owner agrees to give a client money back or refund a payment.',
-  catalog_reply: 'A client asks about prices, services, products, or availability, and the owner should reply with the catalog.',
+  catalog_reply: 'A client asks what something costs (a price, rate, fee or quote, in any wording or language), or about services, products or availability, and the owner should reply with the price.',
   none: 'Ordinary chat with no payment, pricing or invoice action.',
 };
 
@@ -122,6 +126,7 @@ export const ExtractionSchema = z.object({
   }, z.number().finite().nullable()).catch(null),
   currency: z.preprocess(nullish, z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/).nullable()).catch(null),
   item: NullableString,
+  quantity: z.preprocess(nullish, z.coerce.number().int().min(1).max(100_000).nullable()).catch(null).optional(),
 });
 
 const cleaned = (max: number) => z.string().transform(clean).pipe(z.string().min(1).max(max));
@@ -182,6 +187,36 @@ export async function hedge<T>(
     run(0, primary);
     timer = setTimeout(startBackup, delayMs);
   });
+}
+
+/** " (the business, in the owner's words: barber shop)" for the jev and LLM prompts; empty when the owner has not said. */
+const aboutBusiness = (business?: string | null) => (business ? ` (the business, in the owner's words: ${business.slice(0, 300)})` : '');
+
+/** The owner's catalog as the prompts get it ("Haircut $30; Beard trim €15") back as names and prices. */
+export function catalogEntries(catalog: string): { name: string; price: number }[] {
+  return catalog.split('; ').map((e) => {
+    const at = e.lastIndexOf(' ');
+    return { name: e.slice(0, at).trim(), price: Number(e.slice(at + 1).replace(/[^\d.]/g, '')) };
+  }).filter((e) => e.name && Number.isFinite(e.price) && e.price > 0);
+}
+
+// A number in digits or words: with none in the text, any amount the model reads must come from the catalog.
+const SAYS_NUMBER = /\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|grand|dozen|half)\b/i;
+
+/**
+ * The model's reading checked against the owner's catalog: an item that names a catalog item takes its exact name,
+ * a word for the whole business ("cleaning") is no item, and with no number in the text an amount that is no
+ * catalog price (times the quantity) is dropped. The model never makes up a price.
+ */
+export function checkExtraction(ext: Extraction, text: string, catalog: string, business = ''): Extraction {
+  const entries = catalogEntries(catalog);
+  const names = entries.map((e) => e.name);
+  const named = catalogItemFor(ext.item, names, business);
+  const item = named ?? (vagueItem(ext.item, names, business) ? null : ext.item);
+  const qty = ext.quantity ?? 1;
+  const fromCatalog = (a: number) => entries.some((e) => Math.abs(e.price - a) < 0.005 || Math.abs(e.price * qty - a) < 0.005);
+  const amount = ext.amount !== null && !SAYS_NUMBER.test(text) && !fromCatalog(ext.amount) ? null : ext.amount;
+  return { ...ext, item, amount };
 }
 
 export function createAi(env: { typesafeKey: string; openrouterKey: string }): Ai {
@@ -270,10 +305,10 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
     explain: (text) => once('explain', EXPLAIN_SYSTEM, text, 400, ExplanationSchema),
     visual: (topic) => once('visual', VISUAL_SYSTEM, topic, 2500, SceneSchema),
 
-    async classify(text) {
+    async classify(text, business) {
       const t = performance.now();
       const { index, confidence } = await choose(text.slice(0, config.maxTextChars),
-        'A small business owner is typing this chat message. Which payment action fits it best?', INTENTS.map((k) => CRITERIA[k]));
+        `A small business owner${aboutBusiness(business)} is typing this chat message, or a short command to their assistant ("bill ...", "remind ..."). Which payment action fits it best?`, INTENTS.map((k) => CRITERIA[k]));
       return { intent: INTENTS[index] ?? 'none', confidence, ms: Math.round(performance.now() - t) };
     },
 
@@ -296,23 +331,31 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
       return { kind: DEVICE_ACTIONS[index] ?? 'none', confidence };
     },
 
-    async extract(text, catalog) {
+    async extract(text, catalog, business) {
       const messages = [
         {
           role: 'system',
           content: 'Extract payment details from a chat message a small business owner is writing to a client. ' +
             'Reply with one JSON object only, no prose: {"client_name": string|null, "client_email": string|null, ' +
-            '"amount": number|null, "currency": "USD"|"EUR"|"GBP"|"CAD"|"AUD"|null, "item": string|null}. ' +
-            'Use null for anything not stated. item is a short product or service name. ' +
-            'The message may start with "Client said:". If the client asks what they owe and no amount is stated, ' +
-            'use the price of the catalog item they mention, or of the only catalog item if there is just one. ' +
+            '"amount": number|null, "currency": "USD"|"EUR"|"GBP"|"CAD"|"AUD"|null, "item": string|null, "quantity": number|null}. ' +
+            'Use null for anything not stated. The message may start with "Client said:". ' +
+            'item: the one product or service the message is about. If the catalog has that same thing, copy its catalog name exactly. ' +
+            'If the catalog does not have it, use the client\'s own short words for it ("gift wrap", "rush delivery"). ' +
+            'Never put a different catalog item in its place, even a similar or more expensive one. ' +
+            'When the message asks about a product or service, item is never null, even when the catalog does not have it. ' +
+            'quantity: how many of the item, counted in the unit its price is for ("3 trims" is 3, "800 words" at a per-word price is 800, ' +
+            '"3 dozen" at a per-dozen price is 3). Pick the item whose unit is what the client counts: single units, not a bundle of them. ' +
+            'amount: a total written in the message. If none is written and the client asks to be billed or to pay, ' +
+            'use the catalog price of the item times the quantity, or of the only catalog item if there is just one. Never make up a price. ' +
+            (business ? `The owner's business: ${business}. Read a vague price question ("how much?", "a cut?", "5 pages?") as a question about ` +
+              'what this business sells. ' : '') +
             (catalog ? `The owner's catalog: ${catalog}` : ''),
         },
         { role: 'user', content: text.slice(0, config.maxTextChars) },
       ];
       // A result counts only once it parses, so a fast but broken answer does not win the race.
       const attempt = (m: Model) => async (signal: AbortSignal) =>
-        ExtractionSchema.parse(parseModelJson(await chatOnce(m, messages, 120, 'extract', signal)));
+        checkExtraction(ExtractionSchema.parse(parseModelJson(await chatOnce(m, messages, 120, 'extract', signal))), text, catalog, business);
       return hedge(attempt(config.llm.primary), attempt(config.llm.fallback), config.llm.hedgeMs);
     },
 
@@ -337,7 +380,7 @@ export function createAi(env: { typesafeKey: string; openrouterKey: string }): A
       const content = await chat([
         {
           role: 'system',
-          content: `You write chat replies for ${profile.business_name}, a small business. Tone: ${profile.tone}. ` +
+          content: `You write chat replies for ${profile.business_name}, a small business${aboutBusiness(profile.description)}. Tone: ${profile.tone}. ` +
             `Use only these items and prices; never invent prices: ${catalog || 'no catalog yet'}. ` +
             'Reply with the message text only, 1-3 short sentences.',
         },

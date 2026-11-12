@@ -13,6 +13,10 @@ struct IntegrationsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Metric.cardGap) {
                 Text("Integrations").font(Theme.Font.title).foregroundStyle(Theme.Color.text1).padding(.horizontal, Theme.Metric.margin)
+                NavigationLink { BusinessView() } label: { BusinessRow() }
+                    .buttonStyle(PressScale())
+                    .padding(.horizontal, Theme.Metric.cardInset)
+                    .accessibilityIdentifier("settings.business")
                 ForEach(items.filter { $0.status != "coming_soon" }) { i in
                     Group {
                         switch i.id {
@@ -84,8 +88,7 @@ struct IntegrationsView: View {
                     .frame(minHeight: Theme.Metric.iconButton).padding(.horizontal, Theme.Metric.margin)
                     .padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
                 #endif
-                Button("Unpair this device", role: .destructive) { session.unpair() }
-                    .font(Theme.Font.label).frame(minHeight: Theme.Metric.iconButton).padding(.horizontal, Theme.Metric.margin)
+                AccountSection().padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
             }
             .padding(.top, Theme.Space.xs)
             .padding(.bottom, Theme.Space.l)
@@ -169,7 +172,7 @@ struct IntegrationsView: View {
 }
 
 /// One setting screen: a title, plain help, then its content.
-private struct SettingPage<Content: View>: View {
+struct SettingPage<Content: View>: View {
     let title: String
     let help: String
     @ViewBuilder let content: Content

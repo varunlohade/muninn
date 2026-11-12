@@ -8,8 +8,11 @@ final class ClickInputView: UIInputView, UIInputViewAudioFeedback {
 }
 
 final class KeyboardViewController: UIInputViewController, TextHost {
-    private let model = KeyboardModel()
+    private var model = KeyboardModel()
     private var heightWatch: AnyCancellable?
+    private var hosting: UIHostingController<KeyboardView>?
+    /// The App Group's wipe count when this model was made. A log out in the app moves it on.
+    private var wipeGeneration = LocalWipe.generation
 
     override func loadView() {
         let v = ClickInputView(frame: .zero, inputViewStyle: .keyboard)
@@ -19,8 +22,15 @@ final class KeyboardViewController: UIInputViewController, TextHost {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        mount()
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (vc: KeyboardViewController, _) in vc.updateAppearance() }
+    }
+
+    /// Puts a KeyboardView for `model` in the input view.
+    private func mount() {
         model.host = self
         let hosting = UIHostingController(rootView: KeyboardView(model: model))
+        self.hosting = hosting
         hosting.view.translatesAutoresizingMaskIntoConstraints = false
         hosting.view.backgroundColor = .clear
         let height = hosting.view.heightAnchor.constraint(equalToConstant: Theme.SystemKeyboard.height)
@@ -42,11 +52,29 @@ final class KeyboardViewController: UIInputViewController, TextHost {
             self?.view.setNeedsLayout()
         }
         hosting.didMove(toParent: self)
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (vc: KeyboardViewController, _) in vc.updateAppearance() }
+    }
+
+    /// The app logged out since this keyboard last showed: drop the old model, with every client, chip and cache in it,
+    /// and this process's own caches, then start clean.
+    private func reset() {
+        model.keyboardDisappeared(saveTouches: false)
+        heightWatch = nil
+        if let old = hosting {
+            old.willMove(toParent: nil)
+            old.view.removeFromSuperview()
+            old.removeFromParent()
+        }
+        model = KeyboardModel()
+        mount()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        if LocalWipe.generation != wipeGeneration {
+            wipeGeneration = LocalWipe.generation
+            reset()
+            Task { await LocalWipe.process() }
+        }
         updateAppearance()
         keyHaptics = SharedStore.keyHaptics
         model.keyboardAppeared()
@@ -55,6 +83,12 @@ final class KeyboardViewController: UIInputViewController, TextHost {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         model.keyboardDisappeared()
+    }
+
+    /// A keyboard is killed near its memory limit, so on a warning it drops every cache that reloads by itself.
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        if Thread.isMainThread { model.releaseCaches() } else { DispatchQueue.main.async { [weak self] in self?.model.releaseCaches() } }
     }
 
     override func textDidChange(_ textInput: UITextInput?) {
