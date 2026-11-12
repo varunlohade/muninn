@@ -44,7 +44,7 @@ targets:
         DefaultServerURL: $(DEFAULT_SERVER_URL)
         DemoServerURL: $(DEMO_SERVER_URL)
         KeyboardName: $(KEYBOARD_DISPLAY_NAME)
-        UIAppFonts: [Urbanist-400.ttf, Urbanist-500.ttf, Urbanist-600.ttf, GeistMono-Medium.ttf]
+        UIAppFonts: [Figtree-Regular.ttf, Figtree-Medium.ttf, Figtree-SemiBold.ttf, Newsreader-Regular.ttf, IBMPlexMono-Regular.ttf]
         AppGroupID: $(APP_GROUP_ID)
         AppIdentifierPrefix: $(AppIdentifierPrefix)
         UILaunchScreen: {}
@@ -105,6 +105,8 @@ targets:
         KeyboardName: $(KEYBOARD_DISPLAY_NAME)
         AppGroupID: $(APP_GROUP_ID)
         AppIdentifierPrefix: $(AppIdentifierPrefix)
+        # The bar and panels use the app's type. The keys stay the system font.
+        UIAppFonts: [Figtree-Regular.ttf, Figtree-Medium.ttf, IBMPlexMono-Regular.ttf]
         NSCalendarsFullAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) reads today's appointments to suggest who to bill, and adds the events you type. They stay on this phone.
         NSCalendarsWriteOnlyAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) adds the events you type, such as "meeting with Ana tomorrow 3pm".
         NSRemindersFullAccessUsageDescription: $(PRODUCT_DISPLAY_NAME) adds the reminders you type, such as "call supplier at 5". They stay on this phone.

@@ -411,14 +411,14 @@ struct FieldStyle: ViewModifier {
     }
 }
 
+/// The main action: the tactile dark button.
 struct PrimaryButton: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Theme.Font.cardTitle)
-            .foregroundStyle(Theme.Color.bg)
-            .frame(maxWidth: .infinity, minHeight: Theme.Metric.primaryButton)
-            .background(Theme.Color.text1, in: Capsule())
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(Theme.Motion.press, value: configuration.isPressed)
-    }
+    func makeBody(configuration: Configuration) -> some View { TactileButton().makeBody(configuration: configuration) }
+}
+
+/// The second action: the quiet paper button.
+struct QuietButton: ButtonStyle {
+    var small = false
+    var wide = true
+    func makeBody(configuration: Configuration) -> some View { TactileButton(kind: .quiet, small: small, wide: wide).makeBody(configuration: configuration) }
 }

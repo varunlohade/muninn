@@ -263,7 +263,7 @@ struct HomeView: View {
                         } else if !keyboard.state.isOn {
                             Text("Make it your default keyboard").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
                         } else if let b = model.broughtBack {
-                            (Text("Brought back ") + Text(b.money).foregroundStyle(Theme.Color.paidInk).font(Theme.Font.urbanist(13, 600))
+                            (Text("Brought back ") + Text(b.money).foregroundStyle(Theme.Color.paidInk).font(Theme.Font.sans(13, 600))
                                 + Text(" from \(b.chats) chat\(b.chats == 1 ? "" : "s")"))
                                 .font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
                         } else {
@@ -729,8 +729,8 @@ struct AskChip: View {
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
-                Text(title).font(Theme.Font.urbanist(15, 600)).foregroundStyle(Theme.Color.text1)
-                if let detail { Text(detail).font(Theme.Font.urbanist(11, 500)).foregroundStyle(Theme.Color.text3) }
+                Text(title).font(Theme.Font.sans(15, 600)).foregroundStyle(Theme.Color.text1)
+                if let detail { Text(detail).font(Theme.Font.sans(11, 500)).foregroundStyle(Theme.Color.text3) }
             }
             .lineLimit(1)
             .padding(.horizontal, Theme.Space.m)

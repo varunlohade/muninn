@@ -27,7 +27,7 @@ struct UnpaidListView: View {
                         Text("\(c.item) \u{00B7} \(c.late)").font(Theme.Font.label)
                             .foregroundStyle(c.daysLate > 0 ? Theme.Color.due : Theme.Color.text2).lineLimit(1)
                         if c.veryLate {
-                            Text("Very late").font(Theme.Font.urbanist(11, 600)).foregroundStyle(Theme.Color.bg)
+                            Text("Very late").font(Theme.Font.sans(11, 600)).foregroundStyle(Theme.Color.bg)
                                 .padding(.horizontal, Theme.Space.xs).frame(height: 20)
                                 .background(Theme.Color.due, in: Capsule())
                                 .accessibilityIdentifier("unpaid.verylate.\(c.name)")

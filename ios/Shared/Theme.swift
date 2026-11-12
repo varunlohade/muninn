@@ -1,38 +1,63 @@
 import SwiftUI
 import UIKit
 
-/// All colors, type, sizes and motion. Tokens follow design/claude/NOTES.md, v3 section.
+/// All colors, type, sizes and motion. Tokens follow the cofounder-style redesign (STYLE.md, 2026-11-12):
+/// warm paper, white cards with hairline rings, tactile buttons, two-tone headlines and soft status pills.
 enum Theme {
     /// Each token has a light and a dark value and follows the system setting.
-    /// The dark values follow design/claude/NOTES.md, v3. The light values are Apple-like: near-white bed, grey cards, dark text.
-    /// The brand green and amber go a few shades deeper in light so text on them stays readable (≥ 4.5:1).
+    /// Light is the paper palette from STYLE.md. Dark keeps the same warmth on a near-black ground.
     enum Color {
-        static let bg = dynamic(light: 0xFAFAFB, dark: 0x0C0C0E)
-        static let card = dynamic(light: 0xF0F0F2, dark: 0x131315)
-        static let edge = dynamic(light: .black.withAlphaComponent(0.07), dark: .white.withAlphaComponent(0.06))
-        static let chipEdge = dynamic(light: .black.withAlphaComponent(0.10), dark: .white.withAlphaComponent(0.09))
-        static let button = dynamic(light: 0xE8E8EB, dark: 0x1C1C1F)
-        static let surface = dynamic(light: 0xF3F3F5, dark: 0x141416)
-        static let key = dynamic(light: 0xFFFFFF, dark: 0x2A2A2E)
+        /// The page: warm paper.
+        static let bg = dynamic(light: 0xF5F5F2, dark: 0x111110)
+        /// Cards: white on paper.
+        static let card = dynamic(light: 0xFFFFFF, dark: 0x1C1C1A)
+        /// Rows, chips and catalog items: one step warmer than a card.
+        static let surface = dynamic(light: 0xFBFBF8, dark: 0x191917)
+        /// The hairline ring that stands in for a border.
+        static let edge = dynamic(light: .black.withAlphaComponent(0.08), dark: .white.withAlphaComponent(0.09))
+        static let chipEdge = dynamic(light: .black.withAlphaComponent(0.10), dark: .white.withAlphaComponent(0.11))
+        /// Plain fills: icon circles, number badges, empty tracks.
+        static let button = dynamic(light: 0xEFEFEA, dark: 0x262624)
+        static let key = dynamic(light: 0xFFFFFF, dark: 0x2A2A28)
         static let keyFn = dynamic(light: 0xD5D7DC, dark: 0x1B1B1E)
         static let keyboardBed = dynamic(light: 0xE2E4E7, dark: 0x0F0F11)
-        static let hairline = dynamic(light: 0xDEDEE2, dark: 0x2A2A2E)
-        static let text1 = dynamic(light: 0x111113, dark: 0xF2F2F4)
-        static let text2 = dynamic(light: 0x55555D, dark: 0x9B9BA3)
-        static let text3 = dynamic(light: 0x606068, dark: 0x5F5F67)
-        static let cents = dynamic(light: 0x8C8C94, dark: 0x55555D)
-        static let tick = dynamic(light: 0xD6D6DB, dark: 0x2E2E33)
-        static let tickPayment = dynamic(light: 0x3A3A40, dark: 0xD9D9DE)
-        static let paid = dynamic(light: 0x276E48, dark: 0x86BFA0)
-        static let paidInk = dynamic(light: 0x24653F, dark: 0xB6E0C8)
-        static let paidSheet = SwiftUI.Color(hex: 0xB4D2BD)
-        static let paidChip = dynamic(light: 0xDDEFE3, dark: 0x1D2F25)
-        static let paidChipEdge = dynamic(light: UIColor(red: 39 / 255, green: 110 / 255, blue: 72 / 255, alpha: 0.30),
-                                          dark: UIColor(red: 160 / 255, green: 214 / 255, blue: 184 / 255, alpha: 0.22))
-        static let paidChipText = dynamic(light: 0x1B3A29, dark: 0xE6F5EC)
-        static let due = dynamic(light: 0x855913, dark: 0xD8A75E)
-        static let paper = SwiftUI.Color(hex: 0xECEAE4)
-        static let ink = SwiftUI.Color(hex: 0x1C1C1F)
+        static let hairline = dynamic(light: .black.withAlphaComponent(0.08), dark: .white.withAlphaComponent(0.10))
+        /// Dashed lines inside cards.
+        static let dash = dynamic(light: UIColor(red: 38 / 255, green: 35 / 255, blue: 35 / 255, alpha: 0.16), dark: .white.withAlphaComponent(0.14))
+        /// Ink: all primary text.
+        static let text1 = dynamic(light: 0x171717, dark: 0xF2F2EF)
+        /// Ink 2: the second half of a headline, labels, sub-lines.
+        static let text2 = dynamic(light: UIColor(red: 38 / 255, green: 35 / 255, blue: 35 / 255, alpha: 0.62), dark: .white.withAlphaComponent(0.62))
+        static let text3 = dynamic(light: UIColor(red: 38 / 255, green: 35 / 255, blue: 35 / 255, alpha: 0.46), dark: .white.withAlphaComponent(0.42))
+        static let cents = text3
+        static let tick = dynamic(light: 0xE3E3DD, dark: 0x2E2E2B)
+        static let tickPayment = dynamic(light: 0x3B3B3A, dark: 0xD9D9D4)
+        /// Status: Paid (green), Booked (blue), Needs your OK / late (amber).
+        static let paid = dynamic(light: 0x2C7A3A, dark: 0x8FD49A)
+        static let paidInk = paid
+        static let paidChip = dynamic(light: 0xE0F2DC, dark: 0x1D3322)
+        static let paidChipEdge = dynamic(light: UIColor(red: 44 / 255, green: 122 / 255, blue: 58 / 255, alpha: 0.22),
+                                          dark: UIColor(red: 143 / 255, green: 212 / 255, blue: 154 / 255, alpha: 0.22))
+        static let paidChipText = paid
+        static let booked = dynamic(light: 0x1D5FB8, dark: 0x8DB8F0)
+        static let bookedChip = dynamic(light: 0xDAE9FB, dark: 0x1B2A40)
+        static let due = dynamic(light: 0xA3591A, dark: 0xF0B072)
+        static let dueChip = dynamic(light: 0xFBEBD4, dark: 0x3A2A17)
+        /// Data bars: paid and still out.
+        static let barPaid = dynamic(light: 0xA6E39A, dark: 0x4E8F4A)
+        static let barOut = dynamic(light: 0xF7D49B, dark: 0x9A7238)
+        static let dotPaid = dynamic(light: 0x7DCB6E, dark: 0x6DB662)
+        static let dotOut = dynamic(light: 0xEFB95F, dark: 0xD99E45)
+        static let paidSheet = SwiftUI.Color(hex: 0xCDE8C6)
+        static let paper = SwiftUI.Color(hex: 0xF4F1EA)
+        static let ink = SwiftUI.Color(hex: 0x171717)
+        /// The tactile dark button. In dark mode it turns light, so it still stands out.
+        static let darkButton = dynamic(light: 0x3B3B3A, dark: 0xEDEDE8)
+        static let darkButtonText = dynamic(light: 0xFFFFFF, dark: 0x171717)
+        static let lightButton = dynamic(light: 0xF7F7F3, dark: 0x2A2A27)
+        static let quietButton = dynamic(light: 0xFBFBF8, dark: 0x22221F)
+        /// The dotted grid behind boards and the catalog panel.
+        static let dots = dynamic(light: UIColor(red: 38 / 255, green: 35 / 255, blue: 35 / 255, alpha: 0.13), dark: .white.withAlphaComponent(0.10))
 
         private static func dynamic(light: UInt32, dark: UInt32) -> SwiftUI.Color {
             dynamic(light: UIColor(hex: light), dark: UIColor(hex: dark))
@@ -42,23 +67,33 @@ enum Theme {
         }
     }
 
-    /// App type: Urbanist 400/500/600. Geist Mono only as printed type on paper.
+    /// Figtree 400/500/600 for all app type, Newsreader for the wordmark only, IBM Plex Mono for times and pills.
+    /// All three are SIL OFL 1.1 and ship in Shared/Fonts.
     enum Font {
-        static func urbanist(_ size: CGFloat, _ weight: Int = 500) -> SwiftUI.Font {
-            .custom(weight >= 600 ? "Urbanist-SemiBold" : weight >= 500 ? "Urbanist-Medium" : "Urbanist-Regular", size: size)
+        static func sans(_ size: CGFloat, _ weight: Int = 400) -> SwiftUI.Font {
+            .custom(weight >= 600 ? "Figtree-SemiBold" : weight >= 500 ? "Figtree-Medium" : "Figtree-Regular", size: size)
         }
-        static func paper(_ size: CGFloat) -> SwiftUI.Font { .custom("GeistMono-Medium", size: size) }
+        static func mono(_ size: CGFloat) -> SwiftUI.Font { .custom("IBMPlexMono-Regular", size: size) }
+        static func serif(_ size: CGFloat) -> SwiftUI.Font { .custom("Newsreader-Regular", size: size) }
+        /// Printed type on an invoice sheet.
+        static func paper(_ size: CGFloat) -> SwiftUI.Font { mono(size) }
 
-        static let appName = urbanist(24, 600)
-        static let hero = urbanist(44, 400).monospacedDigit()
-        static let heroSmall = urbanist(24, 400).monospacedDigit()
-        static let title = urbanist(24, 600)
-        static let cardTitle = urbanist(16, 600)
-        static let body = urbanist(16, 500)
-        static let section = urbanist(15, 500)
-        static let label = urbanist(13, 500)
-        static let axis = urbanist(11.5, 500)
-        static let count = urbanist(13, 600)
+        static let appName = serif(30)
+        static let hero = sans(42, 400).monospacedDigit()
+        static let heroSmall = sans(24, 400).monospacedDigit()
+        /// Big two-tone headlines on onboarding.
+        static let headline = sans(31, 400)
+        static let title = sans(27, 400)
+        static let cardTitle = sans(15, 500)
+        static let body = sans(16, 400)
+        static let section = sans(17, 500)
+        static let label = sans(13, 400)
+        static let axis = sans(11.5, 400)
+        static let count = sans(13, 500)
+        static let pill = mono(11.5)
+        static let time = mono(12)
+        static let button = sans(16, 500)
+        static let smallButton = sans(14, 500)
     }
 
     /// The keyboard copies the iOS 26 system keyboard (measured on the iPhone 17 Pro simulator, 402 pt wide).
@@ -124,7 +159,7 @@ enum Theme {
         static let predictionSmall = SwiftUI.Font.system(size: 12, weight: .regular)
     }
 
-    /// The keyboard extension ships no custom fonts, to stay light on memory.
+    /// The keys stay the system font. The bar and panels use Figtree, like the app.
     enum KeyboardFont {
         static let chipKey = SwiftUI.Font.system(size: 15, weight: .semibold)
         static let chipValue = SwiftUI.Font.system(size: 15, weight: .medium).monospacedDigit()
@@ -136,8 +171,8 @@ enum Theme {
     }
 
     enum Tracking {
-        static let appName: CGFloat = -0.4
-        static let hero: CGFloat = -1.6
+        static let appName: CGFloat = -0.2
+        static let hero: CGFloat = -1
         static let heroSmall: CGFloat = -0.6
     }
 
@@ -154,7 +189,10 @@ enum Theme {
     }
 
     enum Metric {
-        static let radius: CGFloat = 28
+        /// Cards 12, buttons 10, rows 8.
+        static let radius: CGFloat = 12
+        static let buttonRadius: CGFloat = 10
+        static let rowRadius: CGFloat = 8
         /// Side gutter for cards: 16 pt, 20 pt on phones 428 pt wide or more.
         static let cardInset: CGFloat = screenWidth >= 428 ? 20 : Space.m
         /// Text outside cards (titles, section headers, plain rows) sits one step in from the cards.
@@ -164,10 +202,10 @@ enum Theme {
         static let cardGap: CGFloat = Space.s
         static let sectionGap: CGFloat = Space.l
         static let iconButton: CGFloat = 44
-        static let rowHeight: CGFloat = 56
+        static let rowHeight: CGFloat = 54
         static let chipHeight: CGFloat = 44
-        static let primaryButton: CGFloat = 56
-        static let secondaryButton: CGFloat = 48
+        static let primaryButton: CGFloat = 52
+        static let secondaryButton: CGFloat = 44
         static let keyRadius: CGFloat = 7
         static let keyHeight: CGFloat = 43
         static let keyGap: CGFloat = 6

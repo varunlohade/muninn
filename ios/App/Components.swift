@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// v3 card: #131315, R28, 1 px white 6% edge, no shadow.
+/// A white card on paper: 12 pt corners, a hairline ring and a soft shadow.
 struct Card<Content: View>: View {
     var padding: CGFloat = Theme.Metric.cardPadding
     @ViewBuilder let content: Content
@@ -9,12 +9,11 @@ struct Card<Content: View>: View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.Color.card, in: RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Metric.radius, style: .continuous).strokeBorder(Theme.Color.edge, lineWidth: 1))
+            .cardSurface()
     }
 }
 
-/// 44 pt circle with a 1.5 px line icon.
+/// A quiet round button with a line icon.
 struct IconCircle: View {
     let systemImage: String
     var size: CGFloat = Theme.Metric.iconButton
@@ -24,39 +23,51 @@ struct IconCircle: View {
             .font(.system(size: size * 0.36, weight: .regular))
             .foregroundStyle(Theme.Color.text1)
             .frame(width: size, height: size)
-            .background(Theme.Color.button, in: Circle())
-            .overlay(Circle().strokeBorder(Theme.Color.edge, lineWidth: 1))
+            .background(Circle().fill(Theme.Color.quietButton.shadow(.inner(color: .white.opacity(0.8), radius: 0.5, y: 1.5))))
+            .overlay(Circle().stroke(Theme.Color.edge, lineWidth: 0.9))
+            .shadow(color: .black.opacity(0.04), radius: 3, y: 3)
     }
 }
 
+/// Muninn's mark: the pixel raven on a paper tile.
 struct MarkView: View {
     var size: CGFloat = 36
 
     var body: some View {
-        Image("Mark")
-            .resizable()
-            .interpolation(.high)
+        PixelRaven(scale: size / 22)
             .frame(width: size, height: size)
-            .clipShape(Circle())
-            .overlay(Circle().strokeBorder(Theme.Color.edge, lineWidth: 1))
+            .cardSurface(radius: size * 0.28, fill: Theme.Color.surface)
             .accessibilityHidden(true)
     }
 }
 
+/// The "Muninn" wordmark in the serif.
+struct Wordmark: View {
+    var size: CGFloat = 30
+    var color: Color = Theme.Color.text1
+
+    var body: some View {
+        Text(AppConfig.displayName).font(Theme.Font.serif(size)).tracking(Theme.Tracking.appName).foregroundStyle(color)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// A section head: the title in ink, a quiet note on the right ("3 people", "Thu, Nov 12").
 struct SectionHeader: View {
     let title: String
     var count: Int? = nil
+    var note: String? = nil
 
     var body: some View {
-        HStack(spacing: Theme.Space.xs) {
-            Text(title).font(Theme.Font.section).foregroundStyle(Theme.Color.text2)
-            if let count {
-                Text("\(count)").font(Theme.Font.count).monospacedDigit().foregroundStyle(Theme.Color.text2)
-                    .frame(minWidth: Theme.Space.l, minHeight: Theme.Space.l).padding(.horizontal, Theme.Space.xxs)
-                    .background(Theme.Color.button, in: RoundedRectangle(cornerRadius: Theme.Space.s, style: .continuous))
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(Theme.Font.section).foregroundStyle(Theme.Color.text1)
+            Spacer()
+            if let trailing = note ?? count.map(String.init) {
+                Text(trailing).font(Theme.Font.label).monospacedDigit().foregroundStyle(Theme.Color.text2)
             }
         }
-        .padding(.horizontal, Theme.Metric.margin)
+        .padding(.horizontal, Theme.Metric.cardInset + 2)
+        .accessibilityElement(children: .combine)
     }
 }
 
