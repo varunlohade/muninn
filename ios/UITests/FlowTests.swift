@@ -56,7 +56,7 @@ final class FlowTests: XCTestCase {
 
     /// Leaves the steps after sign-in without doing them.
     private func skipIntro(_ app: XCUIApplication) {
-        for id in ["onboarding.later", "onboarding.skip"] {
+        for id in ["onboarding.later", "onboarding.add"] {
             let b = element(app, "identifier == %@", id)
             if b.waitForExistence(timeout: 5) { b.tap() }
         }
@@ -98,16 +98,16 @@ final class FlowTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.5)
             shot("24-onboarding-link")
         } else {
-            element(app, "identifier == %@", "onboarding.skip").tap()
+            element(app, "identifier == %@", "onboarding.add").tap()
         }
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 15))
         _ = element(app, "identifier == %@", "home.brief").waitForExistence(timeout: 15)
         Thread.sleep(forTimeInterval: 1)
         shot("25-home")
 
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 10))
         XCTAssertFalse(mark.exists, "onboarding showed again after sign-in")
     }
 
@@ -119,7 +119,7 @@ final class FlowTests: XCTestCase {
             devPair(app, token: token)
             skipIntro(app)
         }
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 10))
         shot("02-home-paired")
     }
 
@@ -289,7 +289,7 @@ final class FlowTests: XCTestCase {
             shot("14-onboarding-steps")
         }
         skipIntro(app)
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 15))
         for a in [app, springboard] where a.buttons["Not Now"].waitForExistence(timeout: 2) { a.buttons["Not Now"].tap() }
         _ = element(app, "identifier == %@", "home.brief").waitForExistence(timeout: 15)
         Thread.sleep(forTimeInterval: 1)
@@ -641,27 +641,17 @@ final class FlowTests: XCTestCase {
         for _ in 0..<6 where text.label != "Type with the keyboard below" { id(app, "delete").press(forDuration: 3.5) }
     }
 
-    /// The intro: eight scenes, each held at its end ("-introHold") until a tap. The write scene leaves Fix done
-    /// and the Rewrite panel open. The intro runs on demo data, so no server or model is needed.
+    /// The hero: the street plays, the two-tone headline, "Add the keyboard" goes on to the next step.
     func test19IntroScenes() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-introHold", "-intro_seen", "NO"]
+        app.launchArguments = ["-intro_seen", "NO"]
         app.launch()
-        try XCTSkipUnless(id(app, "onboarding.skip").waitForExistence(timeout: 8), "already signed in; reset the simulator keychain first")
-        let scenes = [("paylink", "Invoice or pay link"), ("remind", "Reminders"), ("ask", "Ask Muninn"), ("write", "Fix and Rewrite"),
-                      ("notes", "Notes"), ("calendar", "Calendar"), ("repeat", "Repeat billing"), ("review", "Review link")]
-        for (i, (scene, title)) in scenes.enumerated() {
-            XCTAssertTrue(id(app, "intro.done.\(scene)").waitForExistence(timeout: 15), "scene \(scene) did not finish")
-            XCTAssertEqual(id(app, "intro.done.\(scene)").label, title)
-            if scene == "write" {
-                for option in ["polite", "shorter", "professional", "friendly", "firmer", "grammar"] {
-                    XCTAssertTrue(id(app, "write.\(option)").exists, "Rewrite option \(option)")
-                }
-            }
-            shot(String(format: "%02d-intro-%@", 50 + i, scene))
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
-        }
-        XCTAssertTrue(id(app, "onboarding.step.2").waitForExistence(timeout: 8), "the intro ends on the next onboarding step")
+        try XCTSkipUnless(id(app, "onboarding.add").waitForExistence(timeout: 8), "already signed in; reset the simulator keychain first")
+        XCTAssertTrue(id(app, "onboarding.hero").exists)
+        XCTAssertEqual(id(app, "onboarding.headline").label, "Your business, in your keyboard. Works in every app you already type in.")
+        shot("50-intro-hero")
+        id(app, "onboarding.add").tap()
+        XCTAssertTrue(id(app, "onboarding.step.2").waitForExistence(timeout: 8) || id(app, "onboarding.start").exists, "the hero ends on the next onboarding step")
     }
 
     /// Keyboard Lab: Fix with Undo, the Rewrite panel with Fix grammar, and the three kinds of shortcut.

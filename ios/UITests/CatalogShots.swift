@@ -54,7 +54,7 @@ final class CatalogShots: XCTestCase {
             token.tap()
             token.typeText("pkd_fake")
             app.buttons["Pair"].tap()
-            for id in ["onboarding.later", "onboarding.skip"] {
+            for id in ["onboarding.later", "onboarding.add"] {
                 let b = element(app, id)
                 if b.waitForExistence(timeout: 8) { b.tap() }
             }
@@ -62,11 +62,11 @@ final class CatalogShots: XCTestCase {
         }
         // The intro tour, if it shows.
         let later = NSPredicate(format: "identifier ENDSWITH 'later' OR identifier ENDSWITH 'skip' OR identifier == 'onboarding.start' OR label == 'Skip' OR label == 'Not now'")
-        for _ in 0..<10 where !app.staticTexts["Earned today"].waitForExistence(timeout: 2) {
+        for _ in 0..<10 where !app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 2) {
             let b = app.buttons.matching(later).firstMatch
             if b.exists && b.isHittable { b.tap() }
         }
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15), String(app.debugDescription.prefix(4000)))
+        XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 15), String(app.debugDescription.prefix(4000)))
 
         settings.launch()
         tap(settings, ["General"], timeout: 12)

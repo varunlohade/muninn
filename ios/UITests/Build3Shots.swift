@@ -6,7 +6,6 @@ import XCTest
 final class Build3Shots: XCTestCase {
     private let env = ProcessInfo.processInfo.environment
     private let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-    static let scenes = ["paylink", "remind", "ask", "write", "notes", "calendar", "repeat", "review"]
 
     override func setUp() { continueAfterFailure = false }
 
@@ -37,19 +36,16 @@ final class Build3Shots: XCTestCase {
         wait(for: [done], timeout: 5)
     }
 
-    /// Every intro scene at its end, then the keyboard step, Get started and Home. Needs a fresh app (reset the simulator keychain).
-    /// "-introHold" keeps each scene until a tap, so the picture shows the finished scene.
+    /// The hero, then the keyboard step, Get started and Home. Needs a fresh app (reset the simulator keychain).
     func testIntro() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-introHold", "-calendarDemo", "-serverURL", fake, "-intro_seen", "NO"]
+        app.launchArguments = ["-calendarDemo", "-serverURL", fake, "-intro_seen", "NO"]
         app.launch()
-        try XCTSkipUnless(id(app, "onboarding.skip").waitForExistence(timeout: 8), "already signed in; reset the simulator keychain first")
-        for (i, scene) in Self.scenes.enumerated() {
-            XCTAssertTrue(id(app, "intro.done.\(scene)").waitForExistence(timeout: 12), "scene \(scene) did not finish: \(app.debugDescription)")
-            shot(String(format: "intro-%02d-%@", i + 1, scene))
-            // A tap anywhere goes on. After the last scene, the intro ends.
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
-        }
+        try XCTSkipUnless(id(app, "onboarding.add").waitForExistence(timeout: 8), "already signed in; reset the simulator keychain first")
+        XCTAssertTrue(id(app, "onboarding.hero").exists)
+        XCTAssertTrue(id(app, "onboarding.account").exists)
+        shot("intro-01-hero")
+        id(app, "onboarding.add").tap()
         if id(app, "onboarding.step.2").waitForExistence(timeout: 5) {
             shot("intro-09-turn-on-keyboard")
             id(app, "onboarding.later").tap()
@@ -65,33 +61,22 @@ final class Build3Shots: XCTestCase {
         // One tap makes the device account on the fake server. Nothing to type.
         start.tap()
         if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertTrue(id(app, "home.earned").waitForExistence(timeout: 20), app.debugDescription)
         dismissPrompts(app)
         shot("intro-11-home")
     }
 
-    /// The intro plays by itself, about 3 s a scene, and ends at the next step.
+    /// "Add the keyboard" ends the hero. Get started with no server shows one plain line and stays.
     func testIntroPlaysByItselfAndSkipEndsIt() throws {
         let app = XCUIApplication()
-        // "-intro_seen NO": show the intro even if this simulator has seen it.
-        app.launchArguments = ["-intro_seen", "NO"]
-        app.launch()
-        try XCTSkipUnless(id(app, "onboarding.skip").waitForExistence(timeout: 8), "already signed in; reset the simulator keychain first")
-        let start = Date()
-        while !(id(app, "onboarding.start").exists || id(app, "onboarding.later").exists || id(app, "onboarding.calendar.later").exists), Date().timeIntervalSince(start) < 60 { Thread.sleep(forTimeInterval: 0.2) }
-        let took = Date().timeIntervalSince(start)
-        XCTAssertLessThan(took, 45, "the intro did not end by itself")
-        print("INTRO_SECONDS", took)
-        XCTAssertGreaterThan(took, 16)
-        app.terminate()
         // No server at this address: Get started shows one plain line and stays, ready for another try.
         app.launchArguments = ["-serverURL", "http://127.0.0.1:9", "-intro_seen", "NO"]
         app.launch()
-        XCTAssertTrue(id(app, "onboarding.skip").waitForExistence(timeout: 8))
-        id(app, "onboarding.skip").tap()
+        XCTAssertTrue(id(app, "onboarding.add").waitForExistence(timeout: 8))
+        id(app, "onboarding.add").tap()
         if id(app, "onboarding.later").waitForExistence(timeout: 3) { id(app, "onboarding.later").tap() }
         if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
-        XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 5), "Skip did not end the intro")
+        XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 5), "Add the keyboard did not end the hero")
         id(app, "onboarding.start").tap()
         let error = id(app, "onboarding.error")
         XCTAssertTrue(error.waitForExistence(timeout: 30), app.debugDescription)
@@ -104,7 +89,7 @@ final class Build3Shots: XCTestCase {
         app.launchArguments = []
         app.launch()
         XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 8) || id(app, "onboarding.later").exists || id(app, "onboarding.calendar.later").exists, "the intro played again after a relaunch")
-        XCTAssertFalse(id(app, "onboarding.skip").exists)
+        XCTAssertFalse(id(app, "onboarding.add").exists)
     }
 
     /// The new app screens: Home's unpaid cards, the Contacts choice on an invoice with no email, Integrations and its two settings.
@@ -112,7 +97,7 @@ final class Build3Shots: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-calendarDemo"]
         app.launch()
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15), "sign in first: \(app.debugDescription)")
+        XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 15), "sign in first: \(app.debugDescription)")
         dismissPrompts(app)
         // "Save your details" sits under the day summary. It is Apple's own button; sign-in itself cannot run on the simulator.
         XCTAssertTrue(id(app, "save.card").waitForExistence(timeout: 5), app.debugDescription)

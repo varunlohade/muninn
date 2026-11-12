@@ -116,7 +116,7 @@ final class WalkthroughTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-calendarDemo", "-serverURL", fake.absoluteString]
         app.launch()
-        if id(app, "onboarding.skip").waitForExistence(timeout: 6) { id(app, "onboarding.skip").tap() }
+        if id(app, "onboarding.add").waitForExistence(timeout: 6) { id(app, "onboarding.add").tap() }
         if id(app, "onboarding.later").waitForExistence(timeout: 3) { id(app, "onboarding.later").tap() }
         if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
         let start = id(app, "onboarding.start")

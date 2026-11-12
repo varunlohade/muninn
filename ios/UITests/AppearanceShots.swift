@@ -52,8 +52,8 @@ final class AppearanceShots: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-calendarDemo", "-intro_seen", "NO"]
         app.launch()
-        try XCTSkipUnless(id(app, "onboarding.skip").waitForExistence(timeout: 8), "already in; reset the simulator keychain first")
-        id(app, "onboarding.skip").tap()
+        try XCTSkipUnless(id(app, "onboarding.add").waitForExistence(timeout: 8), "already in; reset the simulator keychain first")
+        id(app, "onboarding.add").tap()
         if id(app, "onboarding.step.2").waitForExistence(timeout: 4) {
             shot("03-onboarding-keyboard")
             id(app, "onboarding.later").tap()
@@ -76,7 +76,7 @@ final class AppearanceShots: XCTestCase {
         if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
         dismissPrompts(app)
 
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 15), app.debugDescription)
         dismissPrompts(app)
         _ = id(app, "home.brief").waitForExistence(timeout: 10)
         shot("05-home")
@@ -153,8 +153,8 @@ final class AppearanceShots: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-intro_seen", "NO"]
         app.launch()
-        XCTAssertTrue(id(app, "onboarding.skip").waitForExistence(timeout: 10))
-        id(app, "onboarding.skip").tap()
+        XCTAssertTrue(id(app, "onboarding.add").waitForExistence(timeout: 10))
+        id(app, "onboarding.add").tap()
         if id(app, "onboarding.later").waitForExistence(timeout: 4) { id(app, "onboarding.later").tap() }
         if id(app, "onboarding.calendar.later").waitForExistence(timeout: 3) { id(app, "onboarding.calendar.later").tap() }
         let mark = id(app, "onboarding.mark")

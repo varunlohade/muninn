@@ -88,7 +88,7 @@ final class KeyboardDefaultShots: XCTestCase {
         XCTAssertTrue(id(app, "onboarding.start").waitForExistence(timeout: 8), app.debugDescription)
         id(app, "onboarding.start").tap()
         if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
-        XCTAssertTrue(app.staticTexts["Earned today"].waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 20), app.debugDescription)
         dismissPrompts(app)
     }
 

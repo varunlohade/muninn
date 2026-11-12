@@ -48,7 +48,10 @@ struct OnboardingView: View {
     var body: some View {
         Group {
             if step == .intro {
-                IntroView { Task { await advance(from: .intro) } }.transition(.opacity)
+                // There is no sign-in: an earlier account comes back with "Continue with Apple" on Home, so both go on.
+                HeroView(addKeyboard: { Task { await advance(from: .intro) } },
+                         haveAccount: { Task { await advance(from: .intro) } })
+                    .transition(.opacity)
             } else {
                 steps.transition(.opacity)
             }
