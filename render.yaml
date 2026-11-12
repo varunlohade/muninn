@@ -31,6 +31,9 @@ services:
       - key: CLIENT_IP_HEADER
         value: cf-connecting-ip
       # Seeds the demo user on first boot and adds today's paid invoices every hour (in-process, idempotent).
+      # Apple sign-in accepts a nonce the server never gave out. Flip to "1" once every installed build uses /v1/auth/apple/nonce.
+      - key: APPLE_NONCE_REQUIRED
+        value: "0"
       - key: DEMO_SEED
         value: "1"
       - key: PAYPAL_CLIENT_ID

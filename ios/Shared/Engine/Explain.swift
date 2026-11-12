@@ -110,21 +110,38 @@ struct Meaning: Equatable {
     let example: String
 }
 
-/// The bundled explain-dictionary.json: chat abbreviations, slang and common terms, written for Pip. Loaded once, on first use.
+/// The bundled explain-dictionary.json: chat abbreviations, slang and common terms, written for Pip.
+/// Loaded on first use, and again after a memory warning purges it.
 final class ExplainDictionary {
     static let shared = ExplainDictionary()
-    private let entries: [String: [String]]
+    private let given: [String: [String]]?
+    private let bundle: Bundle
+    private var loaded: [String: [String]]?
+    private let lock = NSLock()
 
     init(entries: [String: [String]]? = nil, bundle: Bundle = .main) {
-        if let entries {
-            self.entries = entries
-        } else if let url = bundle.url(forResource: "explain-dictionary", withExtension: "json"),
-                  let data = try? Data(contentsOf: url),
-                  let e = try? JSONDecoder().decode([String: [String]].self, from: data) {
-            self.entries = e
-        } else {
-            self.entries = [:]
+        given = entries
+        self.bundle = bundle
+    }
+
+    private var entries: [String: [String]] {
+        if let given { return given }
+        lock.lock()
+        defer { lock.unlock() }
+        if let loaded { return loaded }
+        var e: [String: [String]] = [:]
+        if let url = bundle.url(forResource: "explain-dictionary", withExtension: "json"), let data = try? Data(contentsOf: url) {
+            e = (try? JSONDecoder().decode([String: [String]].self, from: data)) ?? [:]
         }
+        loaded = e
+        return e
+    }
+
+    /// Frees the bundled entries; the next lookup reads the file again.
+    func purge() {
+        lock.lock()
+        loaded = nil
+        lock.unlock()
     }
 
     var count: Int { entries.count }

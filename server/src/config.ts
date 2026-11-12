@@ -43,7 +43,20 @@ export const config = {
     jwksTtlMs: 24 * 60 * 60 * 1000,
     jwksMinRefetchMs: 60_000,
     timeoutMs: 5000,
+    // GET /v1/auth/apple/nonce gives a single-use nonce for this long. When required, a nonce the server never gave out
+    // is refused. Required with APPLE_NONCE_REQUIRED=1, or in production unless APPLE_NONCE_REQUIRED=0.
+    nonceTtlMs: 10 * 60_000,
+    requireServerNonce: env.APPLE_NONCE_REQUIRED === '1' || (env.NODE_ENV === 'production' && env.APPLE_NONCE_REQUIRED !== '0'),
   },
+
+  // A device token works for this long after sign-in. Each sign-in makes a new one.
+  session: { ttlMs: 90 * 86_400_000 },
+  // Password hashing: 64 MB each, so at most 2 at once on a 512 MB server. Others wait in line up to queueTimeoutMs, then get 503.
+  password: { maxConcurrent: 2, queueTimeoutMs: 10_000 },
+  // Email + password tries. One client address gets 5 tries per email in 15 minutes, then waits 15 minutes.
+  // Across all addresses an email gets 20 tries an hour; after that each try waits longer (1 s, 2 s, 4 s ... up to 5 minutes),
+  // so an attacker slows the owner down but cannot lock them out for long.
+  emailAuth: { perIpMax: 5, perIpWindowMs: 15 * 60_000, perIpLockMs: 15 * 60_000, perEmailMax: 20, perEmailWindowMs: 60 * 60_000, maxDelayMs: 5 * 60_000 },
 
   paypal: {
     sandbox: env.PAYPAL_ENV !== 'live',
@@ -107,6 +120,11 @@ export const config = {
     shareView: { limit: 120, windowMs: 60_000 },
     other: { limit: 120, windowMs: 60_000 },
     auth: { limit: 10, windowMs: 60_000 },
+    // Email sign-up, login and link, per client address. Tries per email are counted in the DB (emailAuth above).
+    emailAuth: { limit: 10, windowMs: 60_000 },
+    // New accounts across the whole server (device, Apple and email), and demo seeds for them.
+    newAccounts: { limit: 300, windowMs: 3_600_000 },
+    demoSeed: { limit: 20, windowMs: 3_600_000 },
     // A device account needs no proof of who asks, so one address gets few of them.
     deviceAuth: { limit: 5, windowMs: 3_600_000 },
     webhook: { limit: 120, windowMs: 60_000 },

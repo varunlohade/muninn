@@ -80,6 +80,10 @@ export type Seller = { merchantId: string; email: string | null; account: string
 export type MerchantStatus = {
   merchantId: string; trackingId: string | null; paymentsReceivable: boolean; emailConfirmed: boolean;
   primaryEmail: string | null; permissionsGranted: boolean;
+  /** The seller's legal business name, when PayPal returns one. */
+  legalName?: string | null;
+  /** The seller's primary currency (ISO 4217), when PayPal returns one. */
+  currency?: string | null;
 };
 // Partner Referrals v2 and the merchant-integrations lookups, always on the platform's own credentials.
 export type PayPalPartner = {
@@ -524,6 +528,8 @@ function createPartner(creds: Creds, accessToken: () => Promise<string>): PayPal
         merchantId, trackingId: typeof r.tracking_id === 'string' ? r.tracking_id : null,
         paymentsReceivable: r.payments_receivable === true, emailConfirmed: r.primary_email_confirmed === true,
         primaryEmail: typeof r.primary_email === 'string' ? r.primary_email : null, permissionsGranted: granted,
+        legalName: typeof r.legal_name === 'string' && r.legal_name.trim() ? r.legal_name.trim() : null,
+        currency: typeof r.primary_currency === 'string' && /^[A-Za-z]{3}$/.test(r.primary_currency) ? r.primary_currency.toUpperCase() : null,
       };
     },
   };

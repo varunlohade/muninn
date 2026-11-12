@@ -136,6 +136,21 @@ struct ReplyResponse: Decodable { let reply: String }
 /// A PayPal action from server/src/actions-more.ts, or one of its reads: one line for the bar, and Undo when PayPal can undo it.
 struct MoreResponse: Decodable { let line: String; let undo: Chip? }
 struct WriteResponse: Decodable { let text: String; let changed: Bool? }
+/// GET /v1/chart: money in by month from PayPal, the month so far, and marked estimates (server/src/chart.ts).
+struct ChartData: Decodable, Equatable {
+    /// `low` / `high`: the likely range (about 80%) of an estimate month, when the server has enough history for one.
+    struct Month: Decodable, Equatable {
+        let month: String; let label: String; let value: String; let kind: String
+        var low: String? = nil
+        var high: String? = nil
+    }
+    let title: String
+    let currency: String
+    let months: [Month]
+    let caption: String
+    let enough_history: Bool
+    let source: String
+}
 /// tone is "upset" (the client), "blunt" (the owner's draft) or "ok". calm is set unless tone is "ok".
 struct ToneResponse: Decodable { let tone: String; let calm: String? }
 /// POST /v1/explain: `short` is one line, `body` up to four lines split by newlines.
@@ -187,6 +202,8 @@ struct Profile: Codable, Equatable {
     var tone: String
     var currency: String
     var review_url: String?
+    /// What the business does, in the owner's words. The keyboard reads price questions as questions about it.
+    var description: String? = nil
     /// The server's own default for a user with no profile yet.
     static let standard = Profile(business_name: "my shop", tone: "friendly and short", currency: "USD", review_url: nil)
 }
@@ -270,6 +287,20 @@ struct APIClient {
         APIClient(baseURL: SharedStore.serverURL, token: SharedStore.deviceToken)
     }
 
+    /// Posted when the server answers 401 to this phone's token. userInfo["token"] is the refused token.
+    static let tokenRejected = Notification.Name("APIClient.tokenRejected")
+
+    /// Every call with a token goes through here. A 401 outside /v1/auth/ means the token itself is dead;
+    /// a 401 under /v1/auth/ (a wrong password, a refused Apple token) does not end the session.
+    private func data(for r: URLRequest) async throws -> (Data, Int) {
+        let (data, resp) = try await session.data(for: r)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 401, let token, r.value(forHTTPHeaderField: "Authorization") != nil, r.url?.path.contains("/v1/auth/") == false {
+            NotificationCenter.default.post(name: Self.tokenRejected, object: nil, userInfo: ["token": token])
+        }
+        return (data, code)
+    }
+
     /// "Get started": makes a device account and returns its device token. The only call with no token.
     /// `deviceID` is a random UUID from this phone's Keychain. The server makes a new user on each call.
     static func deviceSignIn(baseURL: String, deviceID: String) async throws -> String {
@@ -286,7 +317,7 @@ struct APIClient {
 
     /// `key` is the Idempotency-Key of a money call. A retry passes the same key, so the server runs the action once.
     /// `lookup` asks only for the stored answer of `key`: the server never runs the action, and says 404 when it has none.
-    private func request(_ method: String, _ path: String, body: Encodable? = nil, tap: Bool = false, key: String? = nil, lookup: Bool = false) throws -> URLRequest {
+    func request(_ method: String, _ path: String, body: Encodable? = nil, tap: Bool = false, key: String? = nil, lookup: Bool = false) throws -> URLRequest {
         guard let token else { throw APIError.notPaired }
         guard let url = URL(string: baseURL + path) else { throw APIError.message("Server address is wrong") }
         var r = URLRequest(url: url, timeoutInterval: 20)
@@ -307,9 +338,8 @@ struct APIClient {
         return r
     }
 
-    private func send<T: Decodable>(_ r: URLRequest, as: T.Type) async throws -> T {
-        let (data, resp) = try await session.data(for: r)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+    func send<T: Decodable>(_ r: URLRequest, as: T.Type) async throws -> T {
+        let (data, code) = try await data(for: r)
         if code == 409, let nc = try? JSONDecoder().decode(NeedsConfirm.self, from: data), nc.needs_confirm {
             throw APIError.needsConfirm(recipient: nc.recipient)
         }
@@ -365,6 +395,11 @@ struct APIClient {
         try await send(request("GET", "/v1/" + path), as: MoreResponse.self)
     }
 
+    /// `back` full months of history and `ahead` estimated months, as the chart chip's payload asks. Read-only.
+    func chart(back: Int, ahead: Int) async throws -> ChartData {
+        try await send(request("GET", "/v1/chart?back=\(back)&ahead=\(ahead)&tz=\(Self.zoneParam())"), as: ChartData.self)
+    }
+
     func reply(_ text: String) async throws -> ReplyResponse {
         try await send(request("POST", "/v1/reply", body: ["text": text]), as: ReplyResponse.self)
     }
@@ -392,8 +427,7 @@ struct APIClient {
 
     /// The drawn scene, as JSON the visual page reads. The phone does not decode it; the server already clamped it.
     func explainVisual(_ topic: String) async throws -> Data {
-        let (data, resp) = try await session.data(for: request("POST", "/v1/explain/visual", body: ["topic": topic], tap: true))
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let (data, code) = try await data(for: request("POST", "/v1/explain/visual", body: ["topic": topic], tap: true))
         guard (200..<300).contains(code) else { throw APIError.http(code, String(decoding: data, as: UTF8.self)) }
         return data
     }
@@ -432,6 +466,11 @@ struct APIClient {
     /// The one-time code from the return link: only the user who started Connect can read or use it.
     func paypalPending(code: String) async throws -> PayPalPending { try await send(request("POST", "/v1/paypal/pending", body: ["code": code]), as: PayPalPending.self) }
     func paypalFinish(code: String) async throws { _ = try await send(request("POST", "/v1/paypal/finish", body: ["code": code]), as: PayPalPending.self) }
+    /// The phone's time zone, so the server cuts months where the owner's calendar does.
+    static func zoneParam(_ zone: TimeZone = .current) -> String {
+        zone.identifier.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "/_-"))) ?? "UTC"
+    }
+
     private struct PayPalStatusLite: Decodable { let connected: Bool }
 
     /// "Save your details": attaches the Apple account to this device account. The server checks the identity token and the raw nonce.
@@ -447,6 +486,11 @@ struct APIClient {
         let body: [String: JSONValue] = ["business_name": .string(p.business_name), "tone": .string(p.tone), "currency": .string(p.currency),
                                          "review_url": url.map(JSONValue.string) ?? .null]
         return try await send(request("PUT", "/v1/profile", body: body), as: ProfileResponse.self).profile
+    }
+
+    /// "What does your business do?" The server keeps it encrypted.
+    func setBusiness(_ description: String) async throws -> Profile? {
+        try await send(request("PUT", "/v1/profile/business", body: ["description": description]), as: ProfileResponse.self).profile
     }
 
     // MARK: catalog
@@ -477,8 +521,7 @@ struct APIClient {
         try await send(request("DELETE", "/v1/catalog/\(id)/photo"), as: CatalogItemResponse.self).item
     }
     func catalogPhoto(_ id: String) async throws -> Data {
-        let (data, resp) = try await session.data(for: request("GET", "/v1/catalog/\(id)/photo"))
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let (data, code) = try await data(for: request("GET", "/v1/catalog/\(id)/photo"))
         guard code == 200 else { throw APIError.http(code, "") }
         return data
     }

@@ -15,6 +15,10 @@ struct IntegrationsView: View {
                 twoTone("Settings.", "What \(AppConfig.displayName) is connected to, and how the keyboard feels.")
                     .font(Theme.Font.title).tracking(-0.3).fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, Theme.Metric.cardInset + 2).padding(.bottom, Theme.Space.xs)
+                NavigationLink { BusinessView() } label: { BusinessRow() }
+                    .buttonStyle(PressScale())
+                    .padding(.horizontal, Theme.Metric.cardInset)
+                    .accessibilityIdentifier("settings.business")
                 ForEach(items.filter { $0.status != "coming_soon" }) { i in
                     Group {
                         switch i.id {
@@ -87,9 +91,7 @@ struct IntegrationsView: View {
                     .frame(minHeight: Theme.Metric.iconButton).padding(.horizontal, Theme.Metric.margin)
                     .padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
                 #endif
-                Button("Unpair this device", role: .destructive) { session.unpair() }
-                    .font(Theme.Font.sans(14, 500)).foregroundStyle(Theme.Color.due)
-                    .frame(minHeight: Theme.Metric.iconButton).padding(.horizontal, Theme.Metric.margin)
+                AccountSection().padding(.top, Theme.Metric.sectionGap - Theme.Metric.cardGap)
             }
             .padding(.top, Theme.Space.xs)
             .padding(.bottom, Theme.Space.l)
@@ -175,7 +177,7 @@ struct IntegrationsView: View {
 }
 
 /// One setting screen: a title, plain help, then its content.
-private struct SettingPage<Content: View>: View {
+struct SettingPage<Content: View>: View {
     let title: String
     let help: String
     @ViewBuilder let content: Content

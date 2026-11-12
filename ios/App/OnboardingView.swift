@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// One short flow: the intro, turn on the keyboard, make it the default, allow Calendar & Reminders, Get started, Connect PayPal, Home. There is no sign-in.
+/// One short flow: the intro, turn on the keyboard, make it the default, allow Calendar & Reminders, Get started, Sign in with PayPal,
+/// "What does your business do?", Home. Sign in with PayPal is the Connect PayPal flow; the demo account skips it.
 /// After the intro, each step fits one screen and has one main button.
 struct OnboardingView: View {
-    enum Step: Int, CaseIterable { case intro, keyboard, makeDefault, calendar, start, paypal }
+    enum Step: Int, CaseIterable { case intro, keyboard, makeDefault, calendar, start, paypal, business }
 
     @EnvironmentObject var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -12,6 +13,7 @@ struct OnboardingView: View {
     /// iOS ends the app when the owner turns on the keyboard in Settings. The next launch goes on after the intro, not back into it.
     private static let introSeenKey = "intro_seen"
     @State private var step: Step = UserDefaults.standard.bool(forKey: introSeenKey) ? keyboardStep : .intro
+    @State private var business = ""
     @State private var checked = false
     @State private var busy = false
     @ObservedObject private var paypal = PayPalConnector.shared
@@ -26,7 +28,8 @@ struct OnboardingView: View {
         case .makeDefault: "Make it your default"
         case .calendar: "Allow Calendar & Reminders"
         case .start: "Get paid from any chat"
-        case .paypal: "Connect PayPal"
+        case .paypal: "Sign in with PayPal"
+        case .business: "What does your business do?"
         }
     }
     private var line: String {
@@ -37,6 +40,7 @@ struct OnboardingView: View {
         case .calendar: "The keyboard adds the events and reminders you type. They stay on this phone."
         case .start: "\(AppConfig.displayName) suggests the invoice while you type."
         case .paypal: paypal.note ?? "Invoices and pay links go to your own PayPal. Or try the demo account first."
+        case .business: "So a client's \"how much?\" gets the right price from your catalog."
         }
     }
     private var stepMotion: Animation { reduceMotion ? Theme.Motion.crossfade : Theme.Motion.onboardingStep }
@@ -57,6 +61,13 @@ struct OnboardingView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        // After a log out the app opens on the sign-in step.
+        .onAppear { if session.signInNext { step = .start } }
+        // An owner who already said what the business does (a reconnect, a recovered account) is not asked again.
+        .task(id: step) {
+            guard step == .business, let p = try? await APIClient.shared().profile(), !(p.description ?? "").isEmpty else { return }
+            session.finishOnboarding()
+        }
         #if DEBUG
         .sheet(isPresented: $showDevPairing) {
             DevPairingSheet { showDevPairing = false; Task { await complete(.start) } }
@@ -88,6 +99,7 @@ struct OnboardingView: View {
                     .accessibilityIdentifier("onboarding.title")
                 if step == .keyboard { keyboardSteps }
                 if step == .makeDefault { Card { KeyboardDefaultGuide() } }
+                if step == .business { BusinessQuestion(text: $business) }
                 if step == .start {
                     // What the keyboard offers in a chat, as a task card.
                     TaskCardLabel(icon: .invoice, title: "Invoice $45", detail: "Sam, via PayPal", height: 52)
@@ -156,11 +168,9 @@ struct OnboardingView: View {
         VStack(spacing: Theme.Space.xs) {
             switch step {
             case .start:
-                Button(busy ? "One moment\u{2026}" : "Get started") { Task { await getStarted() } }
-                    .buttonStyle(PrimaryButton())
+                // Sign in with Apple or email (SignInView.swift). "Try without an account" is the old "Get started".
+                SignInOptions(onSignedIn: { await complete(.start) }, onTry: { await getStarted() })
                     .opacity(busy ? 0.5 : 1)
-                    .accessibilityIdentifier("onboarding.start")
-                quietButton("", action: {}).hidden()
             case .keyboard:
                 Button("Open Settings") {
                     if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
@@ -196,13 +206,21 @@ struct OnboardingView: View {
                     .accessibilityIdentifier("onboarding.calendar.later")
             case .paypal:
                 // Skippable: the demo account works, and Home offers Connect again.
-                Button(paypal.busy ? "One moment\u{2026}" : "Connect PayPal") { Task { if await paypal.connect() { await complete(.paypal) } } }
+                Button(paypal.busy ? "One moment\u{2026}" : "Sign in with PayPal") { Task { if await paypal.connect() { await complete(.paypal) } } }
                     .buttonStyle(PrimaryButton())
                     .opacity(paypal.busy ? 0.5 : 1)
                     .disabled(paypal.busy)
                     .accessibilityIdentifier("onboarding.paypal")
                 quietButton("Use demo account") { Task { await advance(from: .paypal) } }
                     .accessibilityIdentifier("onboarding.paypal.demo")
+            case .business:
+                Button(busy ? "Saving\u{2026}" : "Next") { Task { await saveBusiness() } }
+                    .buttonStyle(PrimaryButton())
+                    .disabled(cleanBusiness.isEmpty)
+                    .opacity(busy || cleanBusiness.isEmpty ? 0.5 : 1)
+                    .accessibilityIdentifier("onboarding.business")
+                quietButton("Not now") { Task { await advance(from: .business) } }
+                    .accessibilityIdentifier("onboarding.business.later")
             case .intro:
                 EmptyView()
             }
@@ -222,6 +240,21 @@ struct OnboardingView: View {
         let ok = await session.getStarted()
         busy = false
         if ok { await complete(.start) }
+    }
+
+    private var cleanBusiness: String { business.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// Saves the answer on the server. A failure keeps the step with one plain line; Settings can set it later.
+    private func saveBusiness() async {
+        session.error = nil
+        busy = true
+        defer { busy = false }
+        do {
+            _ = try await APIClient.shared().setBusiness(cleanBusiness)
+            await complete(.business)
+        } catch {
+            session.error = plainLine(error)
+        }
     }
 
     /// The step is done: stamp the check, hold it a moment, then move on.
@@ -251,7 +284,8 @@ struct OnboardingView: View {
         case .makeDefault: Self.afterKeyboard
         case .calendar: .start
         case .start: .paypal
-        case .paypal: nil
+        case .paypal: .business
+        case .business: nil
         }
     }
 

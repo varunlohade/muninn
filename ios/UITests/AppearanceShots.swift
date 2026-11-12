@@ -92,6 +92,11 @@ final class AppearanceShots: XCTestCase {
             shot("04b-onboarding-paypal")
             id(app, "onboarding.paypal.demo").tap()
         }
+        // The business question follows the PayPal step; these runs leave it for later.
+        if id(app, "onboarding.business.later").waitForExistence(timeout: 5) {
+            shot("04c-onboarding-business")
+            id(app, "onboarding.business.later").tap()
+        }
         dismissPrompts(app)
 
         XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 15), app.debugDescription)

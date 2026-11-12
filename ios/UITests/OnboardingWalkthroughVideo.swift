@@ -108,6 +108,8 @@ final class OnboardingWalkthroughVideo: XCTestCase {
         pause(2)
         start.tap()
         if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { pause(2); id(app, "onboarding.paypal.demo").tap() }
+        // The business question follows the PayPal step; these runs leave it for later.
+        if id(app, "onboarding.business.later").waitForExistence(timeout: 5) { pause(2); id(app, "onboarding.business.later").tap() }
         XCTAssertTrue(app.descendants(matching: .any)["home.earned"].waitForExistence(timeout: 20), app.debugDescription)
         dismissPrompts(app)
         _ = id(app, "home.brief").waitForExistence(timeout: 10)

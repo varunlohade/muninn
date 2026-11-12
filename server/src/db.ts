@@ -2,19 +2,31 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { config } from './config.ts';
 
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
-CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, apple_sub_hash TEXT);
+-- email_hash: keyed hash of the normalized email, for lookups. email_enc: the email, encrypted with the user's key.
+-- password_hash: scrypt with a per-user salt (see password.ts).
+CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, apple_sub_hash TEXT,
+  email_hash TEXT, email_enc TEXT, password_hash TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS users_apple ON users(apple_sub_hash) WHERE apple_sub_hash IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email_hash) WHERE email_hash IS NOT NULL;
 CREATE TABLE IF NOT EXISTS devices (
-  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), label TEXT, created_at INTEGER NOT NULL);
+  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), label TEXT, created_at INTEGER NOT NULL, expires_at INTEGER);
+CREATE INDEX IF NOT EXISTS devices_user ON devices(user_id);
+-- Password tries per key (keyed hash of the email, or of email + client address), for the lockout.
+-- Not tied to a user, so it says nothing about who has an account. Rows older than an hour are pruned.
+CREATE TABLE IF NOT EXISTS auth_failures (key TEXT PRIMARY KEY, count INTEGER NOT NULL, first_at INTEGER NOT NULL, locked_until INTEGER);
+-- Sign in with Apple nonces the server gave out: SHA-256 of the nonce, single use, 10 minutes.
+CREATE TABLE IF NOT EXISTS apple_nonces (hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS shared_images (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), png BLOB NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS shared_images_expiry ON shared_images(expires_at);
 CREATE TABLE IF NOT EXISTS profiles (
-  user_id TEXT PRIMARY KEY REFERENCES users(id), business_name TEXT NOT NULL, tone TEXT NOT NULL, currency TEXT NOT NULL, review_url TEXT);
+  user_id TEXT PRIMARY KEY REFERENCES users(id), business_name TEXT NOT NULL, tone TEXT NOT NULL, currency TEXT NOT NULL, review_url TEXT,
+  description_enc TEXT);
 CREATE TABLE IF NOT EXISTS catalog_items (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
   price_cents INTEGER NOT NULL, currency TEXT NOT NULL, created_at INTEGER NOT NULL,
@@ -120,8 +132,17 @@ export function openDb(path: string) {
   }
   const userCols = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
   if (userCols.length && !userCols.some((c) => c.name === 'apple_sub_hash')) db.exec('ALTER TABLE users ADD COLUMN apple_sub_hash TEXT');
+  for (const col of ['email_hash', 'email_enc', 'password_hash']) {
+    if (userCols.length && !userCols.some((c) => c.name === col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} TEXT`);
+  }
+  // Tokens made before expiry existed get the normal lifetime from when they were made.
+  const deviceCols = db.prepare('PRAGMA table_info(devices)').all() as { name: string }[];
+  if (deviceCols.length && !deviceCols.some((c) => c.name === 'expires_at')) {
+    db.exec(`ALTER TABLE devices ADD COLUMN expires_at INTEGER; UPDATE devices SET expires_at = created_at + ${config.session.ttlMs}`);
+  }
   const profileCols = db.prepare('PRAGMA table_info(profiles)').all() as { name: string }[];
   if (profileCols.length && !profileCols.some((c) => c.name === 'review_url')) db.exec('ALTER TABLE profiles ADD COLUMN review_url TEXT');
+  if (profileCols.length && !profileCols.some((c) => c.name === 'description_enc')) db.exec('ALTER TABLE profiles ADD COLUMN description_enc TEXT');
   // pp_account: the merchant hash of the connected PayPal account that made the row, or NULL for the shared demo merchant.
   for (const t of ['invoices', 'orders', 'subscriptions']) {
     const cols = db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[];
@@ -170,8 +191,98 @@ export function openDb(path: string) {
       const winner = find();
       return winner ? { owner: winner.id } : null;
     },
+    // Email + password. Atomic find-or-create on the email hash, like userForAppleSub. emailEnc gets the new id, so the
+    // email is encrypted with that user's key.
+    createEmailUser(emailHash: string, emailEnc: (userId: string) => string, passwordHash: string): { userId: string; created: boolean } {
+      const id = randomUUID();
+      const created = q('INSERT OR IGNORE INTO users (id, created_at, email_hash, email_enc, password_hash) VALUES (?, ?, ?, ?, ?)')
+        .run(id, now(), emailHash, emailEnc(id), passwordHash).changes > 0;
+      if (created) return { userId: id, created };
+      return { userId: (q('SELECT id FROM users WHERE email_hash = ?').get(emailHash) as { id: string }).id, created };
+    },
+    userForEmail(emailHash: string): { id: string; password_hash: string | null } | undefined {
+      return q('SELECT id, password_hash FROM users WHERE email_hash = ?').get(emailHash) as { id: string; password_hash: string | null } | undefined;
+    },
+    /** Adds an email and password to a user that has none. False when the user already has an email or another user holds this one. */
+    linkEmail(userId: string, emailHash: string, emailEnc: string, passwordHash: string): boolean {
+      try {
+        return q('UPDATE users SET email_hash = ?, email_enc = ?, password_hash = ? WHERE id = ? AND email_hash IS NULL')
+          .run(emailHash, emailEnc, passwordHash, userId).changes > 0;
+      } catch {
+        return false;
+      }
+    },
+    account(userId: string): { email_enc: string | null; apple: boolean; password: boolean } | undefined {
+      const r = q('SELECT email_enc, apple_sub_hash, password_hash FROM users WHERE id = ?').get(userId) as
+        { email_enc: string | null; apple_sub_hash: string | null; password_hash: string | null } | undefined;
+      return r && { email_enc: r.email_enc, apple: !!r.apple_sub_hash, password: !!r.password_hash };
+    },
+    setPasswordHash(userId: string, passwordHash: string) {
+      q('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, userId);
+    },
+    hasAppleSub(subHash: string): boolean {
+      return !!q('SELECT 1 FROM users WHERE apple_sub_hash = ?').get(subHash);
+    },
+    /**
+     * Counts one password try against each key BEFORE the password is checked, so parallel guesses cannot slip past.
+     * Returns the latest locked_until when any key is locked (nothing is counted then), else 0. Synchronous, so it is
+     * atomic inside this process. Reaching `max` tries in the window sets locked_until = at + lockFor(count).
+     */
+    reserveAuthAttempt(keys: { key: string; max: number; windowMs: number; lockFor: (count: number) => number }[], at: number): number {
+      q('DELETE FROM auth_failures WHERE first_at < ? AND (locked_until IS NULL OR locked_until < ?)').run(at - 3_600_000, at);
+      const get = q('SELECT count, first_at, locked_until FROM auth_failures WHERE key = ?');
+      const rows = keys.map((k) => get.get(k.key) as { count: number; first_at: number; locked_until: number | null } | undefined);
+      const locked = Math.max(0, ...rows.map((r) => (r?.locked_until && r.locked_until > at ? r.locked_until : 0)));
+      if (locked) return locked;
+      keys.forEach((k, i) => {
+        const r = rows[i];
+        const fresh = !r || r.first_at <= at - k.windowMs;
+        const count = fresh ? 1 : r.count + 1;
+        const until = count >= k.max ? at + k.lockFor(count) : null;
+        q(`INSERT INTO auth_failures (key, count, first_at, locked_until) VALUES (?, ?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET count = excluded.count, first_at = excluded.first_at, locked_until = excluded.locked_until`)
+          .run(k.key, count, fresh ? at : r.first_at, until);
+      });
+      return 0;
+    },
+    /** After a right password: `clear` keys are forgotten; `undo` keys give back the one try counted for it and drop their wait. */
+    releaseAuthAttempt(clear: string[], undo: string[]) {
+      for (const k of clear) q('DELETE FROM auth_failures WHERE key = ?').run(k);
+      for (const k of undo) q('UPDATE auth_failures SET count = MAX(count - 1, 0), locked_until = NULL WHERE key = ?').run(k);
+    },
+    addAppleNonce(hash: string, expiresAt: number, at: number) {
+      // Used and expired rows stay an hour more, so a replay inside an Apple token's life reads 'spent', not 'unknown'.
+      q('DELETE FROM apple_nonces WHERE expires_at <= ?').run(at - 3_600_000);
+      q('INSERT INTO apple_nonces (hash, expires_at) VALUES (?, ?)').run(hash, expiresAt);
+    },
+    /** 'ok' uses the nonce up. 'spent' for a used or expired one, 'unknown' when the server never gave it out. */
+    useAppleNonce(hash: string, at: number): 'ok' | 'spent' | 'unknown' {
+      if (q('UPDATE apple_nonces SET used = 1 WHERE hash = ? AND used = 0 AND expires_at > ?').run(hash, at).changes > 0) return 'ok';
+      return q('SELECT 1 FROM apple_nonces WHERE hash = ?').get(hash) ? 'spent' : 'unknown';
+    },
     addDevice(userId: string, tokenHash: string, label: string | null) {
-      q('INSERT INTO devices (token_hash, user_id, label, created_at) VALUES (?, ?, ?, ?)').run(tokenHash, userId, label, now());
+      const at = now();
+      q('INSERT INTO devices (token_hash, user_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(tokenHash, userId, label, at, at + config.session.ttlMs);
+      q('DELETE FROM devices WHERE user_id = ? AND expires_at <= ?').run(userId, at);
+    },
+    removeDevicesForUser(userId: string): number {
+      return Number(q('DELETE FROM devices WHERE user_id = ?').run(userId).changes);
+    },
+    /** Deletes the user and every row that holds their user_id, in one transaction. Covers tables other modules add too. */
+    deleteAccount(userId: string) {
+      const tables = (q(`SELECT m.name FROM sqlite_master m, pragma_table_info(m.name) c
+                          WHERE m.type = 'table' AND c.name = 'user_id'`).all() as { name: string }[]).map((t) => t.name);
+      // catalog_photos points at catalog_items, so photos go first.
+      tables.sort((a, b) => Number(b === 'catalog_photos') - Number(a === 'catalog_photos'));
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        for (const t of tables) q(`DELETE FROM "${t}" WHERE user_id = ?`).run(userId);
+        q('DELETE FROM users WHERE id = ?').run(userId);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
     },
     // A drawing shared as a link. The id is the only way to reach it; no query lists them.
     addSharedImage(id: string, userId: string, png: Uint8Array, createdAt: number, expiresAt: number) {
@@ -190,8 +301,12 @@ export function openDb(path: string) {
     removeDevice(tokenHash: string) {
       q('DELETE FROM devices WHERE token_hash = ?').run(tokenHash);
     },
-    userForTokenHash(tokenHash: string): string | undefined {
-      const r = q('SELECT user_id FROM devices WHERE token_hash = ?').get(tokenHash) as { user_id: string } | undefined;
+    // An expired token (or one with no expiry) finds nobody. A live token slides to a full session again,
+    // at most once a day, so an active user never hits the cutoff.
+    userForTokenHash(tokenHash: string, at = now()): string | undefined {
+      const until = at + config.session.ttlMs;
+      q('UPDATE devices SET expires_at = ? WHERE token_hash = ? AND expires_at > ? AND expires_at < ?').run(until, tokenHash, at, until - 86_400_000);
+      const r = q('SELECT user_id FROM devices WHERE token_hash = ? AND expires_at > ?').get(tokenHash, at) as { user_id: string } | undefined;
       return r?.user_id;
     },
 
@@ -204,6 +319,16 @@ export function openDb(path: string) {
          ON CONFLICT(user_id) DO UPDATE SET business_name = excluded.business_name, tone = excluded.tone, currency = excluded.currency,
            review_url = CASE WHEN ? THEN excluded.review_url ELSE profiles.review_url END`)
         .run(userId, p.business_name, p.tone, p.currency, p.review_url ?? null, p.review_url === undefined ? 0 : 1);
+    },
+    /** What the business does, encrypted with the owner's key. Null when the owner has not said. */
+    getDescriptionEnc(userId: string): string | null {
+      return (q('SELECT description_enc FROM profiles WHERE user_id = ?').get(userId) as { description_enc: string | null } | undefined)?.description_enc ?? null;
+    },
+    /** Sets the description; a user with no profile yet gets the given defaults for the other fields. */
+    setDescriptionEnc(userId: string, enc: string | null, defaults: Profile) {
+      q(`INSERT INTO profiles (user_id, business_name, tone, currency, description_enc) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET description_enc = excluded.description_enc`)
+        .run(userId, defaults.business_name, defaults.tone, defaults.currency, enc);
     },
 
     allItems(): (CatalogItem & { user_id: string })[] {

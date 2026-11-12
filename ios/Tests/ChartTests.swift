@@ -70,7 +70,7 @@ final class ChartSceneTests: XCTestCase {
             let pts: [(Double, Double)]
             switch shape {
             case let .text(x, y, t, _, _): pts = [(x, y), (x + ChartScene.textWidth(t), y)]
-            case let .rect(x, y, w, h, _, _, _), let .ellipse(x, y, w, h, _, _): pts = [(x, y), (x + w, y + h)]
+            case let .rect(x, y, w, h, _, _, _), let .ellipse(x, y, w, h, _, _), let .dashedRect(x, y, w, h, _), let .band(x, y, w, h, _): pts = [(x, y), (x + w, y + h)]
             case let .arrow(x1, y1, x2, y2, _): pts = [(x1, y1), (x2, y2)]
             case let .line(p, _), let .polygon(p, _, _): pts = p.map { ($0[0], $0[1]) }
             }
@@ -128,6 +128,14 @@ final class ChartSceneTests: XCTestCase {
         for (a, b) in zip(rows, rows.dropFirst()) { XCTAssertGreaterThanOrEqual(b - a, 30) }
         inside(s)
         inside(eight)
+    }
+
+    func testProjectionOfTwelveMonthsStaysOnTheBoard() {
+        let months: [ChartData.Month] = (0..<16).map { (i: Int) -> ChartData.Month in
+            let kind = i < 12 ? "actual" : (i == 12 ? "partial" : "estimate")
+            return ChartData.Month(month: "m\(i)", label: "M\(i)", value: "\(1000 * (i + 1)).00", kind: kind)
+        }
+        inside(ChartScene.projection(ChartData(title: "Money in by month (USD)", currency: "USD", months: months, caption: "", enough_history: true, source: "paypal")))
     }
 
     func testFunctionGraphFollowsTheCurveAndStaysOnTheBoard() throws {

@@ -4,10 +4,14 @@ import type { PayPalDispute, PayPalDisputeDetail, PayPalProvider, PayPalTxn } fr
 import type { createIntegrations } from './integrations.ts';
 import { valueToCents, centsToValue, formatMoney } from './money.ts';
 import { clean } from './text.ts';
+import { monthWindows, type ChartRow } from './chart.ts';
 import { log } from './log.ts';
 
 const DAY = 86_400_000;
 const CACHE_MS = 60_000;
+// The chart's months of PayPal history: kept 10 minutes, at most this many entries in all.
+const HISTORY_MS = 10 * 60_000;
+const HISTORY_MAX = 500;
 export const RANGES = ['today', 'week', 'month'] as const;
 export type Range = (typeof RANGES)[number];
 
@@ -45,6 +49,7 @@ type Deps = {
 
 export function createBusiness({ db, ai, paypal, integrations, dec, now, isConnected }: Deps) {
   const txnCache = new Map<string, { at: number; set: TxnSet }>();
+  const historyCache = new Map<string, { at: number; set: { source: 'paypal' | 'local'; note: TxnSet['note']; rows: ChartRow[] } }>();
   const disputeCache = new Map<string, { at: number; list: PayPalDispute[] }>();
   const cached = <T>(m: Map<string, { at: number } & T>, userId: string) => {
     const hit = m.get(userId);
@@ -111,6 +116,50 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now, isConne
     }
     txnCache.set(userId, { at, set });
     return set;
+  }
+
+  // Months of history for the chart. Transaction Search allows 31 days per query, so one query per calendar month,
+  // all at once (at most 13). Same fallback as window(): an empty or failed PayPal answer uses our own paid records
+  // and the refunds Muninn ran. Local paid records count as completed.
+  type History = { source: 'paypal' | 'local'; note: TxnSet['note']; rows: ChartRow[] };
+  async function history(userId: string, since: number, tz = 'UTC'): Promise<History> {
+    const cacheKey = `${userId}:${since}:${tz}`;
+    const hit = historyCache.get(cacheKey);
+    if (hit && now() - hit.at < HISTORY_MS) return hit.set;
+    const local = (note: History['note']): History => ({
+      source: 'local', note,
+      rows: [
+        ...fromLocal(userId, since).map((t) => ({ date: t.date, amount: t.amount, currency: t.currency, status: 'COMPLETED', refund: false })),
+        ...(db.raw.prepare(`SELECT amount_cents, currency, created_at FROM refunds WHERE user_id = ? AND status = 'done' AND created_at >= ?`)
+          .all(userId, since) as { amount_cents: number; currency: string; created_at: number }[])
+          .map((r) => ({ date: new Date(r.created_at).toISOString(), amount: centsToValue(-Math.abs(r.amount_cents)), currency: r.currency, status: 'COMPLETED', refund: true })),
+      ],
+    });
+    const at = now();
+    let set: History;
+    try {
+      const pp = paypalFor(userId);
+      const pages = pp ? await Promise.all(monthWindows(since, at, tz).map(([a, b]) => pp.searchTransactions(new Date(a), new Date(b)))) : [];
+      const seen = new Set<string>();
+      // T1106 is the reversal of a payment. The reversed sale already reads REVERSED and does not count, so the reversal row
+      // is left out; counting both would take the money off twice.
+      const rows = pages.flat().filter((t) => isPayment(t.event_code) && t.event_code !== 'T1106' && !seen.has(t.id) && !!seen.add(t.id))
+        .map((t) => ({ date: t.date, amount: t.amount.value, currency: t.amount.currency, status: TXN_STATUS[t.status] ?? t.status, refund: t.event_code.startsWith('T11') }));
+      set = rows.length ? { source: 'paypal', note: null, rows } : local('paypal_empty');
+    } catch (e) {
+      log('history_failed', { user_id: userId, err: (e as Error).message });
+      set = local('paypal_error');
+    }
+    // Bounded: the oldest entry goes once the cache is full (a Map keeps insertion order).
+    historyCache.delete(cacheKey);
+    if (historyCache.size >= HISTORY_MAX) historyCache.delete(historyCache.keys().next().value!);
+    historyCache.set(cacheKey, { at, set });
+    return set;
+  }
+
+  /** A PayPal connect or disconnect changes whose sales the chart reads, so that user's cached months go. */
+  function forgetHistory(userId: string) {
+    for (const k of [...historyCache.keys()]) if (k.startsWith(`${userId}:`)) historyCache.delete(k);
   }
 
   async function transactions(userId: string, range: Range) {
@@ -326,7 +375,7 @@ export function createBusiness({ db, ai, paypal, integrations, dec, now, isConne
   /** After an answer to a dispute, the next list reads PayPal again. */
   const forgetDisputes = (userId: string) => { disputeCache.delete(userId); };
 
-  return { namer, transactions, summary, disputes, dispute, sendDisputeMessage, forgetDisputes, clients, brief };
+  return { namer, transactions, history, forgetHistory, summary, disputes, dispute, sendDisputeMessage, forgetDisputes, clients, brief };
 }
 
 type Summary = Awaited<ReturnType<ReturnType<typeof createBusiness>['summary']>>;

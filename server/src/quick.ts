@@ -28,8 +28,8 @@ const AMOUNTS = [
 const NOT_TOTAL_AFTER = /^\s?(?:k|m|x|each|per|ea)\b/i;
 // 3 haircuts at $45, 2 trims @ $20, 3x $45: a unit price after a quantity.
 const QUANTITY_BEFORE = /\b\d+\s*(?:x|@|[\p{L}-]+\s+(?:at|@))\s*$/iu;
-// A number that reads like a price with no currency or money word: "do 45 for the cut", "€1.200".
-const PRICE_SHAPE = /[$€£]\s?\d|\d\s?[$€£]|\b\d+(?:[.,]\d+)*\s+for\b|\b(?:do|for)\s+\d/i;
+// A number that reads like a price with no currency or money word: "do 45 for the cut", "€1.200". "$?" asks a price.
+const PRICE_SHAPE = /[$€£]\s?\d|(?:^|\s)[$€£]{1,2}\s*\?|\d\s?[$€£]|\b\d+(?:[.,]\d+)*\s+for\b|\b(?:do|for)\s+\d/i;
 // Rule A: a regex amount needs exactly one number in the owner's text and no rate or multiplier.
 const NUMBER = /\d+(?:[.,]\d+)*|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|dozens?|half)\b/gi;
 // A discount, tip, part payment or quantity word: the number may not be the total.
@@ -45,6 +45,13 @@ const MONEY_WORDS = new RegExp(String.raw`\b(?:${[
   'price[sd]?', 'pricing', 'cost\\w*', 'charge[sd]?', 'how much', 'rates?', 'quote', 'fees?', 'total', 'due', 'overdue', 'late',
   'money', 'cash', 'deposit', 'balance', 'receipt', 'venmo', 'paypal', 'transfer', 'tip', 'reimburse\\w*',
   'available', 'availability', 'services?', 'products?', 'menu', 'catalog\\w*', 'in stock', 'sell', 'buy',
+  // Shorthand and typos: "hw much", "how mutch", "invoce", "prise", "pymt".
+  'h[oe]?w\\s+m(?:u?ch|uhc|utch|ich|uc[hjg]|xh)', 'inv(?:oce|ioce|ocie|cie)s?', 'pri[cs]e?s?', 'pymt', 'pmt', 'amt', 'qoute', 'qte',
+  // Hinglish and a few European words for the same questions: "kitna hoga", "paise", "was kostet", "precio", "combien".
+  'kitn[aei]', 'paise', 'paisa', 'daam', 'rupees?', 'rs', 'preis\\w*', 'kost\\w*', 'rechnung', 'bezahl\\w*', 'zahl\\w*', 'wie ?viel',
+  // A rate or a fee with no price word: "what's the membership per month", "your retainer".
+  'per (?:hour|hr|month|mo|session|night|word|page|person|head|unit|piece|day|week|class|lesson|visit)', 'retainers?',
+  'precios?', 'factura', 'pago', 'quanto', 'custa', 'combien', 'prix', 'facture', 'tarif\\w*',
 ].join('|')})\b`, 'i');
 // Letters outside plain A-Z: another language or script. The word list is English, so those go to the model.
 const OTHER_SCRIPT = /[^\P{L}A-Za-z]/u;
@@ -174,6 +181,16 @@ export function deviceSignal(text: string): boolean {
   const s = lastSentence(text);
   if (s.split(/\s+/).filter(Boolean).length < 4) return false;
   return TASK.test(s) || /\d/.test(s) || nameIn(s) !== null || s.endsWith('?');
+}
+
+/**
+ * An owner command that names its own payment action: "remind Emma about last week's walks" is a reminder,
+ * "bill Kowalski the retainer" an invoice. Only the first word counts, and something must follow it. Null otherwise.
+ */
+export function commandIntent(text: string): 'send_reminder' | 'create_invoice' | null {
+  const m = /^\s*(remind|nudge|chase|bill|invoice)\s+(\S.*)$/iu.exec(lastSentence(text));
+  if (!m) return null;
+  return /^(bill|invoice)$/i.test(m[1]) ? 'create_invoice' : 'send_reminder';
 }
 
 /** The typed words a money chip came from: "$45 for the haircut", "45 dollars". Null when there is no amount. */
@@ -480,4 +497,33 @@ export function invoiceVerb(text: string): InvoiceVerb | null {
     return { verb: 'mark_paid', ...method };
   }
   return null;
+}
+
+// ---- Chart: "bar chart of my sales", "graph my projections", "show revenue next 3 months", "chart?".
+// The owner's own money in, by month, with a marked estimate. Regex only; talk about a client's chart stays chat.
+export type ChartAsk = { kind: 'bar' | 'line'; back: number; ahead: number };
+const NUMBER_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+const CHART_NOUN = /\b(?:chart|graph|plot)s?\b/i;
+const CHART_ALONE = /^(?:(?:a|the|my)\s+)?(?:(?:bar|line)\s+)?(?:chart|graph|plot)(?:\s+(?:please|pls))?[\s?!.]*$/i;
+const SALES = /\b(?:sales|revenue|income|earnings|takings|turnover|money in|projections?|forecasts?|trend(?:s|ing)?)\b/i;
+const CHART_MONTHS = new RegExp(`\\b(?:(?:last|past|next|coming)\\s+${COUNT}\\s+months?|(?:this|next|last)\\s+(?:month|quarter)|monthly|by month|per month)\\b`, 'i');
+const SHOW = /^(?:(?:can|could)\s+you\s+|please\s+|pls\s+)?(?:show|graph|chart|plot|draw|forecast|project|predict|visuali[sz]e)\b/i;
+const FORECAST_ALONE = /^(?:my\s+)?(?:(?:sales|revenue|income|earnings)\s+)?(?:projections?|forecasts?|trend)[\s?!.]*$/i;
+const HOW_TRENDING = /^how\s+(?:are|is)\s+(?:my\s+)?(?:sales|revenue|income|earnings)\s+(?:doing|trending|going)\b/i;
+
+const countIn = (m: RegExpMatchArray | null) => (m ? NUMBER_WORDS[m[1].toLowerCase()] ?? Number(m[1]) : null);
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+/** The chart the owner asks for, or null. `back`: full months of history (2-12); `ahead`: estimated months (1-6). */
+export function chartAsk(text: string): ChartAsk | null {
+  const s = lastSentence(text);
+  // "your chart", "the client's graph": someone else's chart, not the owner's money.
+  if (!s || s.length > 160 || /\byour\b/i.test(s)) return null;
+  const asked = CHART_ALONE.test(s) || FORECAST_ALONE.test(s) || HOW_TRENDING.test(s)
+    || (CHART_NOUN.test(s) && (SALES.test(s) || CHART_MONTHS.test(s)))
+    || (SHOW.test(s) && SALES.test(s));
+  if (!asked) return null;
+  const back = countIn(s.match(new RegExp(`\\b(?:last|past)\\s+(${COUNT})\\s+months?\\b`, 'i')));
+  const ahead = countIn(s.match(new RegExp(`\\b(?:next|coming)\\s+(${COUNT})\\s+months?\\b`, 'i')));
+  return { kind: /\bline\b/i.test(s) ? 'line' : 'bar', back: clamp(back ?? 6, 2, 12), ahead: clamp(ahead ?? 3, 1, 6) };
 }

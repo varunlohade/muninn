@@ -13,7 +13,7 @@ import type { Balance, PayPal, PayPalDispute, PayPalDisputeDetail, PayPalPartner
 
 export const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
-export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction>; group?: { group?: AskGroup; confidence?: number } | Error; route?: { route?: AskRoute; confidence?: number }; device?: { kind?: DeviceAction; confidence?: number } | Error; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; explain?: unknown; visual?: unknown; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void; partner?: PayPalPartner } = {}) {
+export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extraction> | ((text: string, catalog: string, business: string) => Partial<Extraction>); group?: { group?: AskGroup; confidence?: number } | Error; route?: { route?: AskRoute; confidence?: number }; device?: { kind?: DeviceAction; confidence?: number } | Error; verify?: boolean | ((h: Record<string, string | undefined>) => boolean); delayMs?: number; paypalDelayMs?: number; brief?: string | Error; write?: string | Error; tone?: ToneCheck; explain?: unknown; visual?: unknown; now?: () => number; apple?: AppleVerifier; onNewUser?: (userId: string) => void; partner?: PayPalPartner } = {}) {
   const db = openDb(':memory:');
   const cipher = createCipher(randomBytes(32));
   const calls: { fn: string; args: unknown[] }[] = [];
@@ -118,8 +118,12 @@ export function setup(opts: { cls?: Partial<Classification>; ext?: Partial<Extra
     return v ?? fallback;
   };
   const ai: Ai = {
-    async classify(text) { aiCalls.push({ fn: 'classify', args: [text] }); await sleep(opts.delayMs); return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
-    async extract(text, catalog) { aiCalls.push({ fn: 'extract', args: [text, catalog] }); await sleep(opts.delayMs); return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...opts.ext }; },
+    async classify(...args) { aiCalls.push({ fn: 'classify', args }); await sleep(opts.delayMs); return { intent: 'create_invoice', confidence: 0.92, ms: 5, ...opts.cls }; },
+    async extract(text, catalog, business = '') {
+      aiCalls.push({ fn: 'extract', args: [text, catalog, business] });
+      await sleep(opts.delayMs);
+      return { client_name: 'Sam', client_email: 'sam@example.com', amount: 45, currency: null, item: 'haircut', ...(typeof opts.ext === 'function' ? opts.ext(text, catalog, business) : opts.ext) };
+    },
     async askGroup(text) {
       aiCalls.push({ fn: 'askGroup', args: [text] });
       if (opts.group instanceof Error) throw opts.group;

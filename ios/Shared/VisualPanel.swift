@@ -43,7 +43,7 @@ struct VisualPanelView: View {
         .padding(.vertical, 4)
     }
 
-    /// Pen, eraser, undo, redo, replay and voice, top right on the board. The tool in use is an accent square.
+    /// Pen, eraser, undo, redo, replay and voice (not on a chart), top right on the board. The tool in use is an accent square.
     private var tools: some View {
         HStack(spacing: 2) {
             tool("pencil", .draw, id: "visual.draw", label: "Draw")
@@ -51,7 +51,7 @@ struct VisualPanelView: View {
             iconButton("arrow.uturn.backward", id: "visual.undo", label: "Undo", action: model.undoVisual)
             iconButton("arrow.uturn.forward", id: "visual.redo", label: "Redo", action: model.redoVisual)
             iconButton("arrow.counterclockwise", id: "visual.replay", label: "Replay", action: model.replayVisual)
-            voiceButton
+            if !state.chart { voiceButton }
         }
         .padding(3)
         .background(Theme.SystemKeyboard.light.bed, in: RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
@@ -163,6 +163,8 @@ struct VisualPanelView: View {
 
 /// Hosts the bundled Excalidraw page (ios/Visual, built from visual/). A content rule blocks every http(s) load, so the page
 /// can never reach a network; it talks to the keyboard only through the "pip" message handler (the page contract kept from Pip).
+/// The web view exists only while the panel is open: SwiftUI makes it when a visual opens and dismantles it when the panel closes,
+/// which ends its web process. If iOS kills the web process (memory), the page reloads and redraws the scene.
 struct VisualWebView: UIViewRepresentable {
     let model: KeyboardModel
     let dark: Bool
@@ -175,6 +177,7 @@ struct VisualWebView: UIViewRepresentable {
         // Nothing is cached or kept on disk: each open loads the bundled page as shipped.
         config.websiteDataStore = .nonPersistent()
         let web = WKWebView(frame: .zero, configuration: config)
+        web.navigationDelegate = context.coordinator
         web.isOpaque = false
         web.backgroundColor = .clear
         web.scrollView.isScrollEnabled = false
@@ -183,6 +186,7 @@ struct VisualWebView: UIViewRepresentable {
         #endif
         context.coordinator.web = web
         context.coordinator.dark = dark
+        context.coordinator.logMade()
         Coordinator.noNetwork { rules in
             if let rules { config.userContentController.add(rules) }
             guard let url = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "Visual") else {
@@ -200,17 +204,27 @@ struct VisualWebView: UIViewRepresentable {
         context.coordinator.js("pip.theme(\(dark))")
     }
 
+    /// The panel closed: stop the page and drop every link to it, so the web view and its web process go away now.
     static func dismantleUIView(_ web: WKWebView, coordinator: Coordinator) {
-        web.configuration.userContentController.removeScriptMessageHandler(forName: "pip")
         web.stopLoading()
+        web.navigationDelegate = nil
+        web.configuration.userContentController.removeAllScriptMessageHandlers()
+        web.configuration.userContentController.removeAllContentRuleLists()
+        coordinator.web = nil
     }
 
     @MainActor
-    final class Coordinator: NSObject, WKScriptMessageHandler, VisualPage {
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, VisualPage {
         weak var model: KeyboardModel?
         weak var web: WKWebView?
         var dark = false
         private let log = Logger(subsystem: "com.orseliyas.muninn", category: "visual")
+        private let opened = ContinuousClock.now
+        private var sinceOpen: Int { Int((ContinuousClock.now - opened) / .milliseconds(1)) }
+        private var firstStep = true
+        private var reloads = 0
+        /// How long the main thread spent making the web view (a typing hitch if large).
+        func logMade() { log.notice("MUNINN_VISUAL make_ms=\(self.sinceOpen, privacy: .public)") }
 
         init(model: KeyboardModel) { self.model = model }
 
@@ -238,13 +252,24 @@ struct VisualWebView: UIViewRepresentable {
         func next() { js("pip.next()") }
         func exportPNG() { js("pip.export()") }
 
+        /// iOS ended the page's web process (most often for memory). Reload and redraw twice; after that the panel says so.
+        func webViewWebContentProcessDidTerminate(_ web: WKWebView) {
+            reloads += 1
+            log.error("MUNINN_VISUAL web process ended, reload \(self.reloads, privacy: .public)")
+            let retry = reloads <= 2
+            model?.visualPageLost(retrying: retry)
+            if retry { web.reload() }
+        }
+
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let body = message.body as? [String: Any], let type = body["type"] as? String, let model else { return }
             switch type {
             case "ready":
+                log.notice("MUNINN_VISUAL ready_ms=\(self.sinceOpen, privacy: .public)")
                 js("pip.theme(\(dark))")
                 model.visualPageReady(self)
             case "step":
+                if firstStep { firstStep = false; log.notice("MUNINN_VISUAL first_step_ms=\(self.sinceOpen, privacy: .public)") }
                 model.visualStep(body["n"] as? Int ?? 1, of: body["m"] as? Int ?? 1, say: body["say"] as? String)
             case "stepDrawn":
                 model.visualStepDrawn(body["n"] as? Int ?? 0)

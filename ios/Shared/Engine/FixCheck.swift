@@ -151,8 +151,10 @@ enum FixCheck {
     }
 
     /// The system spell checker, in English. A word it has no guess for comes back `.wrong(guesses: [])`.
+    /// One system checker for the keyboard: each UITextChecker loads its own dictionary data.
+    static let checker = UITextChecker()
+
     static func system(_ word: String) -> Spell {
-        let checker = UITextChecker()
         let range = NSRange(location: 0, length: (word as NSString).length)
         let bad = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: "en_US")
         guard bad.location != NSNotFound else { return .ok }

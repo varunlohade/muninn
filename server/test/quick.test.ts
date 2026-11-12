@@ -44,7 +44,7 @@ test('quick: obvious chat is none; money words, amounts and other scripts are no
 
 // Before this change every suggest past validation paid for jev and a speculative extract: 2 calls.
 // mode: 'parallel' (extract starts before jev), 'sequential' (jev, then extract: slower, never wanted), or '-'.
-type Row = { text: string; context?: string; intent: Intent; path: 'regex_none' | 'jev_only' | 'jev+extract' };
+type Row = { text: string; context?: string; intent: Intent; path: 'regex_none' | 'jev_only' | 'extract_only' | 'jev+extract' };
 const TABLE: Row[] = [
   { text: 'hi!', intent: 'none', path: 'regex_none' },
   { text: 'thanks so much, see you tomorrow', intent: 'none', path: 'regex_none' },
@@ -59,16 +59,17 @@ const TABLE: Row[] = [
   { text: 'what are your prices', intent: 'catalog_reply', path: 'jev+extract' },
   { text: '$45 for the haircut, sam@example.com', intent: 'create_invoice', path: 'jev_only' },
   { text: "that'll be $45 for the beard trim", intent: 'create_invoice', path: 'jev+extract' },
-  { text: 'invoice sam 45 haircut', intent: 'create_invoice', path: 'jev+extract' },
+  // A command word ("invoice", "remind") names the intent, so jev is not asked.
+  { text: 'invoice sam 45 haircut', intent: 'create_invoice', path: 'extract_only' },
   { text: 'here is a pay link for the haircut, $45', intent: 'pay_link', path: 'jev_only' },
   { text: 'send me a link to pay', intent: 'pay_link', path: 'jev+extract' },
-  { text: 'remind Ana about the invoice', intent: 'send_reminder', path: 'jev_only' },
+  { text: 'remind Ana about the invoice', intent: 'send_reminder', path: 'regex_none' },
   { text: 'nudge her about the invoice', intent: 'send_reminder', path: 'jev+extract' },
   { text: 'refund Bo please', intent: 'refund', path: 'jev_only' },
   { text: 'refund Bo $20', intent: 'refund', path: 'jev_only' },
   { text: 'refund Bo 20', intent: 'refund', path: 'jev+extract' },
 ];
-const PAID = { regex_none: 0, jev_only: 1, 'jev+extract': 2 } as const;
+const PAID = { regex_none: 0, jev_only: 1, extract_only: 1, 'jev+extract': 2 } as const;
 
 async function world(opts: Parameters<typeof setup>[0]) {
   const s = setup(opts);
@@ -94,8 +95,8 @@ test('suggest paths: paid calls per message, before vs after', async (t) => {
     await suggest(row.text, row.context);
     const order = s.aiCalls.map((c) => c.fn);
     const fns = [...order].sort();
-    const path = fns.length === 0 ? 'regex_none' : fns.includes('extract') ? 'jev+extract' : 'jev_only';
-    const mode = !fns.includes('extract') ? '-' : order.indexOf('extract') < order.indexOf('classify') ? 'parallel' : 'sequential';
+    const path = fns.length === 0 ? 'regex_none' : !fns.includes('classify') ? 'extract_only' : fns.includes('extract') ? 'jev+extract' : 'jev_only';
+    const mode = !fns.includes('extract') || !fns.includes('classify') ? '-' : order.indexOf('extract') < order.indexOf('classify') ? 'parallel' : 'sequential';
     assert.equal(path, row.path, row.text);
     assert.equal(fns.length, PAID[row.path], row.text);
     assert.notEqual(mode, 'sequential', row.text);

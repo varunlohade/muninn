@@ -7,6 +7,10 @@ struct DrawScene: Encodable, Equatable {
     enum Shape: Equatable {
         case text(x: Double, y: Double, text: String, size: String = "s", color: String = "black")
         case rect(x: Double, y: Double, w: Double, h: Double, color: String, fill: String = "none", label: String? = nil)
+        /// An open box with a dashed edge: an estimate, never a fact.
+        case dashedRect(x: Double, y: Double, w: Double, h: Double, color: String)
+        /// A pale filled box with no edge: the likely range behind an estimate.
+        case band(x: Double, y: Double, w: Double, h: Double, color: String)
         case ellipse(x: Double, y: Double, w: Double, h: Double, color: String, fill: String = "none")
         case arrow(x1: Double, y1: Double, x2: Double, y2: Double, color: String = "grey")
         case line(points: [[Double]], color: String)
@@ -49,6 +53,12 @@ struct DrawScene: Encodable, Equatable {
                 case let .rect(x, y, w, h, color, fill, label):
                     try put("type", "rect"); try put("x", r(x)); try put("y", r(y)); try put("w", r(w)); try put("h", r(h)); try put("color", color); try put("fill", fill)
                     if let label { try put("label", label) }
+                case let .dashedRect(x, y, w, h, color):
+                    try put("type", "rect"); try put("x", r(x)); try put("y", r(y)); try put("w", r(w)); try put("h", r(h)); try put("color", color)
+                    try put("fill", "none"); try put("stroke", "dashed")
+                case let .band(x, y, w, h, color):
+                    try put("type", "rect"); try put("x", r(x)); try put("y", r(y)); try put("w", r(w)); try put("h", r(h)); try put("color", color)
+                    try put("fill", "solid"); try put("stroke", "none"); try put("opacity", 25)
                 case let .ellipse(x, y, w, h, color, fill):
                     try put("type", "ellipse"); try put("x", r(x)); try put("y", r(y)); try put("w", r(w)); try put("h", r(h)); try put("color", color); try put("fill", fill)
                 case let .arrow(x1, y1, x2, y2, color):
@@ -210,6 +220,61 @@ enum ChartScene {
             .init(say: "One bar for each: the taller, the bigger.", shapes: bars),
             .init(say: "The values and their names.", shapes: labels),
         ])
+    }
+
+    /// Money in by month from GET /v1/chart: solid bars for full months, a pale bar for the month so far, dashed bars with
+    /// "~$4k" for the estimate. The last step says how the estimate was made (the server's caption).
+    static func projection(_ data: ChartData) -> DrawScene {
+        let values = data.months.map { Double($0.value) ?? 0 }
+        let highs = data.months.compactMap { $0.high.flatMap(Double.init) }
+        let axes = valueAxes(lo: 0, hi: max((values + highs).max() ?? 1, 1))
+        let slot = (right - left) / Double(max(data.months.count, 1))
+        let w = slot * 0.6
+        var bands: [DrawScene.Shape] = [], bars: [DrawScene.Shape] = [], labels: [DrawScene.Shape] = []
+        for (i, (m, v)) in zip(data.months, values).enumerated() {
+            let x = left + slot * Double(i) + (slot - w) / 2
+            let y0 = axes.y(0), y1 = axes.y(v)
+            let h = max(y0 - y1, 1)
+            let estimate = m.kind == "estimate"
+            if estimate, let lo = m.low.flatMap(Double.init), let hi = m.high.flatMap(Double.init), hi > lo {
+                let pad = (slot - w) / 4
+                bands.append(.band(x: x - pad, y: axes.y(hi), w: w + 2 * pad, h: axes.y(lo) - axes.y(hi), color: "light-blue"))
+            }
+            switch m.kind {
+            case "estimate": bars.append(.dashedRect(x: x, y: y0 - h, w: w, h: h, color: main))
+            case "partial": bars.append(.rect(x: x, y: y0 - h, w: w, h: h, color: "light-blue", fill: "solid"))
+            default: bars.append(.rect(x: x, y: y0 - h, w: w, h: h, color: main, fill: "solid"))
+            }
+            let value = (estimate ? "~" : "") + shortMoney(v, currency: data.currency)
+            // An estimate's label sits above its band, so the band never runs through the number.
+            let top = estimate ? min(y0 - h, axes.y(m.high.flatMap(Double.init) ?? 0)) : y0 - h
+            labels.append(.text(x: x + w / 2 - textWidth(value) / 2, y: top - 26, text: value, color: estimate ? "grey" : main))
+            let name = fit(m.label, width: slot - 4)
+            labels.append(.text(x: left + slot * Double(i) + slot / 2 - textWidth(name) / 2, y: bottom + 12, text: name, color: estimate ? "grey" : "black"))
+        }
+        // One "estimate" word over the dashed bars, above their tallest label (the band's top when it is higher).
+        let est = data.months.indices.filter { data.months[$0].kind == "estimate" }
+        if let a = est.first, let b = est.last {
+            let tallest = est.map { max(values[$0], data.months[$0].high.flatMap(Double.init) ?? 0) }.max() ?? 0
+            let word = "estimate"
+            let mid = left + slot * Double(a + b + 1) / 2
+            labels.append(.text(x: mid - textWidth(word) / 2, y: axes.y(tallest) - 54, text: word, color: "grey"))
+        }
+        let soFar = data.months.contains { $0.kind == "partial" } ? " The pale bar is this month so far." : ""
+        return DrawScene(title: data.title, steps: [
+            .init(say: "Money in each month, from PayPal.", shapes: axes.shapes + titleShape(data.title)),
+            .init(say: "Solid bars are paid sales, less refunds." + soFar, shapes: bands + bars),
+            .init(say: data.caption, shapes: labels),
+        ])
+    }
+
+    /// "$450", "$1.2k", "€3k", "£12k": a bar label that fits over a narrow bar.
+    static func shortMoney(_ v: Double, currency: String) -> String {
+        let symbol = ["USD": "$", "CAD": "CA$", "AUD": "A$", "EUR": "€", "GBP": "£"][currency] ?? currency + " "
+        if v < 1000 { return symbol + String(Int(v.rounded())) }
+        let k = v / 1000
+        let s = k < 10 ? String(format: "%.1f", k).replacingOccurrences(of: ".0", with: "") : String(Int(k.rounded()))
+        return symbol + s + "k"
     }
 
     static func line(_ items: [Chart.Item], title: String?) -> DrawScene {

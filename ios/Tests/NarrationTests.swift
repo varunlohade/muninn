@@ -93,9 +93,8 @@ final class VoiceModelTests: XCTestCase {
         let model = KeyboardModel(deps: .fake(api: FakeAPI(), speaker: speaker))
         model.host = host
         model.keyboardAppeared()
-        host.text = "graph y = x^2"
-        model.textChanged()
-        model.perform(.explain)
+        // A teacher drawing (a chart or graph has no voice).
+        model.explainPanel = .visual(VisualState(subject: "log function", summary: "A log is the power you need.", scene: Data("{}".utf8)))
         let page = Page()
         model.visualPageReady(page)
         model.visualStep(1, of: 3, say: "Axes.")
@@ -125,9 +124,8 @@ final class VoiceModelTests: XCTestCase {
         let model = KeyboardModel(deps: .fake(api: FakeAPI(), speaker: speaker))
         model.host = host
         model.keyboardAppeared()
-        host.text = "graph y = x^2"
-        model.textChanged()
-        model.perform(.explain)
+        // A teacher drawing (a chart or graph has no voice).
+        model.explainPanel = .visual(VisualState(subject: "log function", summary: "A log is the power you need.", scene: Data("{}".utf8)))
         model.visualPageReady(Page())
         model.visualStep(1, of: 3, say: "Axes.")
         model.visualDone()

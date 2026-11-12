@@ -16,7 +16,7 @@ import { log } from './log.ts';
 import { Amount, Currency, centsToValue, formatMoney, valueToCents } from './money.ts';
 import { PayPalError, type PayPalProvider } from './paypal.ts';
 import {
-  balanceAsk, disputeVerb, invoiceVerb, mentions, payoutAsk, planVerb, quick, type DisputeVerb, type InvoiceVerb, type PayoutAsk, type PlanVerb,
+  balanceAsk, chartAsk, disputeVerb, invoiceVerb, mentions, payoutAsk, planVerb, quick, type DisputeVerb, type InvoiceVerb, type PayoutAsk, type PlanVerb,
 } from './quick.ts';
 import { clean } from './text.ts';
 
@@ -585,6 +585,9 @@ export function createMore(d: MoreDeps) {
    */
   async function suggest(userId: string, text: string, from: 'suggest' | 'ask' = 'suggest'): Promise<Chip[] | null> {
     if (balanceAsk(text)) return [chip('balance', 'Balance', {}, false)];
+    // The keyboard draws the chart; the Ask bar has no canvas, so it never gets this chip.
+    const chart = from === 'suggest' ? chartAsk(text) : null;
+    if (chart) return [chip('chart', 'Sales chart', chart, false)];
     const plan = planVerb(text);
     if (plan) {
       const out = planChips(userId, text, plan);

@@ -63,6 +63,16 @@ final class PayPalConnector: NSObject, ObservableObject, ASWebAuthenticationPres
         decision = nil
     }
 
+    /// Log out: forget the last user's PayPal state. A connect still waiting gets "no".
+    func reset() {
+        decide(false)
+        web?.cancel()
+        web = nil
+        status = nil
+        note = nil
+        busy = false
+    }
+
     func disconnect() async {
         busy = true
         defer { busy = false }

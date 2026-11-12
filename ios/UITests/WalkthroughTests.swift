@@ -124,6 +124,8 @@ final class WalkthroughTests: XCTestCase {
             shot("00-get-started")
             start.tap()
             if id(app, "onboarding.paypal.demo").waitForExistence(timeout: 10) { id(app, "onboarding.paypal.demo").tap() }
+            // The business question follows the PayPal step; these runs leave it for later.
+            if id(app, "onboarding.business.later").waitForExistence(timeout: 5) { id(app, "onboarding.business.later").tap() }
         } else {
             XCUIDevice.shared.system.open(URL(string: "muninn-dev://pair?token=pkd_fake&server=\(fake.absoluteString)")!)
             let open = springboard.buttons["Open"]

@@ -1,12 +1,15 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from 'node:crypto';
 
 const VERSION = 'v1';
+export const KEY_CACHE_MAX = 1000;
 
 export type Cipher = {
   encrypt(userId: string, plaintext: string): string;
   decrypt(userId: string, blob: string): string;
   /** Keyed hash for lookups (e.g. an Apple user id). Without the master key, nobody can test a guess against the DB. */
   lookupHash(scope: string, value: string): string;
+  /** How many per-user keys sit in memory (for tests). */
+  cachedKeys(): number;
 };
 
 export function parseMasterKey(hex: string | undefined): Buffer {
@@ -15,17 +18,19 @@ export function parseMasterKey(hex: string | undefined): Buffer {
 }
 
 export function createCipher(masterKey: Buffer): Cipher {
+  // A small LRU of per-user keys: a hit moves to the end, and the oldest key goes when the cache is full.
   const keys = new Map<string, Buffer>();
   const keyFor = (userId: string) => {
     let k = keys.get(userId);
-    if (!k) {
-      k = Buffer.from(hkdfSync('sha256', masterKey, Buffer.from(userId, 'utf8'), 'pro-keyboard/data/v1', 32));
-      keys.set(userId, k);
-    }
+    if (k) keys.delete(userId);
+    else k = Buffer.from(hkdfSync('sha256', masterKey, Buffer.from(userId, 'utf8'), 'pro-keyboard/data/v1', 32));
+    keys.set(userId, k);
+    if (keys.size > KEY_CACHE_MAX) keys.delete(keys.keys().next().value!);
     return k;
   };
   const indexKey = Buffer.from(hkdfSync('sha256', masterKey, Buffer.alloc(0), 'pro-keyboard/index/v1', 32));
   return {
+    cachedKeys: () => keys.size,
     lookupHash(scope, value) {
       return createHmac('sha256', indexKey).update(`${scope}:${value}`).digest('hex');
     },

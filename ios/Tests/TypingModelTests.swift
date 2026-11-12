@@ -112,6 +112,20 @@ final class TypingModelTests: XCTestCase {
         XCTAssertEqual(store.touchOffsets[3], 0)
     }
 
+    func testAResetAfterLogOutDoesNotSaveTouches() async {
+        let store = FakeStore()
+        let m = KeyboardModel(deps: .fake(api: FakeAPI(), store: store, clock: clock))
+        m.host = host
+        m.keyboardAppeared()
+        model = m
+        await until("language model") { KeyboardModel.language != nil }
+        host.autocapitalization = .none
+        let s = key("k.1.s").frame
+        for _ in 0..<5 { tap(CGPoint(x: s.midX, y: s.maxY - 2)) }
+        model.keyboardDisappeared(saveTouches: false)
+        XCTAssertEqual(store.touchOffsets, [], "the wiped user's offsets are not written back")
+    }
+
     func testAQuickSpaceTapStillTypesASpace() async {
         host.text = "see"
         let finger = NSObject()
@@ -120,5 +134,35 @@ final class TypingModelTests: XCTestCase {
         XCTAssertEqual(host.text, "see ")
         XCTAssertFalse(model.trackpad)
         XCTAssertEqual(host.cursorMoves, [])
+    }
+
+    /// A memory warning drops the caches; typing goes on with plain key edges, and the next appear loads the model again.
+    func testReleaseCachesDropsCachesAndTypingGoesOn() async throws {
+        await until("language model") { KeyboardModel.language != nil }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("release-caches-\(UUID().uuidString)", isDirectory: true)
+        let catalog = CatalogCache(dir: dir)
+        let png = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))
+        catalog.savePhoto(png, id: "mem1")
+        XCTAssertNotNil(CatalogThumbs.shared.image(id: "mem1", cache: catalog))
+        try FileManager.default.removeItem(at: dir)
+        XCTAssertNotNil(CatalogThumbs.shared.image(id: "mem1", cache: catalog), "served from memory")
+        host.text = "what does btw mean"
+        model.textChanged()
+        model.perform(.explainMore)
+        XCTAssertNotNil(model.explainPanel)
+
+        model.releaseCaches()
+
+        XCTAssertNil(KeyboardModel.language)
+        XCTAssertNil(model.explainPanel)
+        XCTAssertNil(CatalogThumbs.shared.image(id: "mem1", cache: catalog), "no decoded thumb left")
+        XCTAssertNotNil(ExplainDictionary.shared.lookup("btw"), "the dictionary reads its file again")
+        host.text = ""
+        host.autocapitalization = .none
+        for id in ["k.0.q", "k.2.c", "k.1.k"] { tap(center(id)) }
+        XCTAssertEqual(host.text, "qck")
+        model.keyboardAppeared()
+        for _ in 0..<100 where KeyboardModel.language == nil { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNotNil(KeyboardModel.language, "the next appear loads the model again")
     }
 }

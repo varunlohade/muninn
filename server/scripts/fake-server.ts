@@ -2,7 +2,8 @@
 // usage: npm run fake   (PORT=0 picks a free port; the first line printed names it)
 // Debug routes: GET /_log, POST /_reset, POST /_paid/:id (invoice, order or subscription id), POST /_next {"cls": {...}, "ext": {...}, "group": {...}, "route": {...}, "explain": {...}, "visual": {...}},
 // explain and visual take raw model JSON; with none, they answer with the log-function fixtures in test/fixtures.
-// POST /_paypal-extras (an active repeat bill for Ana Diaz and an open dispute from Maya Lopez, for the PayPal action shots)
+// POST /_paypal-extras (an active repeat bill for Ana Diaz and an open dispute from Maya Lopez, for the PayPal action shots),
+// POST /_chart-history (six months of PayPal sales, for the chart shots)
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Classification, Extraction } from '../src/ai.ts';
@@ -122,6 +123,20 @@ fake.post('/_paypal-extras', (c) => {
   // The disputed payment is one Ana's repeat bill took, so the demo user owns the dispute.
   db.raw.prepare('INSERT OR IGNORE INTO subscription_payments (sale_id, user_id, subscription_id, paid_at) VALUES (?, ?, ?, ?)').run('CAP-FAKE-1', userId, 'I-FAKEANA1', t - DAY);
   return c.json({ ok: true });
+});
+
+// Six months of PayPal sales before this one, plus two early this month, for the chart shots.
+fake.post('/_chart-history', (c) => {
+  const { userId, ppData } = state;
+  const now = new Date();
+  const month = (offset: number, day: number) => Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset, day, 15);
+  const perMonth = [[620, 480, 900], [700, 540, 860, 300], [820, 610, 760], [940, 700, 880, 350], [1020, 760, 950, 420], [1100, 880, 990, 510], [640, 380]];
+  const txns = perMonth.flatMap((sales, i) => sales.map((v, k) => ({
+    id: `TXN-CHART-${i}-${k}`, event_code: 'T0006', date: new Date(month(i - 6, 2 + k * 6)).toISOString(), status: 'S',
+    amount: { value: v.toFixed(2), currency: 'USD' }, fee: null, payer_name: null, payer_email: null, invoice_id: null, subject: null,
+  })));
+  ppData.set(userId, { ...ppData.get(userId), txns });
+  return c.json({ ok: true, txns: txns.length });
 });
 
 // "Get started" in the app: the fake signs every device in as the one seeded user, so Home shows the demo data.

@@ -175,6 +175,11 @@ final class ExplainModelTests: XCTestCase {
         XCTAssertEqual(v.summary, "rent 1200, food 400, fun 200")
         for _ in 0..<50 { await Task.yield() }
         XCTAssertEqual(api.calls, [])
+        XCTAssertTrue(v.chart, "a chart has no voice button")
+        model.visualDone()
+        model.toggleVoice()
+        guard case .visual(let after)? = model.explainPanel else { return XCTFail("no panel") }
+        XCTAssertFalse(after.voice, "a chart never reads aloud")
     }
 
     func testAGraphInsertsItsEquation() {
@@ -306,6 +311,7 @@ final class ExplainModelTests: XCTestCase {
         model.visualStep(2, of: 4, say: "Draw y = log(x).")
         guard case .visual(let mid)? = model.explainPanel else { return XCTFail("panel closed") }
         XCTAssertEqual(mid.say, "Draw y = log(x).")
+        XCTAssertFalse(mid.chart, "a teacher drawing keeps its voice button")
         model.selectVisualTool(.draw)
         model.selectVisualTool(.eraser)
         model.selectVisualTool(.eraser)
@@ -336,5 +342,38 @@ final class ExplainModelTests: XCTestCase {
         model.insertExplain()
         XCTAssertEqual(host.text, "explain log function A log is the power you need.")
         XCTAssertEqual(model.keyboardHeight, Theme.SystemKeyboard.height)
+    }
+
+    func testALostWebPageRedrawsThenSaysSo() async {
+        final class Page: VisualPage {
+            var played = 0
+            func play(_ scene: Data) { played += 1 }
+            func replay() {}
+            func setTool(_ tool: VisualState.Tool) {}
+            func undo() {}
+            func redo() {}
+            func setVoice(_ on: Bool) {}
+            func next() {}
+            func exportPNG() {}
+        }
+        set("explain log function")
+        await pass(KeyboardModel.explainDebounce)
+        await until("explain answer") { model.explainOffer != nil }
+        model.perform(.explainMore)
+        model.showVisual()
+        model.visualPageReady(Page())
+        await until("scene") { if case .visual(let v)? = model.explainPanel { v.scene != nil } else { false } }
+        model.visualDone()
+
+        model.visualPageLost(retrying: true)
+        guard case .visual(let reloading)? = model.explainPanel else { return XCTFail("panel closed") }
+        XCTAssertEqual(reloading.status, .loading)
+        let page = Page()
+        model.visualPageReady(page)
+        XCTAssertEqual(page.played, 1)
+
+        model.visualPageLost(retrying: false)
+        guard case .visual(let lost)? = model.explainPanel else { return XCTFail("panel closed") }
+        XCTAssertEqual(lost.status, .failed("Could not draw that. Try again."))
     }
 }
