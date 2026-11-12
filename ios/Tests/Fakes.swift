@@ -151,6 +151,7 @@ final class FakeStore: KeyboardStore {
     var notes: [Note] = []
     var actionShortcuts: [ActionShortcut] = ActionShortcut.defaults
     var pendingAction: PendingAction?
+    var touchOffsets: [Double] = []
 }
 
 /// The phone's calendar and reminders, in memory. `granted` is what the app was allowed.

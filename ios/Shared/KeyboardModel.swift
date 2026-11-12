@@ -215,13 +215,67 @@ final class KeyboardModel: ObservableObject {
     /// Words put back after an autocorrect. They are not fixed again.
     private var keptWords: Set<String> = []
 
+    /// The English model for the touch decoder, loaded once off the main thread. Until then taps use plain key edges.
+    private(set) static var language: LanguageModel?
+    private static var loadingLanguage = false
+    private var adaptation = TouchAdaptation()
+    private var learnedSinceSave = 0
+    /// What the decoder made of each finger now down.
+    private var tapInfo: [ObjectIdentifier: (result: TouchDecoder.Result, point: CGPoint)] = [:]
+    /// Each letter tap's likeliest keys in the word being typed; empty for a letter typed some other way.
+    private var wordTaps: [[TouchDecoder.Candidate]] = []
+    /// The last decoded tap. It teaches the adaptation once the next key is not delete.
+    private var unlearned: (point: CGPoint, key: TouchKey)?
+
+    static func loadLanguage() {
+        guard language == nil, !loadingLanguage else { return }
+        loadingLanguage = true
+        Task.detached(priority: .utility) {
+            let model = LanguageModel.bundled()
+            await MainActor.run { KeyboardModel.language = model }
+        }
+    }
+
+    /// The key a touch means: the key under it or, for a letter tapped near its edge, the likeliest letter there.
+    /// The keys never move on screen; the callout shows the decoded letter.
+    func key(for id: ObjectIdentifier, at p: CGPoint, in keys: [KeyCap]) -> KeyCap? {
+        guard let hit = KeyboardGeometry.key(at: p, in: keys) else { return nil }
+        // A new finger types the letter another finger still holds first, so the decoder reads it as context.
+        if active[id] == nil { for (other, k) in active { if case .char = k.kind { commit(k, tap: tapInfo[other]); release(other) } } }
+        tapInfo[id] = nil
+        guard layout == .letters, case .char = hit.kind,
+              let r = TouchDecoder.decode(p, keys: KeyboardGeometry.touchKeys(keys), word: currentWord, model: Self.language, adaptation: adaptation),
+              let key = keys.first(where: { $0.kind == .char(String(r.key.letter)) }) else { return hit }
+        tapInfo[id] = (r, p)
+        return key
+    }
+
+    /// The letters of the word before the cursor, lowercased.
+    private var currentWord: String {
+        String((host?.contextBeforeInput ?? "").lowercased().reversed().prefix { LanguageModel.index($0) != nil }.reversed())
+    }
+
+    private func learnLastTap() {
+        guard let u = unlearned else { return }
+        unlearned = nil
+        adaptation.learn(u.point, on: u.key)
+        learnedSinceSave += 1
+        if learnedSinceSave >= 20 { saveAdaptation() }
+    }
+
+    private func saveAdaptation() {
+        guard learnedSinceSave > 0 else { return }
+        learnedSinceSave = 0
+        deps.store.touchOffsets = adaptation.stored
+    }
+
     func display(_ c: String) -> String { layout == .letters && shift != .off ? c.uppercased() : c }
 
     func touchBegan(_ id: ObjectIdentifier, _ key: KeyCap, at point: CGPoint = .zero) {
         guard trackpadTouch == nil else { return }
         host?.playClick()
         // A new touch commits any letter still held by another finger, like iOS.
-        for (other, k) in active where other != id { if case .char = k.kind { commit(k); release(other) } }
+        for (other, k) in active where other != id { if case .char = k.kind { commit(k, tap: tapInfo[other]); release(other) } }
         active[id] = key
         pressedKeys.insert(key.id)
         if case .char = key.kind { calloutKeyID = key.id }
@@ -242,10 +296,11 @@ final class KeyboardModel: ObservableObject {
 
     func touchEnded(_ id: ObjectIdentifier) {
         guard let key = active[id] else { return }
+        let tap = tapInfo[id]
         release(id)
         if trackpadTouch == id { endTrackpad(); return }
         if key.kind == .delete { deleteTask?.cancel(); return }
-        commit(key)
+        commit(key, tap: tap)
     }
 
     func touchCancelled(_ id: ObjectIdentifier) {
@@ -285,8 +340,9 @@ final class KeyboardModel: ObservableObject {
     func activate(_ key: KeyCap) {
         host?.playClick()
         if key.kind == .delete {
-            if !revertCorrection() { host?.deleteBackward() }
+            if revertCorrection() { wordTaps = [] } else { host?.deleteBackward(); _ = wordTaps.popLast() }
             correction = nil
+            unlearned = nil
             afterEdit()
             return
         }
@@ -296,19 +352,28 @@ final class KeyboardModel: ObservableObject {
     private func release(_ id: ObjectIdentifier) {
         points[id] = nil
         if active[id]?.kind == .space { spaceHold?.cancel() }
+        tapInfo[id] = nil
         if let k = active.removeValue(forKey: id) {
             pressedKeys.remove(k.id)
             if calloutKeyID == k.id { calloutKeyID = nil }
         }
     }
 
-    private func commit(_ key: KeyCap) {
+    /// `tap`: what the decoder made of the touch that typed it.
+    private func commit(_ key: KeyCap, tap: (result: TouchDecoder.Result, point: CGPoint)? = nil) {
         correction = nil
+        learnLastTap()
         switch key.kind {
         case .char(let c):
             let fixed = Self.wordEnders.contains(c) ? autocorrect() : nil
             host?.insert(display(c))
             correction = fixed.map { ($0.typed, $0.fixed, c) }
+            if c.count == 1, LanguageModel.index(Character(c)) != nil {
+                wordTaps.append(tap?.result.candidates ?? [])
+                unlearned = tap.map { ($0.point, $0.result.key) }
+            } else {
+                wordTaps = []
+            }
             if shift == .once && layout == .letters { shift = .off }
             if layout != .letters && c == "'" { layout = .letters }
             lastSpaceTap = nil
@@ -326,11 +391,13 @@ final class KeyboardModel: ObservableObject {
             let fixed = autocorrect()
             tapSpace()
             correction = fixed.map { ($0.typed, $0.fixed, " ") }
+            wordTaps = []
         case .ret:
             if expandShortcut() { break }
             let fixed = autocorrect()
             host?.insert("\n")
             correction = fixed.map { ($0.typed, $0.fixed, "\n") }
+            wordTaps = []
             lastSpaceTap = nil
             afterEdit()
         case .globe:
@@ -344,8 +411,11 @@ final class KeyboardModel: ObservableObject {
 
     /// Fixes a clear typo in the word just typed, before space, return or punctuation goes in.
     private func autocorrect() -> (typed: String, fixed: String)? {
-        guard let host, host.autocorrection != .no,
-              let c = FixCheck.autocorrect(host.contextBeforeInput ?? "", names: appointments.compactMap(\.clientName), kept: keptWords)
+        guard let host, host.autocorrection != .no else { return nil }
+        let language = Self.language
+        let taps = wordTaps.contains(where: \.isEmpty) ? nil : wordTaps
+        let decode: ((String) -> String?)? = language.map { m in { TouchDecoder.correctWord($0, taps: taps, model: m) } }
+        guard let c = FixCheck.autocorrect(host.contextBeforeInput ?? "", names: appointments.compactMap(\.clientName), kept: keptWords, decode: decode)
         else { return nil }
         for _ in 0..<c.typed.count { host.deleteBackward() }
         host.insert(c.fixed)
@@ -380,8 +450,9 @@ final class KeyboardModel: ObservableObject {
 
     /// Delete fires on touch down, repeats after 0.5 s, then speeds up to whole words.
     private func deleteDown() {
-        if !revertCorrection() { host?.deleteBackward() }
+        if revertCorrection() { wordTaps = [] } else { host?.deleteBackward(); _ = wordTaps.popLast() }
         correction = nil
+        unlearned = nil
         afterEdit()
         deleteTask?.cancel()
         let sleep = deps.sleep
@@ -389,6 +460,7 @@ final class KeyboardModel: ObservableObject {
             try? await sleep(.milliseconds(500))
             var n = 0
             while !Task.isCancelled, let self {
+                self.wordTaps = []
                 if n < 20 { self.host?.deleteBackward() } else { self.deleteWord() }
                 self.afterEdit()
                 n += 1
@@ -421,6 +493,8 @@ final class KeyboardModel: ObservableObject {
     /// On appear: note that the keyboard is on, offer copied text (without reading it), resume watching.
     func keyboardAppeared() {
         refreshAccess()
+        Self.loadLanguage()
+        adaptation = TouchAdaptation(stored: deps.store.touchOffsets)
         layout = .letters
         updateAutoShift()
         guard hasFullAccess else { copiedAvailable = false; return }
@@ -484,6 +558,7 @@ final class KeyboardModel: ObservableObject {
     }
 
     func keyboardDisappeared() {
+        saveAdaptation()
         spaceHold?.cancel()
         trackpadTouch = nil
         trackpad = false

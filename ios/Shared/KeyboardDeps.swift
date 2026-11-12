@@ -41,6 +41,8 @@ protocol KeyboardStore: AnyObject {
     var actionShortcuts: [ActionShortcut] { get }
     /// A money call still waiting for its answer, kept when the keyboard closes.
     var pendingAction: PendingAction? { get set }
+    /// The touch decoder's learned tap offsets.
+    var touchOffsets: [Double] { get set }
 }
 
 final class SharedKeyboardStore: KeyboardStore {
@@ -63,6 +65,10 @@ final class SharedKeyboardStore: KeyboardStore {
     var pendingAction: PendingAction? {
         get { SharedStore.pendingAction }
         set { SharedStore.pendingAction = newValue }
+    }
+    var touchOffsets: [Double] {
+        get { SharedStore.touchOffsets }
+        set { SharedStore.touchOffsets = newValue }
     }
 }
 

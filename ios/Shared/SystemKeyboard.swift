@@ -163,8 +163,8 @@ struct SystemKeysView: View {
                         .accessibilityHidden(true)
                 }
                 TouchSurface(
-                    began: { id, pt in if let k = KeyboardGeometry.key(at: pt.offsetBy(M.barHeight - 6), in: keys) { model.touchBegan(id, k, at: pt) } },
-                    moved: { id, pt in if let k = KeyboardGeometry.key(at: pt.offsetBy(M.barHeight - 6), in: keys) { model.touchMoved(id, k, at: pt) } },
+                    began: { id, pt in let p = pt.offsetBy(M.barHeight - 6); if let k = model.key(for: id, at: p, in: keys) { model.touchBegan(id, k, at: p) } },
+                    moved: { id, pt in let p = pt.offsetBy(M.barHeight - 6); if let k = model.key(for: id, at: p, in: keys) { model.touchMoved(id, k, at: p) } },
                     ended: { id, _ in model.touchEnded(id) },
                     cancelled: { id in model.touchCancelled(id) }
                 )

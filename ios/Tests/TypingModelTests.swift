@@ -67,6 +67,51 @@ final class TypingModelTests: XCTestCase {
         XCTAssertEqual(host.text, "I do teh ")
     }
 
+    /// One finger tap through the view's path: decode, press, lift.
+    private func tap(_ p: CGPoint) {
+        let finger = NSObject()
+        let id = ObjectIdentifier(finger)
+        guard let k = model.key(for: id, at: p, in: keys) else { return XCTFail("no key at \(p)") }
+        model.touchBegan(id, k, at: p)
+        model.touchEnded(id)
+    }
+
+    private func center(_ id: String) -> CGPoint { CGPoint(x: key(id).frame.midX, y: key(id).frame.midY) }
+
+    func testAnEdgeTapTypesTheLikelyLetterAndACoreTapTypesItsKey() async {
+        await until("language model") { KeyboardModel.language != nil }
+        let y = key("k.0.y").frame, u = key("k.0.u").frame
+        let edge = CGPoint(x: (y.maxX + u.minX) / 2 - 3, y: y.midY)
+        host.autocapitalization = .none
+        tap(center("k.0.q"))
+        tap(edge)
+        XCTAssertEqual(host.text, "Qu")
+        tap(center("k.0.y"))
+        XCTAssertEqual(host.text, "Quy")
+    }
+
+    func testAdaptationSavesOnlyTapsThatWereKept() async {
+        let store = FakeStore()
+        let m = KeyboardModel(deps: .fake(api: FakeAPI(), store: store, clock: clock))
+        m.host = host
+        m.keyboardAppeared()
+        model = m
+        await until("language model") { KeyboardModel.language != nil }
+        host.autocapitalization = .none
+        let s = key("k.1.s").frame
+        let low = CGPoint(x: s.midX, y: s.maxY - 2)
+        // A tap deleted right after teaches nothing.
+        tap(low); model.activate(key("delete"))
+        model.keyboardDisappeared()
+        XCTAssertEqual(store.touchOffsets, [])
+        model.keyboardAppeared()
+        for _ in 0..<5 { tap(low) }
+        model.keyboardDisappeared()
+        XCTAssertEqual(store.touchOffsets.count, 6)
+        XCTAssertGreaterThan(store.touchOffsets[4], 0, "row 1 learned a low tap")
+        XCTAssertEqual(store.touchOffsets[3], 0)
+    }
+
     func testAQuickSpaceTapStillTypesASpace() async {
         host.text = "see"
         let finger = NSObject()

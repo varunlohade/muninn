@@ -121,7 +121,9 @@ enum FixCheck {
     /// What space or punctuation puts in place of the word that ends `before`, or nil. Clear typos only: a known slip,
     /// a lone "i", or a misspelling whose close guess is an everyday word. The same words as `plan` are never touched:
     /// names, links, emails, amounts, chat words and other languages. `kept`: words the owner put back after a fix.
-    static func autocorrect(_ before: String, names: [String] = [], kept: Set<String> = [], spell: Speller = system) -> (typed: String, fixed: String)? {
+    /// `decode`: the touch decoder's word for the lowercased typed word, tried before the spell checker's guesses.
+    static func autocorrect(_ before: String, names: [String] = [], kept: Set<String> = [], spell: Speller = system,
+                            decode: ((String) -> String?)? = nil) -> (typed: String, fixed: String)? {
         let token = String(before.reversed().prefix { !$0.isWhitespace }.reversed())
         guard !token.isEmpty, token.count <= 30 else { return nil }
         let parts = pieces(token)
@@ -136,12 +138,13 @@ enum FixCheck {
         }
         if let fix = slips[lower], lower.count > 1 { return (word, cased(fix)) }
         let known = Set(names.flatMap { $0.lowercased().split(separator: " ").map(String.init) })
-        guard lower.count >= 3, !known.contains(lower), !chatWords.contains(lower),
+        guard lower.count >= 2, !known.contains(lower), !chatWords.contains(lower),
               !word.dropFirst().contains(where: \.isUppercase), atStart || !word.first!.isUppercase,
               case .wrong(let guesses) = spell(word) else { return nil }
         let most = lower.count >= 5 ? 2 : 1
-        guard let guess = guesses.filter({ !$0.contains(" ") && distance(lower, $0.lowercased()) <= most && commonRank[$0.lowercased()] != nil })
-            .min(by: { commonRank[$0.lowercased()]! < commonRank[$1.lowercased()]! }) else { return nil }
+        let common = lower.count < 3 ? nil : guesses.filter({ !$0.contains(" ") && distance(lower, $0.lowercased()) <= most && commonRank[$0.lowercased()] != nil })
+            .min(by: { commonRank[$0.lowercased()]! < commonRank[$1.lowercased()]! })
+        guard let guess = decode?(lower) ?? common else { return nil }
         let sentence = String(head.split(whereSeparator: { ".!?\n".contains($0) }).last ?? "") + " " + word
         if sentence.split(separator: " ").count >= 3, otherLanguage(sentence) { return nil }
         return (word, cased(guess.lowercased()))

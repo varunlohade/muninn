@@ -55,6 +55,7 @@ final class DemoStore: KeyboardStore {
     var notes: [Note] = Note.demo
     let actionShortcuts = ActionShortcut.defaults
     var pendingAction: PendingAction?
+    var touchOffsets: [Double] = []
 }
 
 /// The intro never looks at the real pasteboard.

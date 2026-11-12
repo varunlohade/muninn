@@ -36,6 +36,12 @@ enum SharedStore {
         set { defaults?.set(newValue, forKey: keyboardSeenKey) }
     }
 
+    /// Where this person's taps land on each key row, learned by the keyboard (TouchAdaptation.stored). Stays on the phone.
+    static var touchOffsets: [Double] {
+        get { defaults?.array(forKey: "touch_offsets") as? [Double] ?? [] }
+        set { defaults?.set(newValue, forKey: "touch_offsets") }
+    }
+
     /// How many clients owed money when the app last loaded payments (`WhoPaid.count`). Nil before the first load.
     static var unpaidCount: Int? {
         get { defaults?.object(forKey: unpaidKey) as? Int }
