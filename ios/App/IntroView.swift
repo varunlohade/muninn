@@ -55,6 +55,7 @@ final class DemoStore: KeyboardStore {
     var notes: [Note] = Note.demo
     let actionShortcuts = ActionShortcut.defaults
     var pendingAction: PendingAction?
+    var touchOffsets: [Double] = []
 }
 
 /// The intro never looks at the real pasteboard.
@@ -210,10 +211,12 @@ final class IntroStage: ObservableObject, TextHost {
     var needsGlobeKey: Bool { false }
     var returnKeyType: UIReturnKeyType { .default }
     var autocapitalization: UITextAutocapitalizationType { .sentences }
+    var autocorrection: UITextAutocorrectionType { .default }
     var enablesReturnKeyAutomatically: Bool { false }
     func playClick() {}
     func insert(_ s: String) { text += s }
     func deleteBackward() { if !text.isEmpty { text.removeLast() } }
+    func adjustCursor(by offset: Int) {}
     func nextKeyboard() {}
 }
 

@@ -7,6 +7,7 @@ struct IntegrationsView: View {
     @State private var error: String?
     @ObservedObject private var calendar = CalendarModel.shared
     @Environment(\.openURL) private var openURL
+    @State private var keyHaptics = SharedStore.keyHaptics
 
     var body: some View {
         ScrollView {
@@ -25,6 +26,18 @@ struct IntegrationsView: View {
                     .accessibilityIdentifier("integration.\(i.id)")
                 }
                 calendarTile
+                Card {
+                    Toggle(isOn: $keyHaptics) {
+                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                            Text("Key haptics").font(Theme.Font.cardTitle).foregroundStyle(Theme.Color.text1)
+                            Text("A light tap on each key. Needs Full Access.").font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
+                        }
+                    }
+                    .tint(Theme.Color.paid)
+                    .onChange(of: keyHaptics) { _, on in SharedStore.keyHaptics = on }
+                }
+                .padding(.horizontal, Theme.Metric.cardInset)
+                .accessibilityIdentifier("settings.keyHaptics")
                 Group {
                     if session.appleLinked {
                         Card {

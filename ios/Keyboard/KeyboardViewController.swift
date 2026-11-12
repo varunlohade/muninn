@@ -45,6 +45,7 @@ final class KeyboardViewController: UIInputViewController, TextHost {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         updateAppearance()
+        keyHaptics = SharedStore.keyHaptics
         model.keyboardAppeared()
     }
 
@@ -74,9 +75,22 @@ final class KeyboardViewController: UIInputViewController, TextHost {
     var needsGlobeKey: Bool { needsInputModeSwitchKey }
     var returnKeyType: UIReturnKeyType { textDocumentProxy.returnKeyType ?? .default }
     var autocapitalization: UITextAutocapitalizationType { textDocumentProxy.autocapitalizationType ?? .sentences }
+    var autocorrection: UITextAutocorrectionType {
+        if [.URL, .emailAddress, .webSearch].contains(textDocumentProxy.keyboardType ?? .default) { return .no }
+        return textDocumentProxy.autocorrectionType ?? .default
+    }
     var enablesReturnKeyAutomatically: Bool { textDocumentProxy.enablesReturnKeyAutomatically ?? false }
     func insert(_ text: String) { textDocumentProxy.insertText(text) }
     func deleteBackward() { textDocumentProxy.deleteBackward() }
+    func adjustCursor(by offset: Int) { textDocumentProxy.adjustTextPosition(byCharacterOffset: offset) }
     func nextKeyboard() { advanceToNextInputMode() }
-    func playClick() { UIDevice.current.playInputClick() }
+    /// A keyboard can click and tap the phone only with Full Access. The click follows the Keyboard Clicks setting;
+    /// the tap follows "Key haptics" in the app, off by default.
+    func playClick() {
+        guard hasFullAccess else { return }
+        UIDevice.current.playInputClick()
+        if keyHaptics { haptic.impactOccurred() }
+    }
+    private let haptic = UIImpactFeedbackGenerator(style: .light)
+    private var keyHaptics = false
 }
