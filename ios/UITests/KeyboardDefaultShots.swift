@@ -109,7 +109,7 @@ final class KeyboardDefaultShots: XCTestCase {
 
         addKeyboard()
         app.activate()
-        XCTAssertTrue(id(app, "onboarding.default.later").waitForExistence(timeout: 8), "the default step did not show: \(app.debugDescription)")
+        XCTAssertTrue(id(app, "onboarding.default.done").waitForExistence(timeout: 8), "the finish step did not show: \(app.debugDescription)")
         XCTAssertFalse(id(app, "keyboard.on").exists)
         shot("kb-02-onboarding-default-needs-full-access")
 
@@ -125,14 +125,11 @@ final class KeyboardDefaultShots: XCTestCase {
         switchToMuninn(app)
         shot("kb-03-onboarding-default-on")
 
-        // A fresh launch reads the stored heartbeat, so the check proves the keyboard wrote it.
-        app.terminate()
-        app.launch()
-        XCTAssertTrue(id(app, "keyboard.on").waitForExistence(timeout: 8), "no heartbeat: \(app.debugDescription)")
-        id(app, "onboarding.default.next").tap()
+        // The step moves on by itself once the heartbeat lands; no tap.
+        XCTAssertFalse(id(app, "onboarding.default.done").waitForExistence(timeout: 1), "still on the finish step: \(app.debugDescription)")
         getStarted(app)
-        // iOS put the new keyboard at the bottom of the list.
-        XCTAssertTrue(app.staticTexts["Make Muninn your first keyboard"].waitForExistence(timeout: 5), app.debugDescription)
+        // iOS put the new keyboard at the bottom of the list. That is only a tip: Home says the keyboard is on.
+        XCTAssertTrue(app.staticTexts["Keyboard is on"].waitForExistence(timeout: 5), app.debugDescription)
         shot("kb-08-home-not-first")
 
         // Muninn first in the list. The arguments domain stands in for the drag in Settings; the app reads the same preference.

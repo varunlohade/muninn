@@ -8,8 +8,8 @@ final class KeyboardSetupTests: XCTestCase {
     private let system = ["en_US@sw=QWERTY;hw=Automatic", "emoji@sw=Emoji"]
     private let seen = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func state(_ enabled: [String], _ lastSeen: Date?) -> KeyboardState {
-        KeyboardSetup.state(enabled: enabled, lastSeen: lastSeen, keyboardID: ours)
+    private func state(_ enabled: [String], _ lastSeen: Date?, done: Bool = false) -> KeyboardState {
+        KeyboardSetup.state(enabled: enabled, lastSeen: lastSeen, ownerSaidDone: done, keyboardID: ours)
     }
 
     func testNotInTheListIsNotAdded() {
@@ -41,25 +41,40 @@ final class KeyboardSetupTests: XCTestCase {
         XCTAssertEqual(state(system + [ours], nil), .needsFullAccess)
     }
 
-    /// Not first is a hint: the app counts the keyboard as on.
+    /// Not first is a tip: the app counts the keyboard as on, and Home stops asking.
     func testOnlyNotFirstAndReadyAreOn() {
         XCTAssertEqual([KeyboardState.notAdded, .needsFullAccess, .notFirst, .ready].map(\.isOn), [false, false, true, true])
-        XCTAssertEqual(KeyboardState.notFirst.homeTitle, "Make Muninn your first keyboard")
+        XCTAssertEqual(KeyboardState.notFirst.homeTitle, "Keyboard is on")
+        XCTAssertEqual(KeyboardState.ready.homeTitle, "Keyboard is on")
     }
 
     /// Full Access can be on before the heartbeat lands, so the card asks to finish setup, not to allow it again.
     func testNeedsFullAccessAsksToFinishSetup() {
         XCTAssertEqual(KeyboardState.needsFullAccess.homeTitle, "Finish keyboard setup")
-        XCTAssertEqual(KeyboardState.finishSetupLine, "Turn on Allow Full Access, then open Muninn once in any chat")
+        XCTAssertEqual(KeyboardState.finishSetupLine, "Turn on Allow Full Access, then switch to Muninn once")
     }
 
-    /// Onboarding's Settings button says where it goes. Reordering lives in Settings › General, which no link can open.
-    func testSettingsButtonSaysWhereItGoes() {
+    /// The button opens the app's own Settings page, so the steps are its two switches. No drag to the top.
+    func testStepsAreTheAppsOwnSettingsPage() {
         XCTAssertEqual(KeyboardState.needsFullAccess.settingsButton, "Open Muninn settings")
         XCTAssertEqual(KeyboardState.notAdded.settingsButton, "Open Muninn settings")
-        XCTAssertEqual(KeyboardState.notFirst.settingsButton, "Open Settings")
+        XCTAssertNil(KeyboardState.notFirst.settingsButton)
         XCTAssertNil(KeyboardState.ready.settingsButton)
-        XCTAssertEqual(KeyboardState.reorderSteps, "Settings › General › Keyboard › Keyboards › Edit, then drag Muninn to the top.")
+        XCTAssertEqual(KeyboardState.settingsSteps, ["Tap Keyboards.", "Turn on Muninn Keyboard.", "Turn on Allow Full Access."])
+        XCTAssertFalse(KeyboardState.settingsSteps.joined().contains("top"))
+    }
+
+    /// The bug in build 7: the keyboard never opened, so no heartbeat came and setup asked forever.
+    /// "It's done" ends it, on Home and in onboarding alike.
+    func testOwnerSaidDoneCountsAsOn() {
+        XCTAssertEqual(state(system + [ours], nil, done: true), .notFirst)
+        XCTAssertEqual(state([ours] + system, nil, done: true), .ready)
+        XCTAssertEqual(state([], nil, done: true), .ready)
+    }
+
+    /// The owner's word does not bring back a keyboard that is gone from Settings.
+    func testOwnerSaidDoneWithoutTheKeyboardIsNotAdded() {
+        XCTAssertEqual(state(system, nil, done: true), .notAdded)
     }
 
     /// No age limit: a heartbeat from long ago still proves Full Access.
@@ -81,7 +96,7 @@ final class KeyboardSetupTests: XCTestCase {
     func testRefreshReadsTheLatestValues() {
         var enabled = system
         var lastSeen: Date?
-        let setup = KeyboardSetup { (enabled, lastSeen) }
+        let setup = KeyboardSetup(read: { (enabled, lastSeen, false) }, saveOwnerDone: {})
         // The live keyboard id comes from the test host's bundle: the app's id plus ".keyboard".
         XCTAssertEqual(KeyboardSetup.keyboardID, ours)
         XCTAssertEqual(setup.state, .notAdded)
@@ -94,6 +109,16 @@ final class KeyboardSetupTests: XCTestCase {
         enabled = [ours] + system
         setup.refresh()
         XCTAssertEqual(setup.state, .ready)
+    }
+
+    /// "It's done" saves the owner's word and moves the state on at once, with no relaunch.
+    func testOwnerSaysDoneMovesOnAtOnce() {
+        var done = false
+        let setup = KeyboardSetup(read: { (self.system + [self.ours], nil, done) }, saveOwnerDone: { done = true })
+        XCTAssertEqual(setup.state, .needsFullAccess)
+        setup.ownerSaysDone()
+        XCTAssertTrue(done)
+        XCTAssertTrue(setup.state.isOn)
     }
 }
 

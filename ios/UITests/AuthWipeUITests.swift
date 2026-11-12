@@ -59,6 +59,7 @@ final class AuthWipeUITests: XCTestCase {
         if id(app, "onboarding.add").waitForExistence(timeout: 2) { id(app, "onboarding.add").tap() }
         if id(app, "onboarding.later").waitForExistence(timeout: 2) { id(app, "onboarding.later").tap() }
         if id(app, "onboarding.default.later").waitForExistence(timeout: 2) { id(app, "onboarding.default.later").tap() }
+        if id(app, "onboarding.default.done").waitForExistence(timeout: 1) { id(app, "onboarding.default.done").tap() }
         if id(app, "onboarding.default.next").waitForExistence(timeout: 1) { id(app, "onboarding.default.next").tap() }
         if id(app, "onboarding.calendar.later").waitForExistence(timeout: 2) { id(app, "onboarding.calendar.later").tap() }
         XCTAssertTrue(id(app, "signin.email").waitForExistence(timeout: 8), "no sign-in step: \(app.debugDescription.suffix(2000))")
