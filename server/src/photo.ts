@@ -2,6 +2,9 @@
 // still checks the file structure and rebuilds it without metadata blocks (EXIF, GPS, comments, text), so no client can store them.
 
 export const PHOTO_MAX_BYTES = 1024 * 1024;
+/** All of one owner's catalog photos together. */
+export const PHOTO_TOTAL_BYTES = 50 * 1024 * 1024;
+export const CATALOG_MAX_ITEMS = 200;
 export type PhotoMime = 'image/jpeg' | 'image/png';
 
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

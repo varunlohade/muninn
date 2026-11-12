@@ -168,6 +168,18 @@ final class CatalogCacheTests: XCTestCase {
         XCTAssertNotNil(c.photoURL("ph_Zx-9_"))
     }
 
+    @MainActor
+    func testIntroKeyboardGetsThreeMarkedExamples() {
+        let model = KeyboardModel(deps: KeyboardDeps.fake(api: FakeAPI()).with(catalog: .introSample()))
+        let host = FakeHost()
+        model.host = host
+        model.keyboardAppeared()
+        model.openCatalog(nil)
+        XCTAssertEqual(model.catalog.items.map(\.name), ["Haircut", "Beard trim", "Blowout"])
+        XCTAssertTrue(model.catalog.examples)
+        XCTAssertEqual(model.catalog.items.map(\.money), ["$45", "$20", "$35"])
+    }
+
     func testEmptyWhenNothingCached() {
         XCTAssertEqual(CatalogCache(dir: dir).items, [])
         XCTAssertEqual(CatalogCache(dir: nil).items, [])
@@ -303,5 +315,13 @@ final class CatalogKeyboardTests: XCTestCase {
         model.toggleCatalogDescriptions()
         model.insertCatalog()
         XCTAssertEqual(host.text, "Haircut \u{2014} $45\nWash, cut and style")
+    }
+}
+
+extension KeyboardDeps {
+    func with(catalog: CatalogCache) -> KeyboardDeps {
+        var d = self
+        d.catalog = catalog
+        return d
     }
 }

@@ -158,3 +158,31 @@ test('catalog: a JSON body over the normal limit is still refused on other route
   const r = await s.call(A.token, 'POST', '/v1/catalog', { name: 'Cut', price: 45, description: 'x'.repeat(20_000) });
   assert.equal(r.status, 413);
 });
+
+test('catalog caps: 200 items, then a clear 400', async () => {
+  const { s, A } = owner();
+  for (let i = 0; i < 200; i++) s.db.addItem(A.userId, { name: `Item ${i}`, price_cents: 100, currency: 'USD' });
+  const r = await s.call(A.token, 'POST', '/v1/catalog', { name: 'One more', price: 1 });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, 'catalog is full: 200 items at most');
+});
+
+test('catalog caps: a photo over 1 MB and photos over 50 MB in all get a clear 413', async () => {
+  const { s, A, upload, add } = owner();
+  const big = await upload(A.token, (await add({ name: 'Big', price: 1 })).id, jpeg(1024 * 1024), 'image/jpeg');
+  assert.equal(big.status, 413);
+  assert.equal((await big.json()).error, 'photo is over 1 MB');
+  // 49 items already hold just over 1 MB each.
+  for (let i = 0; i < 49; i++) {
+    const it = s.db.addItem(A.userId, { name: `P${i}`, price_cents: 100, currency: 'USD' });
+    s.db.putItemPhoto(A.userId, it.id, { id: `ph_${i}`, mime: 'image/jpeg', data_enc: 'x', bytes: 1024 * 1024 + 1024 });
+  }
+  const it = await add({ name: 'Last', price: 1 });
+  const full = await upload(A.token, it.id, jpeg(1024 * 1024 - 200), 'image/jpeg');
+  assert.equal(full.status, 413);
+  assert.equal((await full.json()).error, 'photo storage is full (50 MB). Remove a photo first.');
+  assert.equal((await upload(A.token, it.id, jpeg(), 'image/jpeg')).status, 200, 'a small one still fits');
+  // Replacing a photo does not count the old one.
+  const p0 = s.db.listItems(A.userId).find((i) => i.name === 'P0')!;
+  assert.equal((await upload(A.token, p0.id, jpeg(1024 * 1024 - 400), 'image/jpeg')).status, 200);
+});

@@ -105,6 +105,7 @@ struct CatalogView: View {
                     Spacer()
                     Button { editing = Editing(item: nil, draft: CatalogDraft()) } label: { IconCircle(systemImage: "plus") }
                         .buttonStyle(PressScale())
+                        .disabled(store.items.count >= CatalogCache.maxItems)
                         .accessibilityLabel("Add item")
                         .accessibilityIdentifier("catalog.new")
                 }
@@ -118,6 +119,10 @@ struct CatalogView: View {
                 } else {
                     Text("Tap the tag button on the keyboard to share items, prices and photos in any chat.")
                         .font(Theme.Font.label).foregroundStyle(Theme.Color.text2).padding(.horizontal, Theme.Metric.margin)
+                    if store.items.count >= CatalogCache.maxItems {
+                        Text("Your catalog is full (\(CatalogCache.maxItems) items). Delete one to add another.")
+                            .font(Theme.Font.label).foregroundStyle(Theme.Color.due).padding(.horizontal, Theme.Metric.margin)
+                    }
                     ForEach(store.items) { item in row(item) }
                 }
             }
@@ -247,6 +252,7 @@ struct CatalogEditor: View {
                                     .font(Theme.Font.label).foregroundStyle(Theme.Color.text2)
                             }
                             if let photoError { Text(photoError).font(Theme.Font.label).foregroundStyle(Theme.Color.due) }
+                            Text(CatalogCache.photoLimitLine).font(Theme.Font.axis).foregroundStyle(Theme.Color.text3)
                         }
                     }
                     field("Name, like Haircut", text: $draft.name, id: "catalog.name")

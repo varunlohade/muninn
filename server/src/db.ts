@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS catalog_items (
 -- One photo per catalog item, encrypted with the owner's key. id is random, so a new photo gets a new id.
 CREATE TABLE IF NOT EXISTS catalog_photos (
   item_id TEXT PRIMARY KEY REFERENCES catalog_items(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id),
-  id TEXT NOT NULL, mime TEXT NOT NULL, data_enc TEXT NOT NULL, created_at INTEGER NOT NULL);
+  id TEXT NOT NULL, mime TEXT NOT NULL, data_enc TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), status TEXT NOT NULL,
   amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, item TEXT NOT NULL,
@@ -70,7 +70,7 @@ export type Profile = { business_name: string; tone: string; currency: string; r
 export type CatalogItem = { id: string; name: string; price_cents: number; currency: string };
 export type CatalogDetails = { description: string; category: string; in_stock: boolean };
 export type CatalogRow = CatalogItem & CatalogDetails & { sort_order: number; photo_id: string | null };
-export type CatalogPhoto = { id: string; mime: string; data_enc: string };
+export type CatalogPhoto = { id: string; mime: string; data_enc: string; bytes?: number };
 export type InvoiceRow = {
   id: string; user_id: string; status: string; amount_cents: number; currency: string; item: string;
   client_name_enc: string | null; client_email_enc: string | null; pay_link: string | null;
@@ -219,6 +219,13 @@ export function openDb(path: string) {
         .run(it.name, it.price_cents, it.currency, it.description ?? null, it.category ?? null,
           it.in_stock === undefined ? null : it.in_stock ? 1 : 0, id, userId).changes > 0;
     },
+    countItems(userId: string): number {
+      return (q('SELECT COUNT(*) AS n FROM catalog_items WHERE user_id = ?').get(userId) as { n: number }).n;
+    },
+    /** Bytes of the owner's stored photos, leaving out the photo of `exceptItem` (the one an upload replaces). */
+    photoBytes(userId: string, exceptItem: string): number {
+      return (q('SELECT COALESCE(SUM(bytes), 0) AS n FROM catalog_photos WHERE user_id = ? AND item_id != ?').get(userId, exceptItem) as { n: number }).n;
+    },
     deleteItem(userId: string, id: string): boolean {
       return q('DELETE FROM catalog_items WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
     },
@@ -240,9 +247,10 @@ export function openDb(path: string) {
     },
     putItemPhoto(userId: string, itemId: string, p: CatalogPhoto): boolean {
       if (!q('SELECT 1 FROM catalog_items WHERE id = ? AND user_id = ?').get(itemId, userId)) return false;
-      q(`INSERT INTO catalog_photos (item_id, user_id, id, mime, data_enc, created_at) VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(item_id) DO UPDATE SET id = excluded.id, mime = excluded.mime, data_enc = excluded.data_enc, created_at = excluded.created_at`)
-        .run(itemId, userId, p.id, p.mime, p.data_enc, now());
+      q(`INSERT INTO catalog_photos (item_id, user_id, id, mime, data_enc, bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(item_id) DO UPDATE SET id = excluded.id, mime = excluded.mime, data_enc = excluded.data_enc, bytes = excluded.bytes,
+           created_at = excluded.created_at`)
+        .run(itemId, userId, p.id, p.mime, p.data_enc, p.bytes ?? 0, now());
       q('UPDATE catalog_items SET photo_id = ? WHERE id = ? AND user_id = ?').run(p.id, itemId, userId);
       return true;
     },

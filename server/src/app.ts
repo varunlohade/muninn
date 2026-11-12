@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { config, INTERVALS, TONES, type AskGroup, type Interval, type AskRoute, type Intent, type Tone } from './config.ts';
 import { randomToken, sha256, type Cipher } from './crypto.ts';
 import type { CatalogItem, CatalogRow, Db, InvoiceRow, OrderRow } from './db.ts';
-import { PHOTO_MAX_BYTES, cleanPhoto, sniffPhoto } from './photo.ts';
+import { CATALOG_MAX_ITEMS, PHOTO_MAX_BYTES, PHOTO_TOTAL_BYTES, cleanPhoto, sniffPhoto } from './photo.ts';
 import type { Ai, DeviceAction, Extraction } from './ai.ts';
 import { PayPalError, type PayPalProvider } from './paypal.ts';
 import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './money.ts';
@@ -213,7 +213,7 @@ export function createApp(deps: Deps) {
   // A catalog photo upload is the one /v1 body that may be bigger than the JSON limit.
   const tooLarge = (c: Context<Env>) => c.json({ error: 'body too large' }, 413);
   const jsonLimit = bodyLimit({ maxSize: config.bodyLimitBytes, onError: tooLarge });
-  const photoLimit = bodyLimit({ maxSize: PHOTO_MAX_BYTES, onError: tooLarge });
+  const photoLimit = bodyLimit({ maxSize: PHOTO_MAX_BYTES, onError: (c) => c.json({ error: 'photo is over 1 MB' }, 413) });
   const isPhotoUpload = (c: Context<Env>) => c.req.method === 'PUT' && /^\/v1\/catalog\/[^/]+\/photo$/.test(c.req.path);
   app.use('/v1/*', (c, next) => (isPhotoUpload(c) ? photoLimit(c, next) : jsonLimit(c, next)));
   app.use('/webhooks/*', bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'body too large' }, 413) }));
@@ -1073,6 +1073,7 @@ export function createApp(deps: Deps) {
   app.get('/v1/catalog', (c) => c.json({ items: db.listItems(c.get('userId')).map(itemOut) }));
   app.post('/v1/catalog', async (c) => {
     const b = await body(c, ItemBody);
+    if (db.countItems(c.get('userId')) >= CATALOG_MAX_ITEMS) throw new HttpError(400, `catalog is full: ${CATALOG_MAX_ITEMS} items at most`);
     const { price, ...rest } = b;
     return c.json({ item: itemOut(db.addItem(c.get('userId'), { ...rest, price_cents: price })) });
   });
@@ -1099,14 +1100,15 @@ export function createApp(deps: Deps) {
     const id = c.req.param('id');
     ownItem(userId, id);
     const bytes = Buffer.from(await c.req.arrayBuffer());
-    if (bytes.length > PHOTO_MAX_BYTES) throw new HttpError(413, 'photo too large');
+    if (bytes.length > PHOTO_MAX_BYTES) throw new HttpError(413, 'photo is over 1 MB');
     const mime = sniffPhoto(bytes);
     const declared = (c.req.header('content-type') ?? '').split(';')[0].trim().toLowerCase();
     if (!mime || declared !== mime) throw new HttpError(400, 'photo must be a JPEG or PNG');
     const clean = cleanPhoto(bytes, mime);
     if (!clean) throw new HttpError(400, 'photo must be a JPEG or PNG');
+    if (db.photoBytes(userId, id) + clean.length > PHOTO_TOTAL_BYTES) throw new HttpError(413, 'photo storage is full (50 MB). Remove a photo first.');
     const photoId = randomToken('ph');
-    db.putItemPhoto(userId, id, { id: photoId, mime, data_enc: cipher.encrypt(userId, clean.toString('base64')) });
+    db.putItemPhoto(userId, id, { id: photoId, mime, data_enc: cipher.encrypt(userId, clean.toString('base64')), bytes: clean.length });
     return c.json({ item: itemOut(ownItem(userId, id)) });
   });
   app.get('/v1/catalog/:id/photo', (c) => {

@@ -179,6 +179,22 @@ enum CatalogTrigger: Equatable {
 /// Items are one JSON file; each photo is a file named by its photo id.
 struct CatalogCache {
     let dir: URL?
+    /// Sample items, not the owner's: the intro shows them so the panel is never empty there.
+    var examples = false
+
+    /// The server's limits, for the app's own copy.
+    static let maxItems = 200
+    static let photoLimitLine = "Photos: up to 1 MB each, 50 MB in all."
+
+    /// Haircut, Beard trim and Blowout, written to a temporary folder for the intro keyboard.
+    static func introSample() -> CatalogCache {
+        let c = CatalogCache(dir: FileManager.default.temporaryDirectory.appendingPathComponent("intro-catalog", isDirectory: true), examples: true)
+        let items = [("Haircut", "45.00", "Wash, cut and style"), ("Beard trim", "20.00", "Shape and line-up"), ("Blowout", "35.00", "Wash and blow-dry")]
+        c.save(items.enumerated().map { i, it in
+            CatalogItem(id: "example-\(i)", name: it.0, price: it.1, currency: "USD", description: it.2, category: "", in_stock: true, sort_order: i, photo_id: nil)
+        })
+        return c
+    }
 
     static var live: CatalogCache {
         CatalogCache(dir: FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppConfig.appGroupID)?

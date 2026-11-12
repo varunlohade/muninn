@@ -15,6 +15,8 @@ struct CatalogPanelState: Equatable {
     var trigger: CatalogTrigger?
     /// The client's copied message, for "do you have X" read there.
     var copied: String?
+    /// The items are samples (the intro), not the owner's catalog.
+    var examples = false
 
     var shown: [CatalogItem] { CatalogTabs.filter(items, tab: tab) }
 
@@ -36,6 +38,7 @@ extension KeyboardModel {
     func reloadCatalog() {
         let items = deps.catalog.items
         if items != catalog.items { catalog.items = items }
+        if catalog.examples != deps.catalog.examples { catalog.examples = deps.catalog.examples }
     }
 
     /// On every edit: the typed words, else the copied message, may ask for the catalog.
@@ -155,6 +158,11 @@ struct CatalogPanel: View {
             } else {
                 let tabs = CatalogTabs.tabs(c.items)
                 if !tabs.isEmpty { tabRow(tabs, current: c.tab) }
+                if c.examples {
+                    Text("Examples. Add your own in \(AppConfig.displayName) \u{2192} Catalog.").font(M.predictionSmall)
+                        .foregroundStyle(palette.secondaryLabel).lineLimit(1).minimumScaleFactor(0.8)
+                        .accessibilityIdentifier("catalog.examples")
+                }
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: M.keyGap), GridItem(.flexible(), spacing: M.keyGap)], spacing: M.keyGap) {
                         ForEach(c.shown) { cell($0, picked: c.selection.contains($0)) }
