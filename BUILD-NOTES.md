@@ -1,5 +1,16 @@
 # Build notes
 
+## 0.1 (7) — 2026-11-12
+
+What to test:
+- New look. The app has a new paper look. The first screen is a small shop street that moves.
+- Quick bar. In Messages, switch to the Muninn keyboard. Type "$45 for the haircut". The bar above the keys shows "Invoice Sam $45".
+- Catalog and confirm. Tap "…" in the bar, then Catalog. Pick an item. Before anything goes out, the app asks for your OK.
+- One-tap Send. Type "explain net 30". Tap the explain chip and let the picture draw. Tap Send. A link goes into the message. In the chat, the link shows the picture.
+- Nudge. Type "remind Jordan". The bar offers to nudge Jordan about the unpaid invoice.
+- Explain fix. Questions like "explain the net 30" or "why do invoices bounce" now get an explain chip.
+- App icon. Check the pixel raven icon on the Home Screen, in light, dark and tinted modes.
+
 ## 0.1 (6) — 2026-11-12
 
 What to test:
