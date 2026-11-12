@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import type { Classification, Extraction } from '../src/ai.ts';
 import { config, type AskGroup, type AskRoute } from '../src/config.ts';
 import { sha256 } from '../src/crypto.ts';
-import { DEMO_CATALOG, DEMO_PROFILE } from '../src/seed.ts';
+import { DEMO_PROFILE } from '../src/seed.ts';
 import { paidEvent, setup, subscriptionPaidEvent, webhookHeaders } from '../test/helpers.ts';
 
 if (process.env.PAYPAL_ENV === 'live' || process.env.NODE_ENV === 'production') {
@@ -48,7 +48,6 @@ function build() {
   const userId = db.createUser();
   db.addDevice(userId, sha256(INNER_TOKEN), 'fake');
   db.putProfile(userId, DEMO_PROFILE);
-  for (const it of DEMO_CATALOG) db.addItem(userId, { name: it.name, price_cents: it.price * 100, currency: 'USD', description: it.description, category: it.category });
   const t = Date.now();
   const enc = (v: string) => cipher.encrypt(userId, v);
   db.insertInvoice({

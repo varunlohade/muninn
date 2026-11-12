@@ -6,9 +6,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { config, INTERVALS, TONES, type AskGroup, type Interval, type AskRoute, type Intent, type Tone } from './config.ts';
 import { randomToken, sha256, type Cipher } from './crypto.ts';
-import type { CatalogItem, CatalogRow, Db, InvoiceRow, OrderRow, Preview, SharedImage } from './db.ts';
+import type { CatalogItem, Db, InvoiceRow, OrderRow, Preview, SharedImage } from './db.ts';
 import { isPng, jpegSize, pngSize } from './image.ts';
-import { CATALOG_MAX_ITEMS, PHOTO_MAX_BYTES, PHOTO_TOTAL_BYTES, cleanPhoto, sniffPhoto } from './photo.ts';
 import type { Ai, DeviceAction, Extraction } from './ai.ts';
 import { PayPalError, type PayPalProvider } from './paypal.ts';
 import { Amount, Currency, amountToCents, centsToValue, formatMoney } from './money.ts';
@@ -169,21 +168,6 @@ const ProfileBody = z.object({
   business_name: CleanText(80), tone: CleanText(200), currency: Currency.default('USD'), review_url: ReviewUrl.nullable().optional(),
 }).strict();
 const BusinessBody = z.object({ description: CleanText(300) }).strict();
-const ItemDetails = {
-  description: z.string().transform(clean).pipe(z.string().max(140)),
-  category: z.string().transform(clean).pipe(z.string().max(40)),
-  in_stock: z.boolean(),
-};
-const ItemBody = z.object({
-  name: Item, price: Amount, currency: Currency.default('USD'),
-  description: ItemDetails.description.default(''), category: ItemDetails.category.default(''), in_stock: ItemDetails.in_stock.default(true),
-}).strict();
-// An edit: details left out keep their stored values.
-const ItemEditBody = z.object({
-  name: Item, price: Amount, currency: Currency.default('USD'),
-  description: ItemDetails.description.optional(), category: ItemDetails.category.optional(), in_stock: ItemDetails.in_stock.optional(),
-}).strict();
-const ReorderBody = z.object({ ids: z.array(z.string().min(1).max(64)).max(500) }).strict();
 const DisputeId = z.string().regex(/^PP-[A-Z0-9-]{3,40}$/);
 const AppleAuthBody = z.object({ identity_token: z.string().min(20).max(4096), nonce: z.string().min(16).max(128) }).strict();
 const DeviceAuthBody = z.object({ device_id: z.string().uuid() }).strict();
@@ -286,14 +270,12 @@ export function createApp(deps: Deps) {
   const secure = secureHeaders(), secureShared = secureHeaders({ crossOriginResourcePolicy: 'cross-origin' });
   app.use('*', (c, next) => (/^\/d\/[^/]+\.(png|jpg)$/.test(c.req.path) ? secureShared(c, next) : secure(c, next)));
   app.use('*', cors({ origin: (origin) => (config.corsOrigins.includes(origin) ? origin : null), allowMethods: ['GET', 'POST', 'PUT', 'DELETE'] }));
-  // A catalog photo upload and a drawing PNG are the /v1 bodies that may be bigger than the JSON limit.
+  // A drawing PNG is the /v1 body that may be bigger than the JSON limit.
   const tooLarge = (c: Context<Env>) => c.json({ error: 'body too large' }, 413);
   const jsonLimit = bodyLimit({ maxSize: config.bodyLimitBytes, onError: tooLarge });
-  const photoLimit = bodyLimit({ maxSize: PHOTO_MAX_BYTES, onError: (c) => c.json({ error: 'photo is over 1 MB' }, 413) });
-  const isPhotoUpload = (c: Context<Env>) => c.req.method === 'PUT' && /^\/v1\/catalog\/[^/]+\/photo$/.test(c.req.path);
   // A drawing is the PNG plus its JPEG preview and a short title.
   const drawingLimit = bodyLimit({ maxSize: config.sharedImage.maxBytes + config.sharedImage.preview.maxBytes + 16 * 1024, onError: (c) => c.json({ error: 'image too large' }, 413) });
-  app.use('/v1/*', (c, next) => (isPhotoUpload(c) ? photoLimit(c, next) : c.req.path === '/v1/drawings' ? drawingLimit(c, next) : jsonLimit(c, next)));
+  app.use('/v1/*', (c, next) => (c.req.path === '/v1/drawings' ? drawingLimit(c, next) : jsonLimit(c, next)));
   app.use('/webhooks/*', bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'body too large' }, 413) }));
 
   app.onError((err, c) => {
@@ -1426,7 +1408,7 @@ export function createApp(deps: Deps) {
     return done(route, confidence, { action: 'show_calendar' });
   });
 
-  // ---- profile and catalog
+  // ---- profile
   const profileOut = (userId: string) => {
     const p = db.getProfile(userId);
     return p ? { ...p, description: businessOf(userId) || null } : null;
@@ -1443,69 +1425,6 @@ export function createApp(deps: Deps) {
     const p = await body(c, ProfileBody);
     db.putProfile(c.get('userId'), p);
     return c.json({ profile: profileOut(c.get('userId')) });
-  });
-  const itemOut = (i: CatalogRow) => ({
-    id: i.id, name: i.name, price: centsToValue(i.price_cents), currency: i.currency,
-    description: i.description, category: i.category, in_stock: i.in_stock, sort_order: i.sort_order, photo_id: i.photo_id,
-  });
-  const ownItem = (userId: string, id: string) => {
-    const it = db.listItems(userId).find((i) => i.id === id);
-    if (!it) throw new HttpError(404, 'item not found');
-    return it;
-  };
-  app.get('/v1/catalog', (c) => c.json({ items: db.listItems(c.get('userId')).map(itemOut) }));
-  app.post('/v1/catalog', async (c) => {
-    const b = await body(c, ItemBody);
-    if (db.countItems(c.get('userId')) >= CATALOG_MAX_ITEMS) throw new HttpError(400, `catalog is full: ${CATALOG_MAX_ITEMS} items at most`);
-    const { price, ...rest } = b;
-    return c.json({ item: itemOut(db.addItem(c.get('userId'), { ...rest, price_cents: price })) });
-  });
-  app.post('/v1/catalog/reorder', async (c) => {
-    const userId = c.get('userId');
-    const r = db.reorderItems(userId, (await body(c, ReorderBody)).ids);
-    if (r === 'not_found') throw new HttpError(404, 'item not found');
-    if (r === 'incomplete') throw new HttpError(400, 'ids must list each of your items once');
-    return c.json({ items: db.listItems(userId).map(itemOut) });
-  });
-  app.put('/v1/catalog/:id', async (c) => {
-    const userId = c.get('userId');
-    const { price, ...rest } = await body(c, ItemEditBody);
-    if (!db.updateItem(userId, c.req.param('id'), { ...rest, price_cents: price })) throw new HttpError(404, 'item not found');
-    return c.json({ item: itemOut(ownItem(userId, c.req.param('id'))) });
-  });
-  app.delete('/v1/catalog/:id', (c) => {
-    if (!db.deleteItem(c.get('userId'), c.req.param('id'))) throw new HttpError(404, 'item not found');
-    return c.json({ ok: true });
-  });
-  // The photo is the raw request body, Content-Type image/jpeg or image/png.
-  app.put('/v1/catalog/:id/photo', async (c) => {
-    const userId = c.get('userId');
-    const id = c.req.param('id');
-    ownItem(userId, id);
-    const bytes = Buffer.from(await c.req.arrayBuffer());
-    if (bytes.length > PHOTO_MAX_BYTES) throw new HttpError(413, 'photo is over 1 MB');
-    const mime = sniffPhoto(bytes);
-    const declared = (c.req.header('content-type') ?? '').split(';')[0].trim().toLowerCase();
-    if (!mime || declared !== mime) throw new HttpError(400, 'photo must be a JPEG or PNG');
-    const clean = cleanPhoto(bytes, mime);
-    if (!clean) throw new HttpError(400, 'photo must be a JPEG or PNG');
-    if (db.photoBytes(userId, id) + clean.length > PHOTO_TOTAL_BYTES) throw new HttpError(413, 'photo storage is full (50 MB). Remove a photo first.');
-    const photoId = randomToken('ph');
-    db.putItemPhoto(userId, id, { id: photoId, mime, data_enc: cipher.encrypt(userId, clean.toString('base64')), bytes: clean.length });
-    return c.json({ item: itemOut(ownItem(userId, id)) });
-  });
-  app.get('/v1/catalog/:id/photo', (c) => {
-    const userId = c.get('userId');
-    const p = db.getItemPhoto(userId, c.req.param('id'));
-    const b64 = p && dec(userId, p.data_enc);
-    if (!p || !b64) throw new HttpError(404, 'photo not found');
-    return c.body(Buffer.from(b64, 'base64'), 200, { 'Content-Type': p.mime, 'Cache-Control': 'private, max-age=0', ETag: `"${p.id}"` });
-  });
-  app.delete('/v1/catalog/:id/photo', (c) => {
-    const userId = c.get('userId');
-    ownItem(userId, c.req.param('id'));
-    db.deleteItemPhoto(userId, c.req.param('id'));
-    return c.json({ item: itemOut(ownItem(userId, c.req.param('id'))) });
   });
 
   // ---- PayPal webhooks: verify with PayPal, then map ids to owners through our own tables

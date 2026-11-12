@@ -86,7 +86,6 @@ export type Profile = { business_name: string; tone: string; currency: string; r
 export type CatalogItem = { id: string; name: string; price_cents: number; currency: string };
 export type CatalogDetails = { description: string; category: string; in_stock: boolean };
 export type CatalogRow = CatalogItem & CatalogDetails & { sort_order: number; photo_id: string | null };
-export type CatalogPhoto = { id: string; mime: string; data_enc: string; bytes?: number };
 export type InvoiceRow = {
   id: string; user_id: string; status: string; amount_cents: number; currency: string; item: string;
   client_name_enc: string | null; client_email_enc: string | null; pay_link: string | null;
@@ -374,48 +373,6 @@ export function openDb(path: string) {
           category = COALESCE(?, category), in_stock = COALESCE(?, in_stock) WHERE id = ? AND user_id = ?`)
         .run(it.name, it.price_cents, it.currency, it.description ?? null, it.category ?? null,
           it.in_stock === undefined ? null : it.in_stock ? 1 : 0, id, userId).changes > 0;
-    },
-    countItems(userId: string): number {
-      return (q('SELECT COUNT(*) AS n FROM catalog_items WHERE user_id = ?').get(userId) as { n: number }).n;
-    },
-    /** Bytes of the owner's stored photos, leaving out the photo of `exceptItem` (the one an upload replaces). */
-    photoBytes(userId: string, exceptItem: string): number {
-      return (q('SELECT COALESCE(SUM(bytes), 0) AS n FROM catalog_photos WHERE user_id = ? AND item_id != ?').get(userId, exceptItem) as { n: number }).n;
-    },
-    deleteItem(userId: string, id: string): boolean {
-      return q('DELETE FROM catalog_items WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
-    },
-    /** Sets the order to `ids`, which must be exactly the owner's item ids. */
-    reorderItems(userId: string, ids: string[]): 'ok' | 'not_found' | 'incomplete' {
-      const own = new Set((q('SELECT id FROM catalog_items WHERE user_id = ?').all(userId) as { id: string }[]).map((r) => r.id));
-      if (ids.some((id) => !own.has(id))) return 'not_found';
-      if (new Set(ids).size !== ids.length || ids.length !== own.size) return 'incomplete';
-      const set = q('UPDATE catalog_items SET sort_order = ? WHERE id = ? AND user_id = ?');
-      db.exec('BEGIN');
-      try {
-        ids.forEach((id, i) => set.run(i, id, userId));
-        db.exec('COMMIT');
-      } catch (e) {
-        db.exec('ROLLBACK');
-        throw e;
-      }
-      return 'ok';
-    },
-    putItemPhoto(userId: string, itemId: string, p: CatalogPhoto): boolean {
-      if (!q('SELECT 1 FROM catalog_items WHERE id = ? AND user_id = ?').get(itemId, userId)) return false;
-      q(`INSERT INTO catalog_photos (item_id, user_id, id, mime, data_enc, bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(item_id) DO UPDATE SET id = excluded.id, mime = excluded.mime, data_enc = excluded.data_enc, bytes = excluded.bytes,
-           created_at = excluded.created_at`)
-        .run(itemId, userId, p.id, p.mime, p.data_enc, p.bytes ?? 0, now());
-      q('UPDATE catalog_items SET photo_id = ? WHERE id = ? AND user_id = ?').run(p.id, itemId, userId);
-      return true;
-    },
-    getItemPhoto(userId: string, itemId: string): CatalogPhoto | undefined {
-      return q('SELECT id, mime, data_enc FROM catalog_photos WHERE item_id = ? AND user_id = ?').get(itemId, userId) as CatalogPhoto | undefined;
-    },
-    deleteItemPhoto(userId: string, itemId: string): boolean {
-      q('UPDATE catalog_items SET photo_id = NULL WHERE id = ? AND user_id = ?').run(itemId, userId);
-      return q('DELETE FROM catalog_photos WHERE item_id = ? AND user_id = ?').run(itemId, userId).changes > 0;
     },
 
     insertInvoice(r: Omit<InvoiceRow, 'paid_at' | 'capture_id' | 'source' | 'seed_key' | 'pp_account'> & Partial<Pick<InvoiceRow, 'source' | 'seed_key' | 'pp_account'>>) {

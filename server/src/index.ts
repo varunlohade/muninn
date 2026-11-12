@@ -20,7 +20,7 @@ const cipher = createCipher(parseMasterKey(process.env.DATA_ENCRYPTION_KEY));
 const paypal = createPayPalProvider({ clientId: need('PAYPAL_CLIENT_ID'), clientSecret: need('PAYPAL_CLIENT_SECRET') }, sellerLookup(db, cipher));
 const demoSeed = process.env.DEMO_SEED === '1' && config.paypal.sandbox;
 const seeding = new Set<string>();
-// Idempotent: profile and catalog first (no network), then the sandbox invoices.
+// Idempotent: profile first (no network), then the sandbox invoices.
 async function seedUser(userId: string, full: boolean) {
   if (seeding.has(userId)) return;
   seeding.add(userId);

@@ -4,8 +4,8 @@ import { setup } from './helpers.ts';
 
 test('suggest context: copied client text reaches the models, field text may be empty', async () => {
   const s = setup({ ext: { client_email: null, client_name: null, amount: null, item: null } });
-  const { token } = s.device();
-  await s.call(token, 'POST', '/v1/catalog', { name: 'Haircut', price: 45 });
+  const { token, userId } = s.device();
+  s.db.addItem(userId, { name: 'Haircut', price_cents: 4500, currency: 'USD' });
   const r = await s.call(token, 'POST', '/v1/suggest', { text: '', context: 'how much do I owe you?' });
   assert.equal(r.status, 200);
   const prompt = 'Client said: how much do I owe you?\nOwner is typing: ';
@@ -15,8 +15,8 @@ test('suggest context: copied client text reaches the models, field text may be 
 
 test('suggest context: catalog item named only in the copied text sets the amount', async () => {
   const s = setup({ ext: { client_email: null, client_name: null, amount: null, item: null } });
-  const { token } = s.device();
-  await s.call(token, 'POST', '/v1/catalog', { name: 'Haircut', price: 45 });
+  const { token, userId } = s.device();
+  s.db.addItem(userId, { name: 'Haircut', price_cents: 4500, currency: 'USD' });
   const r = await (await s.call(token, 'POST', '/v1/suggest', { text: 'sure!', context: 'what do I owe for the haircut?' })).json();
   assert.equal(r.chips[0].kind, 'invoice');
   assert.equal(r.chips[0].payload.amount, '45.00');

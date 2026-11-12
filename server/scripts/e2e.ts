@@ -46,7 +46,6 @@ const step = (name: string, data: unknown) => console.log(`E2E ${name}: ${JSON.s
 let failed = false;
 try {
   await call('PUT', '/v1/profile', { business_name: 'Fresh Cuts', tone: 'warm, brief, uses first names', currency: 'USD' });
-  await call('POST', '/v1/catalog', { name: 'Haircut', price: 45 });
 
   const text = "thanks! that'll be $45 for the haircut, sam@example.com";
   const s = await call('POST', '/v1/suggest', { text });

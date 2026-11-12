@@ -187,9 +187,9 @@ test('DELETE /v1/account: needs a tap, then removes every row of the user and no
   const a = await tokenOf(await s.call(null, 'POST', '/v1/auth/email/signup', { email: 'ana@example.com', password: PW }));
   const other = s.device();
   const userId = s.db.userForTokenHash(sha256(a))!;
-  for (const t of [a, other.token]) {
+  for (const [t, id] of [[a, userId], [other.token, other.userId]]) {
     assert.equal((await s.call(t, 'PUT', '/v1/profile', { business_name: 'Ana Cuts', tone: 'warm', currency: 'USD' })).status, 200);
-    assert.equal((await s.call(t, 'POST', '/v1/catalog', { name: 'Haircut', price: '45.00' })).status, 200);
+    s.db.addItem(id, { name: 'Haircut', price_cents: 4500, currency: 'USD' });
     assert.equal((await s.call(t, 'POST', '/v1/actions/paylink', { amount: '45.00', item: 'Haircut', client_name: 'Sam' })).status, 200);
   }
   assert.equal((await s.call(a, 'DELETE', '/v1/account')).status, 428, 'no tap, no delete');
@@ -209,7 +209,7 @@ test('DELETE /v1/account: needs a tap, then removes every row of the user and no
   // The login is gone too; the email can start a fresh, empty account.
   assert.equal((await s.call(null, 'POST', '/v1/auth/email/login', { email: 'ana@example.com', password: PW })).status, 401);
   const fresh = await tokenOf(await s.call(null, 'POST', '/v1/auth/email/signup', { email: 'ana@example.com', password: PW }));
-  assert.equal((await (await s.call(fresh, 'GET', '/v1/catalog')).json()).items.length, 0);
+  assert.equal((await (await s.call(fresh, 'GET', '/v1/payments')).json()).payments.length, 0);
 });
 
 test('Apple + email: link an email to an Apple account; both ways in reach one user', async () => {
