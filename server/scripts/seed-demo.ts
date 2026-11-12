@@ -1,5 +1,6 @@
 // Seeds the "Muninn" demo user with real sandbox PayPal invoices. Safe to re-run.
 // usage: npm run seed:demo -- [user_id] [--show]
+//        npm run seed:demo -- --history   (demo user only, local rows, no PayPal calls: six months of recorded payments)
 import { writeFileSync } from 'node:fs';
 import { createApp } from '../src/app.ts';
 import { createAi } from '../src/ai.ts';
@@ -7,7 +8,7 @@ import { config } from '../src/config.ts';
 import { createCipher, parseMasterKey, randomToken, sha256 } from '../src/crypto.ts';
 import { openDb } from '../src/db.ts';
 import { createPayPalProvider } from '../src/paypal.ts';
-import { ensureDemoUser, seedDemo, todaySpecs } from '../src/seed.ts';
+import { DEMO_LABEL, ensureDemoUser, seedDemo, seedDemoHistory, todaySpecs } from '../src/seed.ts';
 
 const env = process.env as Record<string, string>;
 if (!config.paypal.sandbox) throw new Error('seed:demo runs against the PayPal sandbox only');
@@ -18,6 +19,13 @@ const userArg = args.find((a) => !a.startsWith('--'));
 
 const db = openDb(config.dbPath);
 const cipher = createCipher(parseMasterKey(env.DATA_ENCRYPTION_KEY));
+if (args.includes('--history')) {
+  // Only the existing demo user ever gets the sample history.
+  const demoId = db.userForDeviceLabel(DEMO_LABEL);
+  if (userArg || !demoId) throw new Error(userArg ? '--history seeds the demo user only' : 'no demo user yet: run seed:demo first');
+  console.log(`SEED history ${JSON.stringify({ user_id: demoId, ...seedDemoHistory({ db, cipher, userId: demoId, now: Date.now() }) })}`);
+  process.exit(0);
+}
 const paypal = createPayPalProvider({ clientId: env.PAYPAL_CLIENT_ID, clientSecret: env.PAYPAL_CLIENT_SECRET });
 
 const demo = userArg ? { userId: userArg, token: null } : ensureDemoUser(db);
