@@ -1,6 +1,6 @@
 import XCTest
 
-/// The PayPal actions of docs/PAYPAL-COVERAGE.md in the real keyboard and app, against `npm run fake` (no model, no PayPal).
+/// The PayPal actions from the README table in the real keyboard and app, against `npm run fake` (no model, no PayPal).
 /// Run with TEST_RUNNER_FAKE_URL=http://127.0.0.1:<port> TEST_RUNNER_SHOT_DIR=<dir>, tests in name order.
 final class PayPalShots: XCTestCase {
     private let env = ProcessInfo.processInfo.environment
